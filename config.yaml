@@ -1,0 +1,33 @@
+listen: :8080
+
+# 选择当前使用的 provider，可被环境变量 PROVIDER 覆盖
+active: jdcloud
+
+providers:
+  jdcloud:
+    upstream: https://modelservice.jdcloud.com/coding/anthropic
+    overload_rules:
+      - status: 400
+        body_contains: "overloaded"
+        max_retries: 10
+        delay: 2s
+        jitter: 1s
+      - status: 400
+        body_contains: "Too many requests"
+        max_retries: 10
+        delay: 2s
+        jitter: 1s
+
+  # 自定义 provider 示例，取消注释并按需修改：
+  # custom:
+  #   upstream: https://your-anthropic-compatible-endpoint.com/v1
+  #   overload_rules:
+  #     - status: 429
+  #       max_retries: 5
+  #       delay: 5s
+  #       jitter: 2s
+  #     - status: 503
+  #       body_contains: "overloaded"
+  #       max_retries: 10
+  #       delay: 2s
+  #       jitter: 1s
