@@ -3,6 +3,10 @@ listen: :8080
 # 选择当前使用的 provider，可被环境变量 PROVIDER 覆盖
 active: jdcloud
 
+# Token 用量统计数据库路径（SQLite），留空则禁用统计
+# 可被环境变量 STATS_DB 覆盖
+stats_db: ./data/stats.db
+
 providers:
   jdcloud:
     upstream: https://modelservice.jdcloud.com/coding/anthropic
@@ -21,6 +25,8 @@ providers:
   # 自定义 provider 示例，取消注释并按需修改：
   # custom:
   #   upstream: https://your-anthropic-compatible-endpoint.com/v1
+  #   # protocol 用于 token 统计时的响应解析，支持 anthropic（默认）/ openai
+  #   protocol: anthropic
   #   overload_rules:
   #     - status: 429
   #       max_retries: 5

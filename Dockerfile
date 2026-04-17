@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 WORKDIR /app
 ENV GOPROXY=https://goproxy.cn,direct
 ENV GOSUMDB=sum.golang.google.cn

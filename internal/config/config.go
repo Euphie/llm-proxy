@@ -31,6 +31,12 @@ type Config struct {
 	Upstream      string
 	ProviderName  string
 	OverloadRules []provider.Rule
+	// Protocol identifies the API response format for token usage parsing.
+	// Supported values: "anthropic" (default), "openai".
+	Protocol string
+	// StatsDB is the path to the SQLite database used for token usage statistics.
+	// Empty means stats are disabled.
+	StatsDB string
 }
 
 // ---- YAML types ----
@@ -55,13 +61,15 @@ type ruleYAML struct {
 }
 
 type providerYAML struct {
-	Upstream      string      `yaml:"upstream"`
-	OverloadRules []ruleYAML  `yaml:"overload_rules"`
+	Upstream      string     `yaml:"upstream"`
+	Protocol      string     `yaml:"protocol"`
+	OverloadRules []ruleYAML `yaml:"overload_rules"`
 }
 
 type fileConfig struct {
 	Listen    string                  `yaml:"listen"`
 	Active    string                  `yaml:"active"`
+	StatsDB   string                  `yaml:"stats_db"`
 	Providers map[string]providerYAML `yaml:"providers"`
 }
 
@@ -92,11 +100,14 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("UPSTREAM_URL"); v != "" {
 		pc.Upstream = v
 	}
+	if v := os.Getenv("STATS_DB"); v != "" {
+		fc.StatsDB = v
+	}
 
-	return resolve(fc.Active, pc, fc.Listen)
+	return resolve(fc.Active, pc, fc.Listen, fc.StatsDB)
 }
 
-func resolve(name string, pc providerYAML, listen string) (*Config, error) {
+func resolve(name string, pc providerYAML, listen, statsDB string) (*Config, error) {
 	if pc.Upstream == "" {
 		return nil, fmt.Errorf("provider %q: upstream URL is required", name)
 	}
@@ -129,10 +140,17 @@ func resolve(name string, pc providerYAML, listen string) (*Config, error) {
 		rules[i] = rule
 	}
 
+	protocol := pc.Protocol
+	if protocol == "" {
+		protocol = "anthropic"
+	}
+
 	return &Config{
 		ListenAddr:    listen,
 		Upstream:      strings.TrimRight(pc.Upstream, "/"),
 		ProviderName:  name,
 		OverloadRules: rules,
+		Protocol:      protocol,
+		StatsDB:       statsDB,
 	}, nil
 }

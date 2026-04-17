@@ -7,6 +7,7 @@ services:
       - "127.0.0.1:${PORT}:8080"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
     environment:
       CONFIG_FILE: /app/config.yaml
       # 选择 provider（覆盖 config.yaml 中的 active 字段）

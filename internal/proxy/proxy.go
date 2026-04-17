@@ -12,17 +12,26 @@ import (
 
 	"anthropic-proxy/internal/config"
 	"anthropic-proxy/internal/provider"
+	"anthropic-proxy/internal/stats"
 )
 
 // New returns an http.Handler that forwards every request to cfg.Upstream,
 // automatically retrying when the response matches an overload rule.
-func New(cfg *config.Config, client *http.Client) http.Handler {
-	return &handler{cfg: cfg, client: client}
+// Pass a non-nil *stats.DB to enable async token usage recording.
+func New(cfg *config.Config, client *http.Client, sdb *stats.DB) http.Handler {
+	return &handler{
+		cfg:    cfg,
+		client: client,
+		stats:  sdb,
+		parser: stats.NewParser(cfg.Protocol),
+	}
 }
 
 type handler struct {
 	cfg    *config.Config
 	client *http.Client
+	stats  *stats.DB
+	parser stats.Parser
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,17 +80,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			slog.Warn("upstream error, will retry", "provider", label, "attempt", attempt+1, "err", err)
 			if rule == nil {
-				rule = &h.cfg.OverloadRules[0] // use first rule's params for connection errors
+				rule = &h.cfg.OverloadRules[0]
 			}
 			continue
 		}
 
-		// 2xx: stream directly without buffering
+		// 2xx: stream to client while capturing for stats
 		if resp.StatusCode < 400 {
 			slog.Info("<-",
 				"status", resp.StatusCode, "path", r.URL.Path,
 				"attempts", attempt+1, "elapsed", time.Since(start).Round(time.Millisecond))
-			stream(w, resp)
+			captured := stream(w, resp)
+			if h.stats != nil {
+				h.stats.RecordAsync(label, r.URL.Path, captured, h.parser)
+			}
 			return
 		}
 
@@ -91,9 +103,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if matched := provider.Match(h.cfg.OverloadRules, resp.StatusCode, errBody); matched != nil {
 			if rule == nil {
-				rule = matched // lock in retry params from the first matched rule
+				rule = matched
 			}
-			continue // wait and retry handled at the top of the loop
+			continue
 		}
 
 		// Non-overload error: forward as-is
@@ -101,9 +113,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fell through: still overloaded after max retries — return last error response
-	// Re-issue one final request just to get the response to forward.
-	// (We can't reuse the previous resp.Body as it was already read.)
+	// Still overloaded after max retries — re-issue one final request to forward the error.
 	resp, err := h.do(r.Context(), r.Method, target, r.Header, body)
 	if err != nil {
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
@@ -127,19 +137,25 @@ func (h *handler) do(ctx context.Context, method, url string, headers http.Heade
 	return h.client.Do(req)
 }
 
-// stream writes a successful response with SSE-friendly chunked flushing.
-func stream(w http.ResponseWriter, resp *http.Response) {
+// stream writes a successful response to w with SSE-friendly chunked flushing,
+// while simultaneously capturing the data for usage parsing.
+// It returns all bytes written (the captured body).
+func stream(w http.ResponseWriter, resp *http.Response) []byte {
 	defer resp.Body.Close()
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
-	flusher, ok := w.(http.Flusher)
+	flusher, canFlush := w.(http.Flusher)
+	var capture bytes.Buffer
 	buf := make([]byte, 4096)
+
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
-			_, _ = w.Write(buf[:n])
-			if ok {
+			chunk := buf[:n]
+			capture.Write(chunk)
+			_, _ = w.Write(chunk)
+			if canFlush {
 				flusher.Flush()
 			}
 		}
@@ -147,6 +163,7 @@ func stream(w http.ResponseWriter, resp *http.Response) {
 			break
 		}
 	}
+	return capture.Bytes()
 }
 
 // forward writes a buffered (error) response back to the client.

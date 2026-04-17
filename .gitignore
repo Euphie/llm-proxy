@@ -1,6 +1,9 @@
 # 编译产物
 bin/
 
+# 统计数据库
+data/
+
 # macOS
 .DS_Store
 

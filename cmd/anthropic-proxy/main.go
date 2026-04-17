@@ -11,6 +11,7 @@ import (
 
 	"anthropic-proxy/internal/config"
 	"anthropic-proxy/internal/proxy"
+	"anthropic-proxy/internal/stats"
 )
 
 func main() {
@@ -35,9 +36,25 @@ func main() {
 		"overload_rules", fmtRules(cfg),
 	)
 
+	// Initialize token usage stats (optional)
+	var sdb *stats.DB
+	if cfg.StatsDB != "" {
+		sdb, err = stats.Open(cfg.StatsDB)
+		if err != nil {
+			slog.Error("stats: failed to open db", "path", cfg.StatsDB, "err", err)
+			os.Exit(1)
+		}
+		defer sdb.Close()
+		slog.Info("stats enabled", "db", cfg.StatsDB, "endpoint", "/stats")
+	}
+
 	client := &http.Client{Timeout: 10 * time.Minute}
 	mux := http.NewServeMux()
-	mux.Handle("/", proxy.New(cfg, client))
+	if sdb != nil {
+		mux.HandleFunc("/stats/data", sdb.Handler())
+		mux.HandleFunc("/stats", sdb.UIHandler())
+	}
+	mux.Handle("/", proxy.New(cfg, client, sdb))
 
 	if err := http.ListenAndServe(cfg.ListenAddr, mux); err != nil {
 		slog.Error("server stopped", "err", err)
