@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS usage (
     model         TEXT NOT NULL DEFAULT '',
     path          TEXT NOT NULL DEFAULT '',
     input_tokens  INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_usage_date  ON usage(date(created_at));
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage(model);
@@ -63,6 +65,9 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("stats: migrate: %w", err)
 	}
+	// Try to add new columns if they don't exist (for existing databases)
+	db.Exec(`ALTER TABLE usage ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE usage ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -76,17 +81,13 @@ func (s *DB) RecordAsync(provider, reqPath string, data []byte, p Parser) {
 			return
 		}
 		_, err := s.db.Exec(
-			`INSERT INTO usage (created_at, provider, model, path, input_tokens, output_tokens)
-			 VALUES (?,?,?,?,?,?)`,
+			`INSERT INTO usage (created_at, provider, model, path, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+			 VALUES (?,?,?,?,?,?,?,?)`,
 			time.Now().UTC().Format(time.RFC3339),
-			provider, strings.ToLower(u.Model), reqPath, u.InputTokens, u.OutputTokens,
+			provider, strings.ToLower(u.Model), reqPath, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheCreationTokens,
 		)
 		if err != nil {
 			slog.Warn("stats: write failed", "err", err)
-		} else {
-			slog.Debug("stats: recorded",
-				"provider", provider, "model", u.Model,
-				"input", u.InputTokens, "output", u.OutputTokens)
 		}
 	}()
 }
@@ -94,11 +95,13 @@ func (s *DB) RecordAsync(provider, reqPath string, data []byte, p Parser) {
 // ---- HTTP handler ----
 
 type statRow struct {
-	Key          string `json:"key"`
-	Requests     int    `json:"requests"`
-	InputTokens  int    `json:"input_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-	TotalTokens  int    `json:"total_tokens"`
+	Key                 string `json:"key"`
+	Requests            int    `json:"requests"`
+	InputTokens         int    `json:"input_tokens"`
+	OutputTokens        int    `json:"output_tokens"`
+	CacheReadTokens     int    `json:"cache_read_tokens"`
+	CacheCreationTokens int    `json:"cache_creation_tokens"`
+	TotalTokens         int    `json:"total_tokens"`
 }
 
 type statsResponse struct {
@@ -137,11 +140,15 @@ func (s *DB) query() (*statsResponse, error) {
 	if err := s.db.QueryRow(`
 		SELECT COUNT(*),
 		       COALESCE(SUM(input_tokens),0),
-		       COALESCE(SUM(output_tokens),0)
+		       COALESCE(SUM(output_tokens),0),
+		       COALESCE(SUM(cache_read_tokens),0),
+		       COALESCE(SUM(cache_creation_tokens),0)
 		FROM usage`).Scan(
 		&resp.Summary.Requests,
 		&resp.Summary.InputTokens,
 		&resp.Summary.OutputTokens,
+		&resp.Summary.CacheReadTokens,
+		&resp.Summary.CacheCreationTokens,
 	); err != nil {
 		return nil, fmt.Errorf("stats: summary query: %w", err)
 	}
@@ -152,7 +159,9 @@ func (s *DB) query() (*statsResponse, error) {
 		SELECT date(created_at)           AS d,
 		       COUNT(*)                   AS requests,
 		       COALESCE(SUM(input_tokens),0),
-		       COALESCE(SUM(output_tokens),0)
+		       COALESCE(SUM(output_tokens),0),
+		       COALESCE(SUM(cache_read_tokens),0),
+		       COALESCE(SUM(cache_creation_tokens),0)
 		FROM usage
 		WHERE created_at >= date('now', '-30 days')
 		GROUP BY d
@@ -163,7 +172,7 @@ func (s *DB) query() (*statsResponse, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var r statRow
-		if err := rows.Scan(&r.Key, &r.Requests, &r.InputTokens, &r.OutputTokens); err != nil {
+		if err := rows.Scan(&r.Key, &r.Requests, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheCreationTokens); err != nil {
 			return nil, err
 		}
 		r.TotalTokens = r.InputTokens + r.OutputTokens
@@ -174,7 +183,9 @@ func (s *DB) query() (*statsResponse, error) {
 		SELECT COALESCE(NULLIF(LOWER(model),''), '(unknown)') AS m,
 		       COUNT(*)                                        AS requests,
 		       COALESCE(SUM(input_tokens),0),
-		       COALESCE(SUM(output_tokens),0)
+		       COALESCE(SUM(output_tokens),0),
+		       COALESCE(SUM(cache_read_tokens),0),
+		       COALESCE(SUM(cache_creation_tokens),0)
 		FROM usage
 		GROUP BY m
 		ORDER BY SUM(input_tokens + output_tokens) DESC`)
@@ -184,7 +195,7 @@ func (s *DB) query() (*statsResponse, error) {
 	defer rows2.Close()
 	for rows2.Next() {
 		var r statRow
-		if err := rows2.Scan(&r.Key, &r.Requests, &r.InputTokens, &r.OutputTokens); err != nil {
+		if err := rows2.Scan(&r.Key, &r.Requests, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheCreationTokens); err != nil {
 			return nil, err
 		}
 		r.TotalTokens = r.InputTokens + r.OutputTokens

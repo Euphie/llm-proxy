@@ -18,6 +18,10 @@ import (
 // In that case the final SSE chunk carries:
 //
 //	data: {"choices":[],"model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":20}}
+//
+// OpenAI also supports cached tokens via prompt_tokens_details.cached_tokens:
+//
+//	{"usage":{"prompt_tokens":100,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":80}}}
 type OpenAIParser struct{}
 
 func (OpenAIParser) Parse(data []byte) (Usage, bool) {
@@ -56,6 +60,10 @@ func (OpenAIParser) Parse(data []byte) (Usage, bool) {
 			var us struct {
 				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
+				// OpenAI cached tokens structure
+				PromptTokensDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			}
 			if json.Unmarshal(raw, &us) == nil {
 				if us.PromptTokens > 0 {
@@ -63,6 +71,9 @@ func (OpenAIParser) Parse(data []byte) (Usage, bool) {
 				}
 				if us.CompletionTokens > 0 {
 					u.OutputTokens = us.CompletionTokens
+				}
+				if us.PromptTokensDetails.CachedTokens > 0 {
+					u.CacheReadTokens = us.PromptTokensDetails.CachedTokens
 				}
 			}
 		}

@@ -14,6 +14,7 @@ import (
 //
 // Non-streaming fields parsed:
 //   - usage.input_tokens, usage.output_tokens, model
+//   - usage.cache_read_input_tokens, usage.cache_creation_input_tokens
 type AnthropicParser struct{}
 
 func (AnthropicParser) Parse(data []byte) (Usage, bool) {
@@ -45,8 +46,10 @@ func (AnthropicParser) Parse(data []byte) (Usage, bool) {
 		// Root-level "usage" (non-streaming response and message_delta)
 		if raw, ok := obj["usage"]; ok {
 			var us struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
+				InputTokens          int `json:"input_tokens"`
+				OutputTokens         int `json:"output_tokens"`
+				CacheReadInputTokens int `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 			}
 			if json.Unmarshal(raw, &us) == nil {
 				if us.InputTokens > 0 {
@@ -54,6 +57,12 @@ func (AnthropicParser) Parse(data []byte) (Usage, bool) {
 				}
 				if us.OutputTokens > 0 {
 					u.OutputTokens += us.OutputTokens
+				}
+				if us.CacheReadInputTokens > 0 {
+					u.CacheReadTokens = us.CacheReadInputTokens
+				}
+				if us.CacheCreationInputTokens > 0 {
+					u.CacheCreationTokens = us.CacheCreationInputTokens
 				}
 			}
 		}
@@ -63,7 +72,9 @@ func (AnthropicParser) Parse(data []byte) (Usage, bool) {
 			var msg struct {
 				Model string `json:"model"`
 				Usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens          int `json:"input_tokens"`
+					CacheReadInputTokens int `json:"cache_read_input_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			}
 			if json.Unmarshal(raw, &msg) == nil {
@@ -72,6 +83,12 @@ func (AnthropicParser) Parse(data []byte) (Usage, bool) {
 				}
 				if msg.Usage.InputTokens > 0 {
 					u.InputTokens = msg.Usage.InputTokens
+				}
+				if msg.Usage.CacheReadInputTokens > 0 {
+					u.CacheReadTokens = msg.Usage.CacheReadInputTokens
+				}
+				if msg.Usage.CacheCreationInputTokens > 0 {
+					u.CacheCreationTokens = msg.Usage.CacheCreationInputTokens
 				}
 			}
 		}

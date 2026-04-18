@@ -26,6 +26,10 @@
       --green-lt: #e5f5ec;
       --purple:   #7251d4;
       --purple-lt:#ece8fb;
+      --orange:   #d9762d;
+      --orange-lt:#fdf0e5;
+      --teal:     #0d9488;
+      --teal-lt:  #e5f7f5;
       --font:     'Caveat', cursive;
       --border:   2px solid var(--ink);
       /* sketchy uneven radii */
@@ -148,11 +152,12 @@
     /* ── Stat cards ── */
     .cards {
       display: grid;
-      grid-template-columns: repeat(4,1fr);
+      grid-template-columns: repeat(6,1fr);
       gap: 16px;
       margin-bottom: 20px;
     }
-    @media (max-width: 880px) { .cards { grid-template-columns: repeat(2,1fr); } }
+    @media (max-width: 1100px) { .cards { grid-template-columns: repeat(3,1fr); } }
+    @media (max-width: 680px) { .cards { grid-template-columns: repeat(2,1fr); } }
     @media (max-width: 480px) { .cards { grid-template-columns: 1fr; } }
 
     .card {
@@ -174,10 +179,12 @@
       width: 0; height: 0;
       border-style: solid;
     }
-    .c-req::after { border-width: 0 28px 28px 0; border-color: transparent var(--red)    transparent transparent; }
-    .c-in::after  { border-width: 0 28px 28px 0; border-color: transparent var(--blue)   transparent transparent; }
-    .c-out::after { border-width: 0 28px 28px 0; border-color: transparent var(--green)  transparent transparent; }
-    .c-tot::after { border-width: 0 28px 28px 0; border-color: transparent var(--purple) transparent transparent; }
+    .c-req::after    { border-width: 0 28px 28px 0; border-color: transparent var(--red)    transparent transparent; }
+    .c-in::after     { border-width: 0 28px 28px 0; border-color: transparent var(--blue)   transparent transparent; }
+    .c-out::after    { border-width: 0 28px 28px 0; border-color: transparent var(--green)  transparent transparent; }
+    .c-tot::after    { border-width: 0 28px 28px 0; border-color: transparent var(--purple) transparent transparent; }
+    .c-cache-r::after{ border-width: 0 28px 28px 0; border-color: transparent var(--orange) transparent transparent; }
+    .c-cache-c::after{ border-width: 0 28px 28px 0; border-color: transparent var(--teal)   transparent transparent; }
 
     /* colored left rule */
     .card::before {
@@ -187,13 +194,15 @@
       width: 3px;
       border-radius: 0 3px 3px 0;
     }
-    .c-req::before { background: var(--red);    }
-    .c-in::before  { background: var(--blue);   }
-    .c-out::before { background: var(--green);  }
-    .c-tot::before { background: var(--purple); }
+    .c-req::before    { background: var(--red);    }
+    .c-in::before     { background: var(--blue);   }
+    .c-out::before    { background: var(--green);  }
+    .c-tot::before    { background: var(--purple); }
+    .c-cache-r::before{ background: var(--orange); }
+    .c-cache-c::before{ background: var(--teal);   }
 
     .card-label {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--muted);
       text-transform: uppercase;
@@ -201,23 +210,27 @@
       margin-bottom: 8px;
     }
     .card-value {
-      font-size: 46px;
+      font-size: 38px;
       font-weight: 700;
       line-height: 1;
       margin-bottom: 6px;
     }
-    .c-req .card-value { color: var(--red);    }
-    .c-in  .card-value { color: var(--blue);   }
-    .c-out .card-value { color: var(--green);  }
-    .c-tot .card-value { color: var(--purple); }
+    .c-req .card-value     { color: var(--red);    }
+    .c-in .card-value      { color: var(--blue);   }
+    .c-out .card-value     { color: var(--green);  }
+    .c-tot .card-value     { color: var(--purple); }
+    .c-cache-r .card-value { color: var(--orange); }
+    .c-cache-c .card-value { color: var(--teal);   }
 
     .card-sub { font-size: 13px; color: var(--muted2); }
 
     /* colored bg tint */
-    .c-req { background: color-mix(in srgb, var(--red-lt)    60%, var(--card)); }
-    .c-in  { background: color-mix(in srgb, var(--blue-lt)   60%, var(--card)); }
-    .c-out { background: color-mix(in srgb, var(--green-lt)  60%, var(--card)); }
-    .c-tot { background: color-mix(in srgb, var(--purple-lt) 60%, var(--card)); }
+    .c-req     { background: color-mix(in srgb, var(--red-lt)     60%, var(--card)); }
+    .c-in      { background: color-mix(in srgb, var(--blue-lt)    60%, var(--card)); }
+    .c-out     { background: color-mix(in srgb, var(--green-lt)   60%, var(--card)); }
+    .c-tot     { background: color-mix(in srgb, var(--purple-lt)  60%, var(--card)); }
+    .c-cache-r { background: color-mix(in srgb, var(--orange-lt)  60%, var(--card)); }
+    .c-cache-c { background: color-mix(in srgb, var(--teal-lt)    60%, var(--card)); }
 
     /* ── Panels ── */
     .panel {
@@ -287,15 +300,17 @@
       font-size: 15px;
       font-weight: 600;
       color: var(--ink);
-      max-width: 280px;
+      max-width: 240px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .num-cell { font-size: 15px; text-align: right; white-space: nowrap; }
-    .nc-req { color: var(--red);    font-weight: 600; }
-    .nc-in  { color: var(--blue);   font-weight: 600; }
-    .nc-out { color: var(--green);  font-weight: 600; }
+    .nc-req     { color: var(--red);    font-weight: 600; }
+    .nc-in      { color: var(--blue);   font-weight: 600; }
+    .nc-out     { color: var(--green);  font-weight: 600; }
+    .nc-cache-r { color: var(--orange); font-weight: 600; }
+    .nc-cache-c { color: var(--teal);   font-weight: 600; }
 
     .bar-cell { display: flex; align-items: center; gap: 10px; min-width: 130px; }
     .bar-val {
@@ -332,10 +347,12 @@
     .card:nth-child(2) { animation-delay: .10s; }
     .card:nth-child(3) { animation-delay: .16s; }
     .card:nth-child(4) { animation-delay: .22s; }
-    .panel:nth-of-type(1) { animation-delay: .28s; }
-    .panel:nth-of-type(2) { animation-delay: .34s; }
+    .card:nth-child(5) { animation-delay: .28s; }
+    .card:nth-child(6) { animation-delay: .34s; }
+    .panel:nth-of-type(1) { animation-delay: .40s; }
+    .panel:nth-of-type(2) { animation-delay: .46s; }
 
-    @media (max-width: 680px) { .col-hide { display: none; } .mini-bar { display:none; } }
+    @media (max-width: 880px) { .col-hide { display: none; } .mini-bar { display:none; } }
   </style>
 </head>
 <body>
@@ -372,6 +389,16 @@
         <div class="card-value" id="v-tot">—</div>
         <div class="card-sub" id="v-tot-full">&nbsp;</div>
       </div>
+      <div class="card sketchy c-cache-r">
+        <div class="card-label">缓存命中</div>
+        <div class="card-value" id="v-cache-r">—</div>
+        <div class="card-sub" id="v-cache-r-full">&nbsp;</div>
+      </div>
+      <div class="card sketchy c-cache-c">
+        <div class="card-label">缓存写入</div>
+        <div class="card-value" id="v-cache-c">—</div>
+        <div class="card-sub" id="v-cache-c-full">&nbsp;</div>
+      </div>
     </div>
 
     <div class="panel sketchy">
@@ -396,11 +423,13 @@
             <th class="r col-hide" style="color:var(--red)">请求</th>
             <th class="r col-hide" style="color:var(--blue)">输入</th>
             <th class="r col-hide" style="color:var(--green)">输出</th>
+            <th class="r col-hide" style="color:var(--orange)">缓存命中</th>
+            <th class="r col-hide" style="color:var(--teal)">缓存写入</th>
             <th style="padding-left:4px">总量</th>
           </tr>
         </thead>
         <tbody id="model-tbody">
-          <tr class="empty-row"><td colspan="5">加载中…</td></tr>
+          <tr class="empty-row"><td colspan="7">加载中…</td></tr>
         </tbody>
       </table>
     </div>
@@ -432,13 +461,14 @@
 
     let chart = null;
 
-    function buildChart(labels, inputs, outputs) {
+    function buildChart(labels, inputs, outputs, cacheRead) {
       const ctx = document.getElementById('chart-daily').getContext('2d');
 
       if (chart) {
         chart.data.labels           = labels;
         chart.data.datasets[0].data = inputs;
         chart.data.datasets[1].data = outputs;
+        chart.data.datasets[2].data = cacheRead;
         chart.update('active');
         return;
       }
@@ -465,6 +495,15 @@
               stack: 'tok',
               borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
               borderSkipped: 'bottom',
+            },
+            {
+              label: '缓存命中',
+              data: cacheRead,
+              backgroundColor: 'rgba(217,118,45,.55)',
+              hoverBackgroundColor: 'rgba(217,118,45,.8)',
+              stack: 'cache',
+              borderRadius: 4,
+              borderSkipped: false,
             },
           ],
         },
@@ -532,36 +571,41 @@
       }
 
       const s = data.summary || {};
-      countUp(document.getElementById('v-req'), s.requests     || 0);
-      countUp(document.getElementById('v-in'),  s.input_tokens  || 0);
-      countUp(document.getElementById('v-out'), s.output_tokens || 0);
-      countUp(document.getElementById('v-tot'), s.total_tokens  || 0);
+      countUp(document.getElementById('v-req'),     s.requests              || 0);
+      countUp(document.getElementById('v-in'),      s.input_tokens          || 0);
+      countUp(document.getElementById('v-out'),     s.output_tokens         || 0);
+      countUp(document.getElementById('v-tot'),     s.total_tokens          || 0);
+      countUp(document.getElementById('v-cache-r'), s.cache_read_tokens     || 0);
+      countUp(document.getElementById('v-cache-c'), s.cache_creation_tokens || 0);
 
-      document.getElementById('v-req-sub').textContent  = 'total api calls';
-      document.getElementById('v-in-full').textContent  = full(s.input_tokens  || 0);
-      document.getElementById('v-out-full').textContent = full(s.output_tokens || 0);
-      document.getElementById('v-tot-full').textContent = full(s.total_tokens  || 0);
-      document.getElementById('updated').textContent    = new Date().toLocaleTimeString();
+      document.getElementById('v-req-sub').textContent     = 'total api calls';
+      document.getElementById('v-in-full').textContent     = full(s.input_tokens          || 0);
+      document.getElementById('v-out-full').textContent    = full(s.output_tokens         || 0);
+      document.getElementById('v-tot-full').textContent    = full(s.total_tokens          || 0);
+      document.getElementById('v-cache-r-full').textContent= full(s.cache_read_tokens     || 0);
+      document.getElementById('v-cache-c-full').textContent= full(s.cache_creation_tokens || 0);
+      document.getElementById('updated').textContent       = new Date().toLocaleTimeString();
 
       document.querySelectorAll('.card').forEach(c => c.classList.add('visible'));
 
-      const days    = [...(data.by_day || [])].reverse();
-      const labels  = days.map(d => d.key);
-      const inputs  = days.map(d => d.input_tokens);
-      const outputs = days.map(d => d.output_tokens);
+      const days      = [...(data.by_day || [])].reverse();
+      const labels    = days.map(d => d.key);
+      const inputs    = days.map(d => d.input_tokens);
+      const outputs   = days.map(d => d.output_tokens);
+      const cacheRead = days.map(d => d.cache_read_tokens || 0);
 
       if (days.length) {
         const f = days[0].key, l = days[days.length-1].key;
         document.getElementById('chart-range').textContent = f === l ? f : `${f} → ${l}`;
       }
-      buildChart(labels, inputs, outputs);
+      buildChart(labels, inputs, outputs, cacheRead);
 
       const models = data.by_model || [];
       const maxTok = models.length ? models[0].total_tokens : 1;
       const tbody  = document.getElementById('model-tbody');
 
       if (!models.length) {
-        tbody.innerHTML = '<tr class="empty-row"><td colspan="5">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无数据</td></tr>';
         return;
       }
 
@@ -571,6 +615,8 @@
           <td class="num-cell nc-req col-hide">${full(m.requests)}</td>
           <td class="num-cell nc-in  col-hide">${fmt(m.input_tokens)}</td>
           <td class="num-cell nc-out col-hide">${fmt(m.output_tokens)}</td>
+          <td class="num-cell nc-cache-r col-hide">${fmt(m.cache_read_tokens || 0)}</td>
+          <td class="num-cell nc-cache-c col-hide">${fmt(m.cache_creation_tokens || 0)}</td>
           <td>
             <div class="bar-cell">
               <span class="bar-val">${fmt(m.total_tokens)}</span>
