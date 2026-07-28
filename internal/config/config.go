@@ -19,10 +19,16 @@ import (
 
 // Default retry values applied when a rule omits the field.
 const (
-	defaultListenAddr  = ":8080"
-	defaultMaxRetries  = 10
-	defaultRetryDelay  = 2 * time.Second
-	defaultRetryJitter = 1 * time.Second
+	defaultListenAddr            = ":8080"
+	defaultMaxRetries            = 10
+	defaultRetryDelay            = 2 * time.Second
+	defaultRetryJitter           = 1 * time.Second
+	defaultVisionModel           = "sonnet"
+	defaultVisionMaxTokens       = 2048
+	defaultVisionTimeout         = 2 * time.Minute
+	defaultVisionMaxConcurrency  = 4
+	defaultVisionCacheTTL        = 30 * time.Minute
+	defaultVisionCacheMaxEntries = 512
 )
 
 // Config is the resolved runtime configuration for the active provider.
@@ -37,6 +43,18 @@ type Config struct {
 	// StatsDB is the path to the SQLite database used for token usage statistics.
 	// Empty means stats are disabled.
 	StatsDB string
+	Vision  VisionConfig
+}
+
+type VisionConfig struct {
+	Enabled         bool
+	Model           string
+	MaxTokens       int
+	Timeout         time.Duration
+	MaxConcurrency  int
+	CacheTTL        time.Duration
+	CacheMaxEntries int
+	Prompt          string
 }
 
 // ---- YAML types ----
@@ -60,10 +78,22 @@ type ruleYAML struct {
 	Jitter       *yamlDuration `yaml:"jitter"`
 }
 
+type visionYAML struct {
+	Enabled         bool          `yaml:"enabled"`
+	Model           string        `yaml:"model"`
+	MaxTokens       *int          `yaml:"max_tokens"`
+	Timeout         *yamlDuration `yaml:"timeout"`
+	MaxConcurrency  *int          `yaml:"max_concurrency"`
+	CacheTTL        *yamlDuration `yaml:"cache_ttl"`
+	CacheMaxEntries *int          `yaml:"cache_max_entries"`
+	Prompt          string        `yaml:"prompt"`
+}
+
 type providerYAML struct {
 	Upstream      string     `yaml:"upstream"`
 	Protocol      string     `yaml:"protocol"`
 	OverloadRules []ruleYAML `yaml:"overload_rules"`
+	Vision        visionYAML `yaml:"vision"`
 }
 
 type fileConfig struct {
@@ -144,6 +174,10 @@ func resolve(name string, pc providerYAML, listen, statsDB string) (*Config, err
 	if protocol == "" {
 		protocol = "anthropic"
 	}
+	visionCfg, err := resolveVision(name, protocol, pc.Vision)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Config{
 		ListenAddr:    listen,
@@ -152,5 +186,60 @@ func resolve(name string, pc providerYAML, listen, statsDB string) (*Config, err
 		OverloadRules: rules,
 		Protocol:      protocol,
 		StatsDB:       statsDB,
+		Vision:        visionCfg,
 	}, nil
+}
+
+func resolveVision(name, protocol string, vision visionYAML) (VisionConfig, error) {
+	visionCfg := VisionConfig{
+		Enabled:         vision.Enabled,
+		Model:           defaultVisionModel,
+		MaxTokens:       defaultVisionMaxTokens,
+		Timeout:         defaultVisionTimeout,
+		MaxConcurrency:  defaultVisionMaxConcurrency,
+		CacheTTL:        defaultVisionCacheTTL,
+		CacheMaxEntries: defaultVisionCacheMaxEntries,
+		Prompt:          vision.Prompt,
+	}
+	if vision.Model != "" {
+		visionCfg.Model = vision.Model
+	}
+	if vision.MaxTokens != nil {
+		visionCfg.MaxTokens = *vision.MaxTokens
+	}
+	if vision.Timeout != nil {
+		visionCfg.Timeout = vision.Timeout.Duration
+	}
+	if vision.MaxConcurrency != nil {
+		visionCfg.MaxConcurrency = *vision.MaxConcurrency
+	}
+	if vision.CacheTTL != nil {
+		visionCfg.CacheTTL = vision.CacheTTL.Duration
+	}
+	if vision.CacheMaxEntries != nil {
+		visionCfg.CacheMaxEntries = *vision.CacheMaxEntries
+	}
+
+	if !visionCfg.Enabled {
+		return visionCfg, nil
+	}
+	if protocol != "anthropic" {
+		return VisionConfig{}, fmt.Errorf("provider %q: vision requires protocol anthropic", name)
+	}
+	if visionCfg.MaxTokens <= 0 {
+		return VisionConfig{}, fmt.Errorf("provider %q: vision.max_tokens must be positive", name)
+	}
+	if visionCfg.Timeout <= 0 {
+		return VisionConfig{}, fmt.Errorf("provider %q: vision.timeout must be positive", name)
+	}
+	if visionCfg.MaxConcurrency <= 0 {
+		return VisionConfig{}, fmt.Errorf("provider %q: vision.max_concurrency must be positive", name)
+	}
+	if visionCfg.CacheTTL <= 0 {
+		return VisionConfig{}, fmt.Errorf("provider %q: vision.cache_ttl must be positive", name)
+	}
+	if visionCfg.CacheMaxEntries <= 0 {
+		return VisionConfig{}, fmt.Errorf("provider %q: vision.cache_max_entries must be positive", name)
+	}
+	return visionCfg, nil
 }

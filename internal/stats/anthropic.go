@@ -19,6 +19,11 @@ type AnthropicParser struct{}
 
 func (AnthropicParser) Parse(data []byte) (Usage, bool) {
 	var u Usage
+	var whole map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(data), &whole); err == nil && whole != nil {
+		accumulateAnthropicUsage(&u, whole)
+		return validAnthropicUsage(u)
+	}
 
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
@@ -37,63 +42,67 @@ func (AnthropicParser) Parse(data []byte) (Usage, bool) {
 		if err := json.Unmarshal(jsonData, &obj); err != nil {
 			continue
 		}
+		accumulateAnthropicUsage(&u, obj)
+	}
 
-		// Root-level "model" (non-streaming response or message_delta)
-		if raw, ok := obj["model"]; ok && u.Model == "" {
-			_ = json.Unmarshal(raw, &u.Model)
+	return validAnthropicUsage(u)
+}
+
+func accumulateAnthropicUsage(u *Usage, obj map[string]json.RawMessage) {
+	if raw, ok := obj["model"]; ok && u.Model == "" {
+		_ = json.Unmarshal(raw, &u.Model)
+	}
+
+	if raw, ok := obj["usage"]; ok {
+		var us struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		}
-
-		// Root-level "usage" (non-streaming response and message_delta)
-		if raw, ok := obj["usage"]; ok {
-			var us struct {
-				InputTokens          int `json:"input_tokens"`
-				OutputTokens         int `json:"output_tokens"`
-				CacheReadInputTokens int `json:"cache_read_input_tokens"`
-				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		if json.Unmarshal(raw, &us) == nil {
+			if us.InputTokens > 0 {
+				u.InputTokens = us.InputTokens
 			}
-			if json.Unmarshal(raw, &us) == nil {
-				if us.InputTokens > 0 {
-					u.InputTokens = us.InputTokens
-				}
-				if us.OutputTokens > 0 {
-					u.OutputTokens += us.OutputTokens
-				}
-				if us.CacheReadInputTokens > 0 {
-					u.CacheReadTokens = us.CacheReadInputTokens
-				}
-				if us.CacheCreationInputTokens > 0 {
-					u.CacheCreationTokens = us.CacheCreationInputTokens
-				}
+			if us.OutputTokens > 0 {
+				u.OutputTokens += us.OutputTokens
 			}
-		}
-
-		// Streaming message_start: model and input_tokens nested under "message"
-		if raw, ok := obj["message"]; ok {
-			var msg struct {
-				Model string `json:"model"`
-				Usage struct {
-					InputTokens          int `json:"input_tokens"`
-					CacheReadInputTokens int `json:"cache_read_input_tokens"`
-					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-				} `json:"usage"`
+			if us.CacheReadInputTokens > 0 {
+				u.CacheReadTokens = us.CacheReadInputTokens
 			}
-			if json.Unmarshal(raw, &msg) == nil {
-				if msg.Model != "" && u.Model == "" {
-					u.Model = msg.Model
-				}
-				if msg.Usage.InputTokens > 0 {
-					u.InputTokens = msg.Usage.InputTokens
-				}
-				if msg.Usage.CacheReadInputTokens > 0 {
-					u.CacheReadTokens = msg.Usage.CacheReadInputTokens
-				}
-				if msg.Usage.CacheCreationInputTokens > 0 {
-					u.CacheCreationTokens = msg.Usage.CacheCreationInputTokens
-				}
+			if us.CacheCreationInputTokens > 0 {
+				u.CacheCreationTokens = us.CacheCreationInputTokens
 			}
 		}
 	}
 
+	if raw, ok := obj["message"]; ok {
+		var msg struct {
+			Model string `json:"model"`
+			Usage struct {
+				InputTokens              int `json:"input_tokens"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(raw, &msg) == nil {
+			if msg.Model != "" && u.Model == "" {
+				u.Model = msg.Model
+			}
+			if msg.Usage.InputTokens > 0 {
+				u.InputTokens = msg.Usage.InputTokens
+			}
+			if msg.Usage.CacheReadInputTokens > 0 {
+				u.CacheReadTokens = msg.Usage.CacheReadInputTokens
+			}
+			if msg.Usage.CacheCreationInputTokens > 0 {
+				u.CacheCreationTokens = msg.Usage.CacheCreationInputTokens
+			}
+		}
+	}
+}
+
+func validAnthropicUsage(u Usage) (Usage, bool) {
 	if u.InputTokens == 0 && u.OutputTokens == 0 {
 		return Usage{}, false
 	}

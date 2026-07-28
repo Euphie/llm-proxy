@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -13,17 +14,23 @@ import (
 	"anthropic-proxy/internal/config"
 	"anthropic-proxy/internal/provider"
 	"anthropic-proxy/internal/stats"
+	"anthropic-proxy/internal/vision"
 )
 
 // New returns an http.Handler that forwards every request to cfg.Upstream,
 // automatically retrying when the response matches an overload rule.
 // Pass a non-nil *stats.DB to enable async token usage recording.
 func New(cfg *config.Config, client *http.Client, sdb *stats.DB) http.Handler {
+	var visionPreprocessor *vision.Preprocessor
+	if cfg.Vision.Enabled {
+		visionPreprocessor = vision.New(cfg, client, sdb)
+	}
 	return &handler{
 		cfg:    cfg,
 		client: client,
 		stats:  sdb,
 		parser: stats.NewParser(cfg.Protocol),
+		vision: visionPreprocessor,
 	}
 }
 
@@ -32,6 +39,7 @@ type handler struct {
 	client *http.Client
 	stats  *stats.DB
 	parser stats.Parser
+	vision *vision.Preprocessor
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +55,21 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body.Close()
+
+	if h.vision != nil && shouldPreprocessVision(r) {
+		body, err = h.vision.Process(r.Context(), r.Header, body)
+		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			status := vision.HTTPStatus(err)
+			http.Error(w, http.StatusText(status), status)
+			return
+		}
+	}
+	if r.Context().Err() != nil {
+		return
+	}
 
 	// rule is locked in on the first overload match and reused for subsequent retries.
 	var rule *provider.Rule
@@ -65,7 +88,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			select {
 			case <-r.Context().Done():
-				http.Error(w, "client disconnected", http.StatusGatewayTimeout)
 				return
 			case <-time.After(wait):
 			}
@@ -73,6 +95,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		resp, err := h.do(r.Context(), r.Method, target, r.Header, body)
 		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
 			if rule != nil && attempt >= rule.MaxRetries {
 				slog.Error("upstream failed", "provider", label, "attempts", attempt+1, "err", err)
 				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
@@ -116,12 +141,23 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Still overloaded after max retries — re-issue one final request to forward the error.
 	resp, err := h.do(r.Context(), r.Method, target, r.Header, body)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	errBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	forward(w, resp, errBody)
+}
+
+func shouldPreprocessVision(r *http.Request) bool {
+	if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == "application/json"
 }
 
 func (h *handler) do(ctx context.Context, method, url string, headers http.Header, body []byte) (*http.Response, error) {

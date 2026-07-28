@@ -99,6 +99,22 @@ providers:
 
 ---
 
+## 图片预处理
+
+图片预处理默认关闭，仅适用于 Anthropic 协议的 `POST /v1/messages` JSON 请求。启用后，代理会通过同一 upstream 和原请求的鉴权/API 版本相关请求头发起影子请求，默认使用 `sonnet` 描述图片，再将原请求中的图片块替换为文本描述后提交主请求。
+
+支持三种 Anthropic 图片 source：
+
+- `base64`：内联图片数据；
+- `url`：远程图片 URL；
+- `file`：Files API 的 `file_id`。使用该类型时，原请求必须携带上游要求的 `Anthropic-Beta` 头。
+
+任一图片描述失败时，代理返回 `502 Bad Gateway`，不会提交主请求。成功描述使用 TTL + LRU 缓存，默认 TTL 为 `30m`、最多 `512` 条；缓存和并发合并按鉴权、Anthropic API 版本及 Beta 头隔离。影子请求默认最多并发 `4` 个，`timeout` 包含并发槽排队和重试等待。影子请求的 token usage 以 `/v1/messages#vision` 路径计入统计。
+
+首版只处理 `messages[].content` 中的直接图片块，不递归处理 `tool_result.content`，也不支持 OpenAI 协议请求。
+
+---
+
 ## Token 用量统计
 
 代理会异步捕获每次请求的响应，解析 Anthropic / OpenAI 协议中的 token 用量，写入本地 SQLite 数据库。
@@ -136,6 +152,15 @@ providers:
   jdcloud:
     upstream: https://modelservice.jdcloud.com/coding/anthropic
     # protocol 省略则默认 anthropic
+    vision:
+      enabled: false          # 默认关闭；仅支持 anthropic
+      model: sonnet           # 影子请求模型
+      max_tokens: 2048        # 单次图片描述最大输出 token
+      timeout: 2m             # 单图总超时，包含并发排队和重试
+      max_concurrency: 4      # 图片描述最大并发数
+      cache_ttl: 30m          # 成功描述缓存有效期
+      cache_max_entries: 512  # LRU 缓存最大条目数
+      # prompt: 自定义图片描述提示词；留空使用内置提示词
     overload_rules:
       - status: 400
         body_contains: "overloaded"
@@ -144,6 +169,11 @@ providers:
         jitter: 1s        # 省略则使用默认值 1s
       - status: 400
         body_contains: "Too many requests"
+        max_retries: 10
+        delay: 2s
+        jitter: 1s
+      - status: 400
+        body_contains: "未找到"
         max_retries: 10
         delay: 2s
         jitter: 1s
