@@ -1,4 +1,4 @@
-module anthropic-proxy
+module github.com/Euphie/llm-proxy
 
 go 1.25.0
 

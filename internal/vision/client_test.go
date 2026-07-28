@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"anthropic-proxy/internal/config"
-	"anthropic-proxy/internal/provider"
-	"anthropic-proxy/internal/stats"
+	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/provider"
+	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
 func TestVisionClientRequestHeadersResponseAndUsage(t *testing.T) {

@@ -1,6 +1,6 @@
 # 配置参考
 
-anthropic-proxy 的运行行为由 YAML 配置文件决定。环境变量只负责指定配置文件和 Docker 端口映射，不覆盖 Provider 字段。
+llm-proxy 的运行行为由 YAML 配置文件决定。环境变量只负责指定配置文件和 Docker 端口映射，不覆盖 Provider 字段。
 
 ## 环境变量
 
@@ -15,8 +15,8 @@ Docker Compose 从 `.env` 读取：
 容器内始终通过 `CONFIG_FILE=/app/config.yaml` 加载挂载后的文件。本地直接运行时，也可以使用环境变量或命令行参数：
 
 ```bash
-CONFIG_FILE=./config.yaml ./bin/anthropic-proxy
-./bin/anthropic-proxy -config ./config.yaml
+CONFIG_FILE=./config.yaml ./bin/llm-proxy
+./bin/llm-proxy -config ./config.yaml
 ```
 
 没有 `PROVIDER`、`UPSTREAM_URL`、`STATS_DB` 或 `STATS_PASSWORD` 环境变量覆盖逻辑。切换 Provider 或统计配置时应修改 YAML 文件。

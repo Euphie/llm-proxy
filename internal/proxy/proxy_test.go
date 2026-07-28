@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"anthropic-proxy/internal/config"
-	"anthropic-proxy/internal/provider"
+	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/provider"
 )
 
 const (

@@ -38,8 +38,8 @@ func TestStatsBasicAuth(t *testing.T) {
 				t.Fatalf("status=%d, want %d", response.Code, tt.want)
 			}
 			if tt.want == http.StatusUnauthorized &&
-				response.Header().Get("WWW-Authenticate") == "" {
-				t.Fatal("missing WWW-Authenticate header")
+				response.Header().Get("WWW-Authenticate") != `Basic realm="llm-proxy stats", charset="UTF-8"` {
+				t.Fatal("wrong WWW-Authenticate header")
 			}
 		})
 	}

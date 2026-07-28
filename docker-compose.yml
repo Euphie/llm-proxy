@@ -1,6 +1,7 @@
-version: '3'
+name: llm-proxy
+
 services:
-  anthropic-proxy:
+  llm-proxy:
     build: .
     restart: unless-stopped
     ports:

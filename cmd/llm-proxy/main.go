@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"anthropic-proxy/internal/config"
-	"anthropic-proxy/internal/proxy"
-	"anthropic-proxy/internal/stats"
+	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/proxy"
+	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("anthropic-proxy starting",
+	slog.Info("llm-proxy starting",
 		"provider", cfg.ProviderName,
 		"listen", cfg.ListenAddr,
 		"upstream", cfg.Upstream,
@@ -69,7 +69,7 @@ func statsBasicAuth(password string, next http.Handler) http.Handler {
 		validUsername := subtle.ConstantTimeCompare([]byte(username), []byte("admin")) == 1
 		validPassword := subtle.ConstantTimeCompare([]byte(suppliedPassword), []byte(password)) == 1
 		if !ok || !validUsername || !validPassword {
-			w.Header().Set("WWW-Authenticate", `Basic realm="anthropic-proxy stats", charset="UTF-8"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="llm-proxy stats", charset="UTF-8"`)
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}

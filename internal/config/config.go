@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"anthropic-proxy/internal/provider"
+	"github.com/Euphie/llm-proxy/internal/provider"
 
 	"gopkg.in/yaml.v3"
 )

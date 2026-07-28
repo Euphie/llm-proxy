@@ -1,4 +1,4 @@
-# anthropic-proxy
+# llm-proxy
 
 面向 Claude Code 等客户端的轻量级 Anthropic / OpenAI 反向代理。
 
@@ -17,9 +17,9 @@
 
 ## 架构
 
-![anthropic-proxy 当前架构](docs/assets/anthropic-proxy-architecture.svg)
+![llm-proxy 当前架构](docs/assets/llm-proxy-architecture.svg)
 
-[可编辑的 Excalidraw 源文件](docs/assets/anthropic-proxy-architecture.excalidraw)
+[可编辑的 Excalidraw 源文件](docs/assets/llm-proxy-architecture.excalidraw)
 
 ## 快速开始
 
@@ -89,7 +89,7 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8087
 ```bash
 make test
 make build
-CONFIG_FILE=config.yaml ./bin/anthropic-proxy
+CONFIG_FILE=config.yaml ./bin/llm-proxy
 ```
 
 构建和测试也可以完全在 Docker 中进行，避免修改本地 Go 环境。

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"anthropic-proxy/internal/config"
-	"anthropic-proxy/internal/stats"
+	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
 type processError struct {
