@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -421,6 +422,35 @@ func TestMainOverloadBackoffCancellationDoesNotWriteResponse(t *testing.T) {
 	if response.status != 0 || response.body.Len() != 0 {
 		t.Fatalf("proxy wrote status=%d body=%q after cancellation", response.status, response.body.String())
 	}
+}
+
+func TestEmptyOverloadRulesNetworkFailureReturnsBadGateway(t *testing.T) {
+	transport := &networkFailureTransport{}
+	handler := New(&config.Config{
+		Upstream:     "https://upstream.test",
+		ProviderName: "test",
+		Protocol:     "anthropic",
+	}, &http.Client{Transport: transport}, nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(visionTextBody))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusBadGateway)
+	}
+	if transport.calls.Load() != 1 {
+		t.Fatalf("upstream calls=%d, want 1", transport.calls.Load())
+	}
+}
+
+type networkFailureTransport struct {
+	calls atomic.Int32
+}
+
+func (t *networkFailureTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	t.calls.Add(1)
+	return nil, errors.New("network failure")
 }
 
 type overloadOnceTransport struct {

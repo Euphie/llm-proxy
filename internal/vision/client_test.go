@@ -79,13 +79,12 @@ func TestVisionClientRequestHeadersResponseAndUsage(t *testing.T) {
 			"Authorization":     "Bearer secret",
 			"X-Api-Key":         "key",
 			"Anthropic-Version": "2023-06-01",
-			"Anthropic-Beta":    "files-api-2025-04-14",
 		} {
 			if got := r.Header.Get(name); got != want {
 				handlerErr = errors.New("wrong allowed header: " + name)
 			}
 		}
-		for _, name := range []string{"Cookie", "Accept-Encoding"} {
+		for _, name := range []string{"Anthropic-Beta", "Cookie", "Accept-Encoding"} {
 			if got := r.Header.Get(name); got != "" {
 				handlerErr = errors.New("copied disallowed header: " + name)
 			}
@@ -190,6 +189,22 @@ func TestVisionClientEffectivePrompt(t *testing.T) {
 	const configured = "  preserve surrounding space  "
 	if got := effectivePrompt(configured); got != configured {
 		t.Fatalf("configured prompt=%q", got)
+	}
+}
+
+func TestTruncateDebugContent(t *testing.T) {
+	const short = "short content"
+	if got, truncated := truncateDebugContent(short); got != short || truncated {
+		t.Fatalf("short content=%q truncated=%v", got, truncated)
+	}
+
+	long := strings.Repeat("界", debugLogContentLimit+1)
+	got, truncated := truncateDebugContent(long)
+	if !truncated {
+		t.Fatal("long content was not truncated")
+	}
+	if len([]rune(got)) != debugLogContentLimit {
+		t.Fatalf("truncated runes=%d", len([]rune(got)))
 	}
 }
 

@@ -1,189 +1,95 @@
 # anthropic-proxy
 
-支持 **Anthropic 协议**与 **OpenAI 协议**的轻量级反向代理。在上游过载时自动等待并重试，确保 Claude Code 等客户端不因接口报错而中断任务；同时异步统计 token 用量并提供可视化看板。
+面向 Claude Code 等客户端的轻量级 Anthropic / OpenAI 反向代理。
 
-适用场景：京东云、百度、自建中转等各类 Anthropic / OpenAI 兼容 API。
+项目当前的核心功能是图片预处理：当主模型不支持视觉输入时，代理会先调用同一 Provider 中可识图的模型生成图片描述，再用描述替换图片并提交给主模型。这样可以在不更换主模型的前提下，为纯文本模型补充截图、界面、报错和代码图片的理解能力。
 
-## 工作原理
+同时提供可配置的过载重试、流式响应转发和 Token 用量统计。
 
-```
-Claude Code  ──►  localhost:8087  ──►  上游 Anthropic / OpenAI 兼容 API
-               (anthropic-proxy)
-                      │
-                      │ 收到过载错误（可配置）
-                      │ 自动等待 + 重试（线性退避）
-                      └──────────────────────────►  重新转发
-```
+## 核心能力
 
-重试间隔：第 N 次等待 `delay + N × jitter`，例如默认配置下为 2s、3s、4s……
+- **视觉能力补全**：拦截 Anthropic Messages 图片块，通过影子识图请求转换为文本描述；
+- **稳定转发**：按状态码和响应内容匹配过载规则，线性退避后自动重试；
+- **协议支持**：代理 Anthropic 与 OpenAI 兼容接口；
+- **用量统计**：异步记录主请求和识图请求的 Token 用量，提供 Dashboard 与 JSON API。
+
+图片预处理的适用场景、限制和调优方式见[图片预处理](docs/vision.md)。
+
+## 架构
+
+![anthropic-proxy 当前架构](docs/assets/anthropic-proxy-architecture.svg)
+
+[可编辑的 Excalidraw 源文件](docs/assets/anthropic-proxy-architecture.excalidraw)
 
 ## 快速开始
 
-### 使用 Docker（推荐）
-
-**1. 检查 `.env`**
+### 1. 准备环境变量
 
 ```bash
-PROVIDER=jdcloud   # 选择 provider
-PORT=8087          # 宿主机监听端口
+cp .env.example .env
 ```
 
-**2. 启动**
+`.env` 只控制 Docker 的宿主机监听地址、端口和配置文件路径：
 
 ```bash
-docker compose up -d
+HOST=127.0.0.1
+PORT=8087
+CONFIG_FILE=./config.yaml
 ```
 
-代理监听在 `127.0.0.1:8087`，在 Claude Code 中配置 `ANTHROPIC_BASE_URL=http://127.0.0.1:8087` 即可。
+### 2. 配置 Provider
 
----
-
-### 本地运行（不使用 Docker）
-
-需要先安装 [Go 1.25+](https://go.dev/dl/)。
-
-```bash
-make build
-PROVIDER=jdcloud CONFIG_FILE=config.yaml ./bin/anthropic-proxy
-```
-
----
-
-## 内置 Provider
-
-`config.yaml` 已预置以下 provider，通过 `.env` 的 `PROVIDER` 字段选择。
-
-| Provider | 协议 | 上游 URL | 过载触发条件 |
-|---|---|---|---|
-| `jdcloud` | Anthropic | `https://modelservice.jdcloud.com/coding/anthropic` | `400` + body 含 `overloaded` 或 `Too many requests` |
-
----
-
-## 自定义 Provider
-
-在 `config.yaml` 的 `providers` 下新增条目，修改 `.env` 中的 `PROVIDER` 后重启即可。
-
-**Anthropic 兼容接口示例：**
+编辑 `config.yaml`，至少确认当前 Provider、上游地址和识图模型：
 
 ```yaml
-providers:
-  my-anthropic:
-    upstream: https://your-anthropic-endpoint.com
-    protocol: anthropic   # 默认值，可省略
-    overload_rules:
-      - status: 529
-        max_retries: 10
-        delay: 2s
-        jitter: 1s
-```
-
-**OpenAI 兼容接口示例：**
-
-```yaml
-providers:
-  my-openai:
-    upstream: https://api.openai.com
-    protocol: openai
-    overload_rules:
-      - status: 429
-        max_retries: 8
-        delay: 5s
-        jitter: 2s
-      - status: 503
-        max_retries: 5
-        delay: 3s
-        jitter: 1s
-```
-
-> **注意**：使用 `protocol: openai` 时，流式请求的 token 统计需要客户端在请求 body 中携带 `"stream_options": {"include_usage": true}`，否则流式响应不返回用量数据（这是 OpenAI 接口的行为）。非流式请求无此限制。
-
----
-
-## 图片预处理
-
-图片预处理默认关闭，仅适用于 Anthropic 协议的 `POST /v1/messages` JSON 请求。启用后，代理会通过同一 upstream 和原请求的鉴权/API 版本相关请求头发起影子请求，默认使用 `sonnet` 描述图片，再将原请求中的图片块替换为文本描述后提交主请求。
-
-支持三种 Anthropic 图片 source：
-
-- `base64`：内联图片数据；
-- `url`：远程图片 URL；
-- `file`：Files API 的 `file_id`。使用该类型时，原请求必须携带上游要求的 `Anthropic-Beta` 头。
-
-任一图片描述失败时，代理返回 `502 Bad Gateway`，不会提交主请求。成功描述使用 TTL + LRU 缓存，默认 TTL 为 `30m`、最多 `512` 条；缓存和并发合并按鉴权、Anthropic API 版本及 Beta 头隔离。影子请求默认最多并发 `4` 个，`timeout` 包含并发槽排队和重试等待。影子请求的 token usage 以 `/v1/messages#vision` 路径计入统计。
-
-首版只处理 `messages[].content` 中的直接图片块，不递归处理 `tool_result.content`，也不支持 OpenAI 协议请求。
-
----
-
-## Token 用量统计
-
-代理会异步捕获每次请求的响应，解析 Anthropic / OpenAI 协议中的 token 用量，写入本地 SQLite 数据库。
-
-| 地址 | 说明 |
-|---|---|
-| `http://127.0.0.1:<PORT>/stats` | 可视化看板（手绘风格 Dashboard） |
-| `http://127.0.0.1:<PORT>/stats/data` | JSON 数据接口 |
-
-看板包含：总请求数、输入/输出/合计 token 数、近 30 天每日用量图、按模型分布表。
-
-统计数据库默认保存在 `./data/stats.db`，Docker 模式下通过 volume 持久化。
-
----
-
-## 配置说明
-
-### 环境变量
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `PROVIDER` | `jdcloud` | 选择 provider，覆盖 `config.yaml` 中的 `active` 字段 |
-| `PORT` | `8087` | 宿主机监听端口 |
-| `UPSTREAM_URL` | — | 覆盖当前 provider 的上游 URL |
-| `STATS_DB` | — | 覆盖统计数据库路径，留空则使用 `config.yaml` 中的 `stats_db` |
-
-### config.yaml 完整结构
-
-```yaml
-listen: :8080          # 容器内监听地址，无需修改
-active: jdcloud        # 默认 provider，可被 PROVIDER 覆盖
-stats_db: ./data/stats.db  # SQLite 路径，留空禁用统计
+listen: :8080
+active: jdcloud
+stats_db: ./data/stats.db
+stats_password: statspwd123456
 
 providers:
   jdcloud:
     upstream: https://modelservice.jdcloud.com/coding/anthropic
-    # protocol 省略则默认 anthropic
     vision:
-      enabled: false          # 默认关闭；仅支持 anthropic
-      model: sonnet           # 影子请求模型
-      max_tokens: 2048        # 单次图片描述最大输出 token
-      timeout: 2m             # 单图总超时，包含并发排队和重试
-      max_concurrency: 4      # 图片描述最大并发数
-      cache_ttl: 30m          # 成功描述缓存有效期
-      cache_max_entries: 512  # LRU 缓存最大条目数
-      # prompt: 自定义图片描述提示词；留空使用内置提示词
+      enabled: true
+      model: Kimi-K2.5
     overload_rules:
       - status: 400
-        body_contains: "overloaded"
-        max_retries: 10   # 省略则使用默认值 10
-        delay: 2s         # 省略则使用默认值 2s
-        jitter: 1s        # 省略则使用默认值 1s
-      - status: 400
-        body_contains: "Too many requests"
-        max_retries: 10
-        delay: 2s
-        jitter: 1s
-      - status: 400
-        body_contains: "未找到"
-        max_retries: 10
-        delay: 2s
-        jitter: 1s
+        body_contains: overloaded
 ```
 
-每条 `overload_rules` 独立配置重试策略；`max_retries`、`delay`、`jitter` 均可省略，使用内置默认值。
+`vision.model` 必须填写上游实际接受的模型名称，不会读取 Claude Code 的 `sonnet`、`haiku`、`opus` 映射。
 
-### 支持的 protocol
+### 3. 启动
 
-| 值 | 适用场景 |
+```bash
+docker compose up -d --build
+```
+
+然后让 Claude Code 使用本地代理：
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8087
+```
+
+统计页面默认位于 `http://127.0.0.1:8087/stats`，用户名为 `admin`。默认密码 `statspwd123456` 仅适合本机测试，使用前建议在配置文件中修改。
+
+## 文档
+
+| 文档 | 内容 |
 |---|---|
-| `anthropic`（默认）| 京东云、官方 Anthropic 及所有 Anthropic 兼容接口 |
-| `openai` | OpenAI Chat Completions 格式的接口（流式统计需请求带 `stream_options.include_usage: true`） |
+| [图片预处理](docs/vision.md) | 核心原理、启用方式、模型选择、缓存、并发和诊断日志 |
+| [配置参考](docs/configuration.md) | 环境变量、配置文件、Provider、协议和重试规则 |
+| [Token 用量统计](docs/statistics.md) | 统计口径、接口、Basic Auth 和安全注意事项 |
+
+## 本地开发
+
+需要 Go 1.25+：
+
+```bash
+make test
+make build
+CONFIG_FILE=config.yaml ./bin/anthropic-proxy
+```
+
+构建和测试也可以完全在 Docker 中进行，避免修改本地 Go 环境。

@@ -103,6 +103,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 				return
 			}
+			if rule == nil && len(h.cfg.OverloadRules) == 0 {
+				slog.Error("upstream failed without retry rules",
+					"provider", label, "attempts", attempt+1, "err", err)
+				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+				return
+			}
 			slog.Warn("upstream error, will retry", "provider", label, "attempt", attempt+1, "err", err)
 			if rule == nil {
 				rule = &h.cfg.OverloadRules[0]

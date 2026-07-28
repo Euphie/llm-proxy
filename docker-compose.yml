@@ -4,12 +4,12 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${PORT}:8080"
+      - "${HOST:-127.0.0.1}:${PORT}:8080"
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
+      - type: bind
+        source: ${CONFIG_FILE:-./config.yaml}
+        target: /app/config.yaml
+        read_only: true
       - ./data:/app/data
     environment:
       CONFIG_FILE: /app/config.yaml
-      # 选择 provider（覆盖 config.yaml 中的 active 字段）
-      # 可选值：anthropic | jdcloud | custom（或任何 config.yaml 中定义的 key）
-      PROVIDER: ${PROVIDER}

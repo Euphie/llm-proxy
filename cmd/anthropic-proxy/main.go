@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -51,8 +52,8 @@ func main() {
 	client := &http.Client{Timeout: 10 * time.Minute}
 	mux := http.NewServeMux()
 	if sdb != nil {
-		mux.HandleFunc("/stats/data", sdb.Handler())
-		mux.HandleFunc("/stats", sdb.UIHandler())
+		mux.Handle("/stats/data", statsBasicAuth(cfg.StatsPassword, sdb.Handler()))
+		mux.Handle("/stats", statsBasicAuth(cfg.StatsPassword, sdb.UIHandler()))
 	}
 	mux.Handle("/", proxy.New(cfg, client, sdb))
 
@@ -60,6 +61,20 @@ func main() {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}
+}
+
+func statsBasicAuth(password string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, suppliedPassword, ok := r.BasicAuth()
+		validUsername := subtle.ConstantTimeCompare([]byte(username), []byte("admin")) == 1
+		validPassword := subtle.ConstantTimeCompare([]byte(suppliedPassword), []byte(password)) == 1
+		if !ok || !validUsername || !validPassword {
+			w.Header().Set("WWW-Authenticate", `Basic realm="anthropic-proxy stats", charset="UTF-8"`)
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func fmtRules(cfg *config.Config) string {

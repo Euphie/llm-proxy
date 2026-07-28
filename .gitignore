@@ -4,6 +4,10 @@ bin/
 # 统计数据库
 data/
 
+# 本地配置
+.env
+config-bak.yaml
+
 # macOS
 .DS_Store
 

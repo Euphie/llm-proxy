@@ -188,6 +188,13 @@ func (p *Preprocessor) Process(
 				"cache_source", cacheSource)
 			if err == nil {
 				descriptions[i] = description
+				debugDescription, truncated := truncateDebugContent(description)
+				slog.Info("vision.debug.description",
+					"provider", p.provider,
+					"image_index", i,
+					"source_type", image.sourceType,
+					"description", debugDescription,
+					"truncated", truncated)
 				slog.Info("vision.image.completed",
 					"provider", p.provider,
 					"image_index", i,

@@ -19,7 +19,7 @@ func TestResolveVisionDefaults(t *testing.T) {
 	pc := testProvider()
 	pc.Vision.Enabled = true
 
-	got, err := resolve("test", pc, "", "")
+	got, err := resolve("test", pc, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,10 +31,13 @@ func TestResolveVisionDefaults(t *testing.T) {
 		got.Vision.CacheMaxEntries != 512 {
 		t.Fatalf("unexpected defaults: %+v", got.Vision)
 	}
+	if got.StatsPassword != "statspwd123456" {
+		t.Fatalf("stats password=%q", got.StatsPassword)
+	}
 }
 
 func TestResolveVisionDisabledByDefault(t *testing.T) {
-	got, err := resolve("test", testProvider(), "", "")
+	got, err := resolve("test", testProvider(), "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,12 +46,25 @@ func TestResolveVisionDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestResolveAllowsEmptyOverloadRules(t *testing.T) {
+	pc := testProvider()
+	pc.OverloadRules = nil
+
+	got, err := resolve("test", pc, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.OverloadRules) != 0 {
+		t.Fatalf("overload rules=%v", got.OverloadRules)
+	}
+}
+
 func TestResolveVisionRequiresAnthropic(t *testing.T) {
 	pc := testProvider()
 	pc.Protocol = "openai"
 	pc.Vision.Enabled = true
 
-	_, err := resolve("test", pc, "", "")
+	_, err := resolve("test", pc, "", "", "")
 	if err == nil || !strings.Contains(err.Error(), "vision requires protocol anthropic") {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +91,7 @@ func TestResolveVisionRejectsZeroValues(t *testing.T) {
 			pc.Vision.Enabled = true
 			tt.set(&pc.Vision)
 
-			_, err := resolve("test", pc, "", "")
+			_, err := resolve("test", pc, "", "", "")
 			if err == nil || !strings.Contains(err.Error(), "vision."+tt.field) {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -101,7 +117,7 @@ func TestResolveVisionExplicitValues(t *testing.T) {
 		Prompt:          "describe the image",
 	}
 
-	got, err := resolve("test", pc, "", "")
+	got, err := resolve("test", pc, "", "", "custom-stats-password")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,5 +133,8 @@ func TestResolveVisionExplicitValues(t *testing.T) {
 	}
 	if got.Vision != want {
 		t.Fatalf("vision = %+v, want %+v", got.Vision, want)
+	}
+	if got.StatsPassword != "custom-stats-password" {
+		t.Fatalf("stats password=%q", got.StatsPassword)
 	}
 }

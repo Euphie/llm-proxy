@@ -172,3 +172,16 @@ func TestScopedImageCacheKeyFramesMultiValueHeaders(t *testing.T) {
 		t.Fatal("identical multi-value header domains must produce the same scoped key")
 	}
 }
+
+func TestScopedImageCacheKeyIgnoresAnthropicBeta(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	image := imageRef{sourceType: "url", cachePayload: "https://example.test/a.png"}
+	first := http.Header{"Anthropic-Beta": {"agent-teams"}}
+	second := http.Header{"Anthropic-Beta": {"files-api-2025-04-14"}}
+
+	firstKey := scopedImageCacheKey(secret, first, "provider", "model", "prompt", image)
+	secondKey := scopedImageCacheKey(secret, second, "provider", "model", "prompt", image)
+	if firstKey != secondKey {
+		t.Fatal("non-forwarded Anthropic-Beta must not partition the cache")
+	}
+}

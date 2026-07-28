@@ -1,9 +1,4 @@
 // Package config handles loading and resolving proxy configuration from a YAML file.
-//
-// Environment variable overrides (applied after file is parsed):
-//   - PROVIDER     — overrides the 'active' field
-//   - UPSTREAM_URL — overrides the active provider's upstream URL
-//   - LISTEN_ADDR  — overrides the top-level listen address
 package config
 
 import (
@@ -29,6 +24,7 @@ const (
 	defaultVisionMaxConcurrency  = 4
 	defaultVisionCacheTTL        = 30 * time.Minute
 	defaultVisionCacheMaxEntries = 512
+	defaultStatsPassword         = "statspwd123456"
 )
 
 // Config is the resolved runtime configuration for the active provider.
@@ -43,7 +39,9 @@ type Config struct {
 	// StatsDB is the path to the SQLite database used for token usage statistics.
 	// Empty means stats are disabled.
 	StatsDB string
-	Vision  VisionConfig
+	// StatsPassword protects /stats and /stats/data with HTTP Basic Auth.
+	StatsPassword string
+	Vision        VisionConfig
 }
 
 type VisionConfig struct {
@@ -97,10 +95,11 @@ type providerYAML struct {
 }
 
 type fileConfig struct {
-	Listen    string                  `yaml:"listen"`
-	Active    string                  `yaml:"active"`
-	StatsDB   string                  `yaml:"stats_db"`
-	Providers map[string]providerYAML `yaml:"providers"`
+	Listen        string                  `yaml:"listen"`
+	Active        string                  `yaml:"active"`
+	StatsDB       string                  `yaml:"stats_db"`
+	StatsPassword string                  `yaml:"stats_password"`
+	Providers     map[string]providerYAML `yaml:"providers"`
 }
 
 // Load reads the YAML config file at path and returns the resolved Config.
@@ -115,11 +114,8 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config file: %w", err)
 	}
 
-	if v := os.Getenv("PROVIDER"); v != "" {
-		fc.Active = v
-	}
 	if fc.Active == "" {
-		return nil, fmt.Errorf("config: set 'active' in config.yaml or via PROVIDER env var")
+		return nil, fmt.Errorf("config: set 'active' in config.yaml")
 	}
 
 	pc, ok := fc.Providers[fc.Active]
@@ -127,26 +123,19 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: provider %q not found in config.yaml", fc.Active)
 	}
 
-	if v := os.Getenv("UPSTREAM_URL"); v != "" {
-		pc.Upstream = v
-	}
-	if v := os.Getenv("STATS_DB"); v != "" {
-		fc.StatsDB = v
-	}
-
-	return resolve(fc.Active, pc, fc.Listen, fc.StatsDB)
+	return resolve(fc.Active, pc, fc.Listen, fc.StatsDB, fc.StatsPassword)
 }
 
-func resolve(name string, pc providerYAML, listen, statsDB string) (*Config, error) {
+func resolve(name string, pc providerYAML, listen, statsDB, statsPassword string) (*Config, error) {
 	if pc.Upstream == "" {
 		return nil, fmt.Errorf("provider %q: upstream URL is required", name)
-	}
-	if len(pc.OverloadRules) == 0 {
-		return nil, fmt.Errorf("provider %q: overload_rules must not be empty", name)
 	}
 
 	if listen == "" {
 		listen = defaultListenAddr
+	}
+	if statsPassword == "" {
+		statsPassword = defaultStatsPassword
 	}
 
 	rules := make([]provider.Rule, len(pc.OverloadRules))
@@ -186,6 +175,7 @@ func resolve(name string, pc providerYAML, listen, statsDB string) (*Config, err
 		OverloadRules: rules,
 		Protocol:      protocol,
 		StatsDB:       statsDB,
+		StatsPassword: statsPassword,
 		Vision:        visionCfg,
 	}, nil
 }

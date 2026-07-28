@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -329,6 +331,7 @@ func TestPreprocessorTimeoutIncludesSemaphoreQueue(t *testing.T) {
 		calls.Add(1)
 		if image.cachePayload == "holder" {
 			close(holderStarted)
+			<-ctx.Done()
 			<-releaseHolder
 			return "", ctx.Err()
 		}
@@ -436,10 +439,8 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 		authSecret,
 		apiKeySecret,
 		promptSecret,
-		responseSecret,
 		"VERSION_SECRET",
 		"BETA_SECRET",
-		"DESCRIPTION_SECRET",
 	} {
 		if strings.Contains(logText, secret) {
 			t.Fatalf("vision logs leaked %q: %s", secret, logText)
@@ -447,25 +448,34 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 	}
 
 	wantedEvents := map[string]bool{
-		"vision.images.discovered": false,
-		"vision.image.cache":       false,
-		"vision.image.completed":   false,
-		"vision.image.failed":      false,
-		"vision.rewrite.completed": false,
-		"vision.shadow.attempt":    false,
+		"vision.images.discovered":       false,
+		"vision.image.cache":             false,
+		"vision.image.completed":         false,
+		"vision.image.failed":            false,
+		"vision.rewrite.completed":       false,
+		"vision.shadow.attempt":          false,
+		"vision.debug.description":       false,
+		"vision.debug.upstream_response": false,
 	}
 	allowedFields := map[string]bool{
-		"time":         true,
-		"level":        true,
-		"msg":          true,
-		"provider":     true,
-		"image_count":  true,
-		"image_index":  true,
-		"source_type":  true,
-		"cache_source": true,
-		"attempt":      true,
-		"duration_ms":  true,
-		"error_class":  true,
+		"time":           true,
+		"level":          true,
+		"msg":            true,
+		"provider":       true,
+		"image_count":    true,
+		"image_index":    true,
+		"source_type":    true,
+		"cache_source":   true,
+		"attempt":        true,
+		"duration_ms":    true,
+		"error_class":    true,
+		"model":          true,
+		"status_code":    true,
+		"response_bytes": true,
+		"retry_matched":  true,
+		"description":    true,
+		"response_body":  true,
+		"truncated":      true,
 	}
 	for _, line := range strings.Split(strings.TrimSpace(logText), "\n") {
 		if line == "" {
@@ -497,6 +507,61 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 	if !strings.Contains(logText, `"cache_source":"loaded"`) ||
 		!strings.Contains(logText, `"cache_source":"cache"`) {
 		t.Fatalf("logs do not expose load and cache sources: %s", logText)
+	}
+}
+
+func TestVisionDebugLogsContent(t *testing.T) {
+	const (
+		description = "debug vision description"
+		failureBody = `{"error":{"type":"invalid_request_error","message":"debug upstream failure"}}`
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if bytes.Contains(requestBody, []byte("debug-failure")) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, failureBody)
+			return
+		}
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"`+description+`"}]}`)
+	}))
+	defer server.Close()
+
+	cfg := testVisionConfig(server.URL)
+	cfg.Vision.MaxConcurrency = 1
+	cfg.Vision.CacheTTL = time.Minute
+	cfg.Vision.CacheMaxEntries = 8
+	p := New(cfg, server.Client(), nil)
+
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+
+	if _, err := p.Process(context.Background(), nil, imageRequest("debug-success")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Process(context.Background(), nil, imageRequest("debug-failure")); err == nil {
+		t.Fatal("expected upstream failure")
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		`"msg":"vision.debug.description"`,
+		`"description":"` + description + `"`,
+		`"msg":"vision.debug.upstream_response"`,
+		`"response_body":` + strconv.Quote(failureBody),
+		`"model":"sonnet"`,
+		`"status_code":200`,
+		`"status_code":400`,
+		`"retry_matched":false`,
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("debug logs missing %s: %s", want, logText)
+		}
 	}
 }
 
