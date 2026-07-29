@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
 type fakeDescriber struct {
@@ -461,7 +461,7 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 		"time":           true,
 		"level":          true,
 		"msg":            true,
-		"provider":       true,
+		"profile":        true,
 		"image_count":    true,
 		"image_index":    true,
 		"source_type":    true,
@@ -894,7 +894,7 @@ func testPreprocessor(maxConcurrency int, d describer) *Preprocessor {
 }
 
 func testPreprocessorWithTimeout(maxConcurrency int, timeout time.Duration, d describer) *Preprocessor {
-	return newPreprocessor("provider", config.VisionConfig{
+	return newPreprocessor("provider", profile.VisionRuntime{
 		Model:          "vision-model",
 		Prompt:         "describe",
 		Timeout:        timeout,
@@ -928,7 +928,7 @@ func (e *signalingDeadlineError) Is(target error) bool {
 }
 
 func testImageKey(p *Preprocessor, payload string) string {
-	return scopedImageCacheKey(p.cacheKey, nil, p.provider, p.model, p.prompt, imageRef{
+	return scopedImageCacheKey(p.cacheKey, nil, p.profile, p.model, p.prompt, imageRef{
 		sourceType:   "url",
 		cachePayload: payload,
 	})

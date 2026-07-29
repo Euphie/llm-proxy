@@ -1,0 +1,19 @@
+services:
+  llm-proxy:
+    ports: !reset []
+    volumes: !reset []
+    tmpfs:
+      - /app/data
+    environment:
+      LISTEN: :8080
+      DATA_DIR: /app/data
+
+  e2e:
+    build:
+      context: ./e2e
+    depends_on:
+      - llm-proxy
+    environment:
+      BASE_URL: http://llm-proxy:8080
+    init: true
+    ipc: host

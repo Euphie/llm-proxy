@@ -1,92 +1,70 @@
 package main
 
 import (
-	"crypto/subtle"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
-	"time"
 
-	"github.com/Euphie/llm-proxy/internal/config"
-	"github.com/Euphie/llm-proxy/internal/proxy"
-	"github.com/Euphie/llm-proxy/internal/stats"
+	"github.com/Euphie/llm-proxy/internal/app"
 )
 
+type runtimeOptions struct {
+	listen  string
+	dataDir string
+}
+
 func main() {
-	configFile := flag.String("config", os.Getenv("CONFIG_FILE"), "YAML config file path")
-	flag.Parse()
-
-	if *configFile == "" {
-		slog.Error("config file is required: use -config <path> or set CONFIG_FILE env var")
+	if err := run(os.Args[1:]); err != nil {
+		slog.Error("llm-proxy stopped", "err", err)
 		os.Exit(1)
 	}
+}
 
-	cfg, err := config.Load(*configFile)
+func run(args []string) (err error) {
+	options, err := parseRuntimeOptions(args)
 	if err != nil {
-		slog.Error("configuration error", "err", err)
-		os.Exit(1)
+		return err
 	}
-
-	slog.Info("llm-proxy starting",
-		"provider", cfg.ProviderName,
-		"listen", cfg.ListenAddr,
-		"upstream", cfg.Upstream,
-		"overload_rules", fmtRules(cfg),
-	)
-
-	// Initialize token usage stats (optional)
-	var sdb *stats.DB
-	if cfg.StatsDB != "" {
-		sdb, err = stats.Open(cfg.StatsDB)
-		if err != nil {
-			slog.Error("stats: failed to open db", "path", cfg.StatsDB, "err", err)
-			os.Exit(1)
+	application, err := app.New(app.Options{DataDir: options.dataDir})
+	if err != nil {
+		return fmt.Errorf("initialize application: %w", err)
+	}
+	defer func() {
+		if closeErr := application.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close application: %w", closeErr))
 		}
-		defer sdb.Close()
-		slog.Info("stats enabled", "db", cfg.StatsDB, "endpoint", "/stats")
-	}
+	}()
 
-	client := &http.Client{Timeout: 10 * time.Minute}
-	mux := http.NewServeMux()
-	if sdb != nil {
-		mux.Handle("/stats/data", statsBasicAuth(cfg.StatsPassword, sdb.Handler()))
-		mux.Handle("/stats", statsBasicAuth(cfg.StatsPassword, sdb.UIHandler()))
+	slog.Info("llm-proxy starting", "listen", options.listen, "data_dir", options.dataDir)
+	if err := http.ListenAndServe(options.listen, application.Handler()); err != nil {
+		return fmt.Errorf("serve HTTP: %w", err)
 	}
-	mux.Handle("/", proxy.New(cfg, client, sdb))
-
-	if err := http.ListenAndServe(cfg.ListenAddr, mux); err != nil {
-		slog.Error("server stopped", "err", err)
-		os.Exit(1)
-	}
+	return nil
 }
 
-func statsBasicAuth(password string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		username, suppliedPassword, ok := r.BasicAuth()
-		validUsername := subtle.ConstantTimeCompare([]byte(username), []byte("admin")) == 1
-		validPassword := subtle.ConstantTimeCompare([]byte(suppliedPassword), []byte(password)) == 1
-		if !ok || !validUsername || !validPassword {
-			w.Header().Set("WWW-Authenticate", `Basic realm="llm-proxy stats", charset="UTF-8"`)
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func parseRuntimeOptions(args []string) (runtimeOptions, error) {
+	listen := envOrDefault("LISTEN", ":8080")
+	dataDir := envOrDefault("DATA_DIR", "./data")
+	options := runtimeOptions{listen: listen, dataDir: dataDir}
+
+	flags := flag.NewFlagSet("llm-proxy", flag.ContinueOnError)
+	flags.StringVar(&options.listen, "listen", listen, "HTTP listen address")
+	flags.StringVar(&options.dataDir, "data-dir", dataDir, "runtime data directory")
+	if err := flags.Parse(args); err != nil {
+		return runtimeOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return runtimeOptions{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	return options, nil
 }
 
-func fmtRules(cfg *config.Config) string {
-	parts := make([]string, len(cfg.OverloadRules))
-	for i, r := range cfg.OverloadRules {
-		if r.BodyContains != "" {
-			parts[i] = fmt.Sprintf("%d+%q(max=%d,delay=%v,jitter=%v)",
-				r.Status, r.BodyContains, r.MaxRetries, r.RetryDelay, r.RetryJitter)
-		} else {
-			parts[i] = fmt.Sprintf("%d(max=%d,delay=%v,jitter=%v)",
-				r.Status, r.MaxRetries, r.RetryDelay, r.RetryJitter)
-		}
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
 	}
-	return "[" + strings.Join(parts, ", ") + "]"
+	return fallback
 }

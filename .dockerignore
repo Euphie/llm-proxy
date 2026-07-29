@@ -1,0 +1,13 @@
+.git
+.env
+bin
+data
+config.yaml
+config-bak.yaml
+config copy.yaml
+**/llm-proxy.db
+**/llm-proxy.db-wal
+**/llm-proxy.db-shm
+**/*.db-wal
+**/*.db-shm
+.DS_Store

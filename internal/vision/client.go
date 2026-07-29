@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
@@ -31,33 +31,39 @@ type describer interface {
 }
 
 type visionClient struct {
-	providerName string
-	upstream     string
-	cfg          config.VisionConfig
-	rules        []provider.Rule
-	httpClient   *http.Client
-	sleep        func(context.Context, time.Duration) error
-	recordUsage  func([]byte)
+	profileSlug string
+	upstream    string
+	cfg         profile.VisionRuntime
+	rules       []provider.Rule
+	httpClient  *http.Client
+	sleep       func(context.Context, time.Duration) error
+	recordUsage func([]byte)
 }
 
-func newVisionClient(cfg *config.Config, httpClient *http.Client, sdb *stats.DB) *visionClient {
+func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *visionClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	httpClient = shadowHTTPClient(httpClient)
 
 	client := &visionClient{
-		providerName: cfg.ProviderName,
-		upstream:     strings.TrimRight(cfg.Upstream, "/") + "/v1/messages",
-		cfg:          cfg.Vision,
-		rules:        append([]provider.Rule(nil), cfg.OverloadRules...),
-		httpClient:   httpClient,
-		sleep:        sleepContext,
-		recordUsage:  func([]byte) {},
+		profileSlug: cfg.Slug,
+		upstream:    strings.TrimRight(cfg.Upstream, "/") + "/v1/messages",
+		cfg:         cfg.Vision,
+		rules:       append([]provider.Rule(nil), cfg.OverloadRules...),
+		httpClient:  httpClient,
+		sleep:       sleepContext,
+		recordUsage: func([]byte) {},
 	}
 	if sdb != nil {
 		client.recordUsage = func(body []byte) {
-			sdb.RecordAsync(cfg.ProviderName, "/v1/messages#vision", body, stats.NewParser("anthropic"))
+			sdb.RecordAsync(stats.RequestMeta{
+				ProfileID:   cfg.ID,
+				ProfileSlug: cfg.Slug,
+				Protocol:    string(cfg.Protocol),
+				Kind:        "vision",
+				Path:        "/v1/messages",
+			}, body, stats.NewParser("anthropic"))
 		}
 	}
 	return client
@@ -161,7 +167,7 @@ func (c *visionClient) logAttempt(
 	retryMatched bool,
 ) {
 	slog.Info("vision.shadow.attempt",
-		"provider", c.providerName,
+		"profile", c.profileSlug,
 		"source_type", image.sourceType,
 		"model", c.cfg.Model,
 		"attempt", attempt,
@@ -180,7 +186,7 @@ func (c *visionClient) logDebugUpstreamResponse(
 ) {
 	responseBody, truncated := truncateDebugContent(string(body))
 	slog.Info("vision.debug.upstream_response",
-		"provider", c.providerName,
+		"profile", c.profileSlug,
 		"source_type", image.sourceType,
 		"model", c.cfg.Model,
 		"attempt", attempt,

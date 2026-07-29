@@ -1,47 +1,44 @@
 # Token 用量统计
 
-配置非空 `stats_db` 后，代理会异步解析成功响应中的 Token 用量并写入 SQLite。统计写入失败只记录日志，不影响代理响应。
+llm-proxy 捕获成功 Upstream 响应的内容；只要已捕获字节包含可解析的 usage，
+就会将 Token 用量异步写入 `DATA_DIR/llm-proxy.db`。统计写入失败只记录日志，
+不改变已经返回给调用方的代理响应。
 
-```yaml
-stats_db: ./data/stats.db
-stats_password: change-this-password
-```
+统计页面位于受 Session 保护的 `/_admin/stats`，不提供独立的公开统计入口。
 
-`stats_db` 留空时不会打开数据库，也不会注册统计页面和 JSON 接口。
+## 页面与筛选
 
-## 统计内容
+页面展示汇总、按日和按模型表格，支持组合筛选：
 
-统计数据包括：
+- Profile；
+- 协议：`anthropic` 或 `openai`；
+- 模型，不区分大小写；
+- 请求类型：`main` 主请求或 `vision` 图片识别；
+- 起止时间，浏览器按 RFC 3339 时间提交，边界包含在内。
 
-- 请求数；
-- 输入、输出和总 Token；
-- Anthropic cache read / cache creation Token；
-- OpenAI cached prompt Token；
-- 最近 30 天每日用量；
-- 按模型聚合的用量。
+没有时间筛选时，按日表默认展示最近 30 天；汇总和按模型结果使用全部匹配记录。
+显式设置起止时间后，三个区域使用同一时间范围。
 
-主请求按原请求路径记录。每次真实执行成功的识图影子请求按 `/v1/messages#vision` 单独记录，缓存命中不会新增识图用量。
+## Token 口径
 
-## 接口
+- 请求数是一条成功解析并落库的 usage 记录。
+- 总 Token 等于输入 Token 加输出 Token。
+- Cache read 和 cache creation 单独展示，不重复加入总 Token。
+- 每个真实成功的视觉影子请求单独记为 `vision`；缓存命中不新增记录。
+- 主请求记为 `main`，并保存当时的 Profile slug、协议、模型和 Profile-relative
+  request path。
 
-| 地址 | 内容 |
-|---|---|
-| `/stats` | 可视化 Dashboard |
-| `/stats/data` | JSON 聚合数据 |
+删除 Profile 后，历史记录仍保留 slug；外键 ID 会置空，因此按已删除 Profile ID
+无法再筛选这些记录。
 
-两个接口都使用 HTTP Basic Auth：
+## 协议限制
 
-- 用户名固定为 `admin`；
-- 密码来自顶层 `stats_password`；
-- 密码为空时使用默认值 `statspwd123456`。
+Anthropic 的非流式 JSON 和 SSE 会解析模型、输入/输出 Token，以及
+cache read / cache creation 输入 Token。
 
-默认密码只适合本机测试。对外提供服务时必须修改密码，并放在 HTTPS 反向代理之后。
-
-## 协议差异
-
-Anthropic 的非流式和 SSE 响应都会解析 `usage` 字段。
-
-OpenAI 非流式响应可以直接统计。流式 Chat Completions 请求必须让上游返回 usage：
+OpenAI 非流式响应会解析 prompt、completion 和 cached prompt Token。流式响应
+只有在 Upstream 最终事件包含 usage 时才能统计；Chat Completions 客户端通常需要
+请求：
 
 ```json
 {
@@ -52,10 +49,12 @@ OpenAI 非流式响应可以直接统计。流式 Chat Completions 请求必须�
 }
 ```
 
-未携带 `stream_options.include_usage: true` 时，上游流式响应通常不包含用量，代理无法补算。
+Upstream 非成功响应或已捕获字节中没有可解析 usage 时不会产生记录。下游取消或
+流读取中断通常会让捕获不完整；但如果 usage 已在中断前到达，仍可能异步落库。
+llm-proxy 不估算缺失 Token。
 
-## 数据与运维
+## 持久化与运维
 
-Docker Compose 将宿主机 `./data` 挂载到容器 `/app/data`，默认数据库因此可以跨容器重建保留。
-
-统计记录使用 UTC 时间写入。当前没有数据清理或保留周期配置，需要长期运行时应自行备份和清理 SQLite 文件。
+统计与 Profiles、管理员和 Session 共用 SQLite，时间以 UTC 保存。服务关闭时会
+等待已开始的异步写入完成。当前没有自动保留周期或清理任务；按
+[管理控制台](admin.md)的停机流程备份数据库，并自行制定容量和删除策略。

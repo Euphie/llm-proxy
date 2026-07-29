@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
@@ -65,7 +65,7 @@ func HTTPStatus(err error) int {
 }
 
 type Preprocessor struct {
-	provider  string
+	profile   string
 	model     string
 	prompt    string
 	describer describer
@@ -81,9 +81,9 @@ type processLoader struct {
 	done    chan struct{}
 }
 
-func New(cfg *config.Config, httpClient *http.Client, sdb *stats.DB) *Preprocessor {
+func New(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *Preprocessor {
 	return newPreprocessor(
-		cfg.ProviderName,
+		cfg.Slug,
 		cfg.Vision,
 		newVisionClient(cfg, httpClient, sdb),
 		newResultCache(cfg.Vision.CacheMaxEntries, cfg.Vision.CacheTTL),
@@ -91,13 +91,13 @@ func New(cfg *config.Config, httpClient *http.Client, sdb *stats.DB) *Preprocess
 }
 
 func newPreprocessor(
-	provider string,
-	cfg config.VisionConfig,
+	profileSlug string,
+	cfg profile.VisionRuntime,
 	d describer,
 	cache *resultCache,
 ) *Preprocessor {
 	return &Preprocessor{
-		provider:  provider,
+		profile:   profileSlug,
 		model:     cfg.Model,
 		prompt:    effectivePrompt(cfg.Prompt),
 		describer: d,
@@ -134,7 +134,7 @@ func (p *Preprocessor) Process(
 	}
 	processStarted := time.Now()
 	slog.Info("vision.images.discovered",
-		"provider", p.provider,
+		"profile", p.profile,
 		"image_count", len(images))
 
 	workCtx, cancel := context.WithCancel(ctx)
@@ -158,7 +158,7 @@ func (p *Preprocessor) Process(
 
 			description, source, err := p.cache.getOrLoad(
 				workCtx,
-				scopedImageCacheKey(p.cacheKey, headers, p.provider, p.model, p.prompt, image),
+				scopedImageCacheKey(p.cacheKey, headers, p.profile, p.model, p.prompt, image),
 				func(loadCtx context.Context) (string, error) {
 					operationCtx, operationCancel := context.WithTimeout(loadCtx, p.timeout)
 					defer operationCancel()
@@ -182,7 +182,7 @@ func (p *Preprocessor) Process(
 			loader.source = source
 			cacheSource := cacheSourceName(source)
 			slog.Info("vision.image.cache",
-				"provider", p.provider,
+				"profile", p.profile,
 				"image_index", i,
 				"source_type", image.sourceType,
 				"cache_source", cacheSource)
@@ -190,13 +190,13 @@ func (p *Preprocessor) Process(
 				descriptions[i] = description
 				debugDescription, truncated := truncateDebugContent(description)
 				slog.Info("vision.debug.description",
-					"provider", p.provider,
+					"profile", p.profile,
 					"image_index", i,
 					"source_type", image.sourceType,
 					"description", debugDescription,
 					"truncated", truncated)
 				slog.Info("vision.image.completed",
-					"provider", p.provider,
+					"profile", p.profile,
 					"image_index", i,
 					"source_type", image.sourceType,
 					"cache_source", cacheSource,
@@ -206,7 +206,7 @@ func (p *Preprocessor) Process(
 			}
 
 			slog.Warn("vision.image.failed",
-				"provider", p.provider,
+				"profile", p.profile,
 				"image_index", i,
 				"source_type", image.sourceType,
 				"cache_source", cacheSource,
@@ -238,7 +238,7 @@ func (p *Preprocessor) Process(
 		}
 	}
 	slog.Info("vision.rewrite.completed",
-		"provider", p.provider,
+		"profile", p.profile,
 		"image_count", len(images),
 		"duration_ms", time.Since(processStarted).Milliseconds())
 	return rewritten, nil

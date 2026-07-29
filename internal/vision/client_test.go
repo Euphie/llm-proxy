@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
@@ -145,40 +145,50 @@ func TestVisionClientRecordsPrettyJSONUsageThroughStatsDB(t *testing.T) {
 	}))
 	defer server.Close()
 
-	dbPath := filepath.Join(t.TempDir(), "usage.db")
-	sdb, err := stats.Open(dbPath)
+	db, err := database.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sdb.Close()
+	defer db.Close()
+	sdb := stats.New(db)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO profiles (
+			id, slug, display_name, enabled, config_json, created_at, updated_at
+		) VALUES (7, 'test-provider', 'Test Provider', 1, '{}', ?, ?)
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
 
-	client := newVisionClient(testVisionConfig(server.URL), server.Client(), sdb)
+	cfg := testVisionConfig(server.URL)
+	client := newVisionClient(cfg, server.Client(), sdb)
 	if _, err := client.Describe(context.Background(), nil, testImage()); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	readDB, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer readDB.Close()
-
-	var providerName, model, path string
+	var profileID sql.NullInt64
+	var profileSlug, protocol, kind, model, path string
 	var input, output, cacheRead, cacheCreation int
-	err = readDB.QueryRow(`
-		SELECT provider, model, path, input_tokens, output_tokens,
+	err = db.QueryRow(`
+		SELECT profile_id, profile_slug, protocol, request_kind, model, path,
+		       input_tokens, output_tokens,
 		       cache_read_tokens, cache_creation_tokens
 		FROM usage ORDER BY id DESC LIMIT 1
-	`).Scan(&providerName, &model, &path, &input, &output, &cacheRead, &cacheCreation)
+	`).Scan(
+		&profileID, &profileSlug, &protocol, &kind, &model, &path,
+		&input, &output, &cacheRead, &cacheCreation,
+	)
 	if err != nil {
 		t.Fatalf("vision usage row not recorded: %v", err)
 	}
-	if providerName != "test-provider" || model != "sonnet" ||
-		path != "/v1/messages#vision" || input != 10 || output != 20 ||
+	if !profileID.Valid || profileID.Int64 != 7 ||
+		profileSlug != "test-provider" || protocol != "anthropic" || kind != "vision" ||
+		model != "sonnet" || path != "/v1/messages" || input != 10 || output != 20 ||
 		cacheRead != 3 || cacheCreation != 4 {
-		t.Fatalf("usage row=%q %q %q %d %d %d %d",
-			providerName, model, path, input, output, cacheRead, cacheCreation)
+		t.Fatalf("usage row=%v %q %q %q %q %q %d %d %d %d",
+			profileID, profileSlug, protocol, kind, model, path,
+			input, output, cacheRead, cacheCreation)
 	}
 }
 
@@ -522,11 +532,13 @@ func (t *failingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return nil, errors.New("transport-secret")
 }
 
-func testVisionConfig(upstream string) *config.Config {
-	return &config.Config{
-		Upstream:     upstream,
-		ProviderName: "test-provider",
-		Vision: config.VisionConfig{
+func testVisionConfig(upstream string) profile.Runtime {
+	return profile.Runtime{
+		ID:       7,
+		Slug:     "test-provider",
+		Protocol: profile.ProtocolAnthropic,
+		Upstream: upstream,
+		Vision: profile.VisionRuntime{
 			Model:     "sonnet",
 			MaxTokens: 2048,
 			Timeout:   time.Second,

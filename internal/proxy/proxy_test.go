@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,8 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
+	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
 const (
@@ -28,6 +31,125 @@ type visionUpstream struct {
 	visionCalls atomic.Int32
 	mainCalls   atomic.Int32
 	mainBodies  chan []byte
+	mainURIs    chan string
+}
+
+func TestProxyPreservesEscapedPathQueryAndFiltersHopHeaders(t *testing.T) {
+	var gotURI string
+	var gotHeader http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.RequestURI
+		gotHeader = r.Header.Clone()
+		w.Header().Set("Proxy-Authenticate", "secret")
+		w.Header().Set("X-Response-Keep", "value")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	runtime := resolvedRuntime(t, 4, "coding", profile.ProtocolAnthropic, upstream.URL+"/base")
+	handler := New(runtime, upstream.Client(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/a%2Fb?download=1", nil)
+	req.Header.Set("Connection", "keep-alive, X-Remove")
+	req.Header.Set("X-Remove", "secret")
+	req.Header.Set("X-Keep", "value")
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if gotURI != "/base/v1/files/a%2Fb?download=1" {
+		t.Fatalf("requestURI=%q", gotURI)
+	}
+	if gotHeader.Get("Connection") != "" || gotHeader.Get("X-Remove") != "" {
+		t.Fatalf("hop headers=%v", gotHeader)
+	}
+	if gotHeader.Get("X-Keep") != "value" {
+		t.Fatalf("end-to-end header=%q", gotHeader.Get("X-Keep"))
+	}
+	if res.Header().Get("Connection") != "" || res.Header().Get("Proxy-Authenticate") != "" {
+		t.Fatalf("response hop headers=%v", res.Header())
+	}
+	if res.Header().Get("X-Response-Keep") != "value" {
+		t.Fatalf("response end-to-end header=%q", res.Header().Get("X-Response-Keep"))
+	}
+}
+
+func TestProxyRecordsProfileMainUsage(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"model":"claude-sonnet",
+			"usage":{"input_tokens":11,"output_tokens":22}
+		}`)
+	}))
+	defer upstream.Close()
+
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO profiles (
+			id, slug, display_name, enabled, config_json, created_at, updated_at
+		) VALUES (4, 'coding', 'Coding', 1, '{}', ?, ?)
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := New(
+		resolvedRuntime(t, 4, "coding", profile.ProtocolAnthropic, upstream.URL),
+		upstream.Client(),
+		stats.New(db),
+	)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", res.Code, res.Body.String())
+	}
+
+	var profileID sql.NullInt64
+	var slug, protocol, kind, path string
+	deadline := time.Now().Add(time.Second)
+	for {
+		err = db.QueryRow(`
+			SELECT profile_id, profile_slug, protocol, request_kind, path
+			FROM usage ORDER BY id DESC LIMIT 1
+		`).Scan(&profileID, &slug, &protocol, &kind, &path)
+		if err == nil || !errors.Is(err, sql.ErrNoRows) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("main usage row not recorded: %v", err)
+	}
+	if !profileID.Valid || profileID.Int64 != 4 ||
+		slug != "coding" || protocol != "anthropic" ||
+		kind != "main" || path != "/v1/messages" {
+		t.Fatalf("usage=%v %q %q %q %q", profileID, slug, protocol, kind, path)
+	}
+}
+
+func resolvedRuntime(
+	t *testing.T,
+	id int64,
+	slug string,
+	protocol profile.Protocol,
+	upstream string,
+) profile.Runtime {
+	t.Helper()
+	record := profile.Record{
+		ID:          id,
+		Slug:        slug,
+		DisplayName: strings.ToUpper(slug[:1]) + slug[1:],
+		Enabled:     true,
+		Config:      profile.NewConfig(protocol, upstream),
+	}
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
 }
 
 func newVisionUpstream(
@@ -44,7 +166,10 @@ func newVisionUpstreamWithResponders(
 ) *visionUpstream {
 	t.Helper()
 
-	upstream := &visionUpstream{mainBodies: make(chan []byte, 1)}
+	upstream := &visionUpstream{
+		mainBodies: make(chan []byte, 1),
+		mainURIs:   make(chan string, 1),
+	}
 	upstream.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -75,6 +200,7 @@ func newVisionUpstreamWithResponders(
 		case "main-model":
 			upstream.mainCalls.Add(1)
 			upstream.mainBodies <- append([]byte(nil), body...)
+			upstream.mainURIs <- r.RequestURI
 			if respondToMain != nil {
 				respondToMain(w, r)
 				return
@@ -94,15 +220,15 @@ func newVisionUpstreamWithResponders(
 }
 
 func (u *visionUpstream) proxy(enabled bool) http.Handler {
-	return New(&config.Config{
-		Upstream:     u.server.URL,
-		ProviderName: "test",
-		Protocol:     "anthropic",
+	return New(profile.Runtime{
+		Slug:     "test",
+		Protocol: profile.ProtocolAnthropic,
+		Upstream: u.server.URL,
 		OverloadRules: []provider.Rule{{
 			Status:     http.StatusServiceUnavailable,
 			MaxRetries: 0,
 		}},
-		Vision: config.VisionConfig{
+		Vision: profile.VisionRuntime{
 			Enabled:         enabled,
 			Model:           "sonnet",
 			MaxTokens:       2048,
@@ -261,6 +387,65 @@ func TestVisionSkipsIneligibleRequests(t *testing.T) {
 	}
 }
 
+func TestVisionSkipsEscapedMessagePaths(t *testing.T) {
+	for _, path := range []string{"/v1%2Fmessages", "/v1/mess%61ges"} {
+		t.Run(path, func(t *testing.T) {
+			upstream := newVisionUpstream(t, nil)
+			request := httptest.NewRequest(http.MethodPost, path+"?beta=1", strings.NewReader(visionImageBody))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			upstream.proxy(true).ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d, body=%q", response.Code, response.Body.String())
+			}
+			if got := upstream.visionCalls.Load(); got != 0 {
+				t.Fatalf("vision calls=%d, want 0", got)
+			}
+			if got := upstream.mainCalls.Load(); got != 1 {
+				t.Fatalf("main calls=%d, want 1", got)
+			}
+			if got := <-upstream.mainURIs; got != path+"?beta=1" {
+				t.Fatalf("main RequestURI=%q, want %q", got, path+"?beta=1")
+			}
+			if got := <-upstream.mainBodies; !bytes.Equal(got, []byte(visionImageBody)) {
+				t.Fatalf("main body changed:\n got: %s\nwant: %s", got, visionImageBody)
+			}
+		})
+	}
+}
+
+func TestVisionSkipsOpenAIProfile(t *testing.T) {
+	upstream := newVisionUpstream(t, nil)
+	runtime := profile.Runtime{
+		Slug:     "test",
+		Protocol: profile.ProtocolOpenAI,
+		Upstream: upstream.server.URL,
+		Vision: profile.VisionRuntime{
+			Enabled:         true,
+			Model:           "sonnet",
+			MaxTokens:       2048,
+			Timeout:         2 * time.Second,
+			MaxConcurrency:  4,
+			CacheTTL:        30 * time.Minute,
+			CacheMaxEntries: 512,
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(visionImageBody))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, upstream.server.Client(), nil).ServeHTTP(response, request)
+
+	if got := upstream.visionCalls.Load(); got != 0 {
+		t.Fatalf("vision calls=%d, want 0", got)
+	}
+	if got := upstream.mainCalls.Load(); got != 1 {
+		t.Fatalf("main calls=%d, want 1", got)
+	}
+}
+
 type trackingResponseWriter struct {
 	header http.Header
 	status int
@@ -382,10 +567,10 @@ func TestVisionMainRequestCancellationDoesNotWriteErrorResponse(t *testing.T) {
 func TestMainOverloadBackoffCancellationDoesNotWriteResponse(t *testing.T) {
 	consumed := make(chan struct{})
 	transport := &overloadOnceTransport{consumed: consumed}
-	handler := New(&config.Config{
-		Upstream:     "https://upstream.test",
-		ProviderName: "test",
-		Protocol:     "anthropic",
+	handler := New(profile.Runtime{
+		Upstream: "https://upstream.test",
+		Slug:     "test",
+		Protocol: profile.ProtocolAnthropic,
 		OverloadRules: []provider.Rule{{
 			Status:       http.StatusServiceUnavailable,
 			BodyContains: "overloaded",
@@ -426,10 +611,10 @@ func TestMainOverloadBackoffCancellationDoesNotWriteResponse(t *testing.T) {
 
 func TestEmptyOverloadRulesNetworkFailureReturnsBadGateway(t *testing.T) {
 	transport := &networkFailureTransport{}
-	handler := New(&config.Config{
-		Upstream:     "https://upstream.test",
-		ProviderName: "test",
-		Protocol:     "anthropic",
+	handler := New(profile.Runtime{
+		Upstream: "https://upstream.test",
+		Slug:     "test",
+		Protocol: profile.ProtocolAnthropic,
 	}, &http.Client{Transport: transport}, nil)
 	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(visionTextBody))
 	response := httptest.NewRecorder()

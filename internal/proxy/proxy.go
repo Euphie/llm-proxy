@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Euphie/llm-proxy/internal/config"
+	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/stats"
 	"github.com/Euphie/llm-proxy/internal/vision"
@@ -20,22 +20,22 @@ import (
 // New returns an http.Handler that forwards every request to cfg.Upstream,
 // automatically retrying when the response matches an overload rule.
 // Pass a non-nil *stats.DB to enable async token usage recording.
-func New(cfg *config.Config, client *http.Client, sdb *stats.DB) http.Handler {
+func New(cfg profile.Runtime, client *http.Client, sdb *stats.DB) http.Handler {
 	var visionPreprocessor *vision.Preprocessor
-	if cfg.Vision.Enabled {
+	if cfg.Protocol == profile.ProtocolAnthropic && cfg.Vision.Enabled {
 		visionPreprocessor = vision.New(cfg, client, sdb)
 	}
 	return &handler{
 		cfg:    cfg,
 		client: client,
 		stats:  sdb,
-		parser: stats.NewParser(cfg.Protocol),
+		parser: stats.NewParser(string(cfg.Protocol)),
 		vision: visionPreprocessor,
 	}
 }
 
 type handler struct {
-	cfg    *config.Config
+	cfg    profile.Runtime
 	client *http.Client
 	stats  *stats.DB
 	parser stats.Parser
@@ -43,8 +43,8 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	label := h.cfg.ProviderName
-	target := h.cfg.Upstream + r.RequestURI
+	label := h.cfg.Slug
+	target := targetURL(h.cfg.Upstream, r.RequestURI)
 	start := time.Now()
 
 	slog.Info("->", "method", r.Method, "path", r.URL.Path)
@@ -78,12 +78,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if rule != nil {
 			if attempt > rule.MaxRetries {
 				slog.Warn("max retries reached, giving up",
-					"provider", label, "max", rule.MaxRetries)
+					"profile", label, "max", rule.MaxRetries)
 				break
 			}
 			wait := rule.RetryDelay + time.Duration(attempt)*rule.RetryJitter
 			slog.Info("retry",
-				"provider", label, "attempt", attempt,
+				"profile", label, "attempt", attempt,
 				"max", rule.MaxRetries, "wait", wait, "path", r.URL.Path)
 
 			select {
@@ -99,17 +99,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if rule != nil && attempt >= rule.MaxRetries {
-				slog.Error("upstream failed", "provider", label, "attempts", attempt+1, "err", err)
+				slog.Error("upstream failed", "profile", label, "attempts", attempt+1, "err", err)
 				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 				return
 			}
 			if rule == nil && len(h.cfg.OverloadRules) == 0 {
 				slog.Error("upstream failed without retry rules",
-					"provider", label, "attempts", attempt+1, "err", err)
+					"profile", label, "attempts", attempt+1, "err", err)
 				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 				return
 			}
-			slog.Warn("upstream error, will retry", "provider", label, "attempt", attempt+1, "err", err)
+			slog.Warn("upstream error, will retry", "profile", label, "attempt", attempt+1, "err", err)
 			if rule == nil {
 				rule = &h.cfg.OverloadRules[0]
 			}
@@ -123,7 +123,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"attempts", attempt+1, "elapsed", time.Since(start).Round(time.Millisecond))
 			captured := stream(w, resp)
 			if h.stats != nil {
-				h.stats.RecordAsync(label, r.URL.Path, captured, h.parser)
+				h.stats.RecordAsync(stats.RequestMeta{
+					ProfileID:   h.cfg.ID,
+					ProfileSlug: label,
+					Protocol:    string(h.cfg.Protocol),
+					Kind:        "main",
+					Path:        r.URL.Path,
+				}, captured, h.parser)
 			}
 			return
 		}
@@ -158,8 +164,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	forward(w, resp, errBody)
 }
 
+func targetURL(upstream, requestURI string) string {
+	return strings.TrimRight(upstream, "/") + "/" + strings.TrimLeft(requestURI, "/")
+}
+
 func shouldPreprocessVision(r *http.Request) bool {
-	if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+	if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v1/messages" {
 		return false
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -171,11 +181,7 @@ func (h *handler) do(ctx context.Context, method, url string, headers http.Heade
 	if err != nil {
 		return nil, err
 	}
-	for k, vs := range headers {
-		for _, v := range vs {
-			req.Header.Add(k, v)
-		}
-	}
+	copyHeaders(req.Header, headers)
 	return h.client.Do(req)
 }
 
@@ -216,12 +222,40 @@ func forward(w http.ResponseWriter, resp *http.Response, body []byte) {
 }
 
 func copyHeaders(dst, src http.Header) {
+	connectionHeaders := make(map[string]struct{})
+	for _, value := range src.Values("Connection") {
+		for token := range strings.SplitSeq(value, ",") {
+			if name := strings.TrimSpace(token); name != "" {
+				connectionHeaders[http.CanonicalHeaderKey(name)] = struct{}{}
+			}
+		}
+	}
 	for k, vs := range src {
-		if strings.EqualFold(k, "Content-Length") {
+		if isHopByHopHeader(k) {
+			continue
+		}
+		if _, remove := connectionHeaders[http.CanonicalHeaderKey(k)]; remove {
 			continue
 		}
 		for _, v := range vs {
 			dst.Add(k, v)
 		}
+	}
+}
+
+func isHopByHopHeader(name string) bool {
+	switch http.CanonicalHeaderKey(name) {
+	case "Connection",
+		"Proxy-Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"Te",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade":
+		return true
+	default:
+		return false
 	}
 }

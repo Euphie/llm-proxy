@@ -5,12 +5,11 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "${HOST:-127.0.0.1}:${PORT}:8080"
+      - "${HOST:-127.0.0.1}:${PORT:-8087}:8080"
     volumes:
       - type: bind
-        source: ${CONFIG_FILE:-./config.yaml}
-        target: /app/config.yaml
-        read_only: true
-      - ./data:/app/data
+        source: ${DATA_DIR:-./data}
+        target: /app/data
     environment:
-      CONFIG_FILE: /app/config.yaml
+      LISTEN: :8080
+      DATA_DIR: /app/data

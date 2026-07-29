@@ -1,95 +1,54 @@
 # llm-proxy
 
-面向 Claude Code 等客户端的轻量级 Anthropic / OpenAI 反向代理。
+面向 Agent 和 LLM SDK 的轻量级多 Profile 代理。
 
-项目当前的核心功能是图片预处理：当主模型不支持视觉输入时，代理会先调用同一 Provider 中可识图的模型生成图片描述，再用描述替换图片并提交给主模型。这样可以在不更换主模型的前提下，为纯文本模型补充截图、界面、报错和代码图片的理解能力。
-
-同时提供可配置的过载重试、流式响应转发和 Token 用量统计。
+通过 Web 控制台管理上游协议、视觉增强和容错规则；客户端使用简单的
+Profile URL 选择运行配置，鉴权信息始终由请求透传，llm-proxy 不管理调用方密钥。
 
 ## 核心能力
 
-- **视觉能力补全**：拦截 Anthropic Messages 图片块，通过影子识图请求转换为文本描述；
-- **稳定转发**：按状态码和响应内容匹配过载规则，线性退避后自动重试；
-- **协议支持**：代理 Anthropic 与 OpenAI 兼容接口；
-- **用量统计**：异步记录主请求和识图请求的 Token 用量，提供 Dashboard 与 JSON API。
-
-图片预处理的适用场景、限制和调优方式见[图片预处理](docs/vision.md)。
-
-## 架构
-
-![llm-proxy 当前架构](docs/assets/llm-proxy-architecture.svg)
-
-[可编辑的 Excalidraw 源文件](docs/assets/llm-proxy-architecture.excalidraw)
+- 多 Profile：按 URL 选择独立的 Anthropic 或 OpenAI 兼容上游。
+- 原子热更新：控制台保存后立即发布新的运行时快照，无需重启。
+- 视觉增强：为不支持图片的 Anthropic 主模型补充图片描述。
+- 弹性代理：流式转发，并按有序规则处理过载重试。
+- 用量统计：在同一 SQLite 数据库中记录主请求和视觉请求 Token。
+- 本地配置生成：浏览器生成 Agent 配置，只输出 `<SET_LOCALLY>` 占位符。
 
 ## 快速开始
 
-### 1. 准备环境变量
+准备 `.env`：
 
-```bash
+```sh
 cp .env.example .env
 ```
 
-`.env` 只控制 Docker 的宿主机监听地址、端口和配置文件路径：
+启动：
 
-```bash
-HOST=127.0.0.1
-PORT=8087
-CONFIG_FILE=./config.yaml
-```
-
-### 2. 配置 Provider
-
-编辑 `config.yaml`，至少确认当前 Provider、上游地址和识图模型：
-
-```yaml
-listen: :8080
-active: jdcloud
-stats_db: ./data/stats.db
-stats_password: statspwd123456
-
-providers:
-  jdcloud:
-    upstream: https://modelservice.jdcloud.com/coding/anthropic
-    vision:
-      enabled: true
-      model: Kimi-K2.5
-    overload_rules:
-      - status: 400
-        body_contains: overloaded
-```
-
-`vision.model` 必须填写上游实际接受的模型名称，不会读取 Claude Code 的 `sonnet`、`haiku`、`opus` 映射。
-
-### 3. 启动
-
-```bash
+```sh
 docker compose up -d --build
 ```
 
-然后让 Claude Code 使用本地代理：
+打开 `http://<host>:<port>/_admin/`。首次登录账号和密码均为 `admin`；
+这是可被公网抢占的高风险初始凭据，登录后必须立即修改密码，再创建第一个
+Profile。
 
-```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8087
-```
+## 架构
 
-统计页面默认位于 `http://127.0.0.1:8087/stats`，用户名为 `admin`。默认密码 `statspwd123456` 仅适合本机测试，使用前建议在配置文件中修改。
+![llm-proxy Profile 架构](docs/assets/llm-proxy-architecture.svg)
+
+[可编辑的 Excalidraw 源文件](docs/assets/llm-proxy-architecture.excalidraw)
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [图片预处理](docs/vision.md) | 核心原理、启用方式、模型选择、缓存、并发和诊断日志 |
-| [配置参考](docs/configuration.md) | 环境变量、配置文件、Provider、协议和重试规则 |
-| [Token 用量统计](docs/statistics.md) | 统计口径、接口、Basic Auth 和安全注意事项 |
+| [运行配置](docs/configuration.md) | 进程与 Docker Compose 环境变量 |
+| [Profiles](docs/profiles.md) | 路由、协议、上游、热更新、视觉和重试 |
+| [管理控制台](docs/admin.md) | 首次登录、Session、备份恢复和安全 |
+| [图片预处理](docs/vision.md) | 图片来源、缓存、并发、失败与日志 |
+| [Token 用量统计](docs/statistics.md) | 控制台筛选、统计口径和协议限制 |
 
-## 本地开发
+## 升级提示
 
-需要 Go 1.25+：
-
-```bash
-make test
-make build
-CONFIG_FILE=config.yaml ./bin/llm-proxy
-```
-
-构建和测试也可以完全在 Docker 中进行，避免修改本地 Go 环境。
+**破坏性迁移：**旧版基于文件的运行配置不会加载。替换旧部署前，请先记录旧配置
+内容，再在新控制台重建 Profiles；不保留历史配置兼容性。
