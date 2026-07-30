@@ -51,9 +51,99 @@ func TestParseAndRewriteImages(t *testing.T) {
 	}
 	for i, want := range []string{"base64 desc", "url desc", "file desc"} {
 		text := blocks[i+1].(map[string]any)["text"].(string)
-		if text != descriptionPrefix+want {
+		if text != evidencePrefix+want {
 			t.Fatalf("block %d text=%q", i+1, text)
 		}
+	}
+	if blocks[0].(map[string]any)["text"] != "before" || blocks[4].(map[string]any)["text"] != "after" {
+		t.Fatal("original text blocks changed")
+	}
+}
+
+func TestParseMessagesAttachesOnlySameUserMessageContext(t *testing.T) {
+	doc, err := parseMessages([]byte(`{
+	  "messages":[
+	    {"role":"assistant","content":[
+	      {"type":"text","text":"ignore assistant"},
+	      {"type":"image","source":{"type":"url","url":"https://example.test/a.png"}}
+	    ]},
+	    {"role":"user","content":[
+	      {"type":"text","text":"before"},
+	      {"type":"image","source":{"type":"url","url":"https://example.test/b.png"}},
+	      {"type":"text","text":"after"},
+	      {"type":"image","source":{"type":"url","url":"https://example.test/c.png"}}
+	    ]}
+	  ]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := doc.images()
+	if images[0].taskContext != "" ||
+		images[1].taskContext != "before\nafter" ||
+		images[2].taskContext != "before\nafter" {
+		t.Fatalf("contexts=%q, %q, %q",
+			images[0].taskContext, images[1].taskContext, images[2].taskContext)
+	}
+
+	rewritten, err := doc.rewrite([]string{"assistant", "first user", "second user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Messages []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(rewritten, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Messages[0].Content[0].Text != "ignore assistant" ||
+		got.Messages[1].Content[0].Text != "before" ||
+		got.Messages[1].Content[2].Text != "after" {
+		t.Fatal("original text blocks changed")
+	}
+	if got.Messages[0].Content[1].Text != descriptionPrefix+"assistant" ||
+		got.Messages[1].Content[1].Text != evidencePrefix+"first user" ||
+		got.Messages[1].Content[3].Text != evidencePrefix+"second user" {
+		t.Fatalf("rewritten messages=%#v", got.Messages)
+	}
+}
+
+func TestParseMessagesDoesNotAttachContextForNonStringUserRole(t *testing.T) {
+	doc, err := parseMessages([]byte(`{"messages":[{"role":true,"content":[
+		{"type":"text","text":"ignore"},
+		{"type":"image","source":{"type":"url","url":"https://example.test/a.png"}}
+	]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if images := doc.images(); len(images) != 1 || images[0].taskContext != "" {
+		t.Fatalf("images=%#v", images)
+	}
+}
+
+func TestParseMessagesIgnoresNestedToolResultContextForUserMessage(t *testing.T) {
+	doc, err := parseMessages([]byte(`{"messages":[{"role":"user","content":[
+		{"type":"text","text":"top-level question"},
+		{"type":"tool_result","content":[
+			{"type":"text","text":"nested instruction"},
+			{"type":"image","source":{"type":"url","url":"https://example.test/nested.png"}}
+		]},
+		{"type":"image","source":{"type":"url","url":"https://example.test/top-level.png"}}
+	]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := doc.images()
+	if len(images) != 1 || images[0].cachePayload != "https://example.test/top-level.png" {
+		t.Fatalf("images=%#v", images)
+	}
+	if images[0].taskContext != "top-level question" {
+		t.Fatalf("taskContext=%q", images[0].taskContext)
 	}
 }
 

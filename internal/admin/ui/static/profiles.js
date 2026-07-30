@@ -348,6 +348,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   );
   const slug = fieldInput(basicGrid, "Slug", "slug", working.slug, {
     required: true,
+    description: "用于 Profile URL，例如 coding 对应 /coding/v1/…。",
   });
   const protocol = fieldSelect(
     basicGrid,
@@ -358,28 +359,50 @@ export function renderProfileEditor(root, source, actions = {}) {
       ["anthropic", "Anthropic"],
       ["openai", "OpenAI"],
     ],
+    {
+      description: "必须与 Upstream 实际提供的 API 协议一致。",
+    },
   );
   const upstream = fieldInput(
     basicGrid,
     "Upstream",
     "upstream",
     working.config.upstream,
-    { required: true, type: "url" },
+    {
+      required: true,
+      type: "url",
+      description: "请求转发的基础地址；不要填写调用方密钥或具体接口路径。",
+    },
   );
   const version = fieldInput(
     basicGrid,
     "配置版本",
     "version",
     working.config.version,
-    { required: true, type: "number", min: "1" },
+    {
+      required: true,
+      type: "number",
+      min: "1",
+      description: "Profile 配置结构版本，当前保持为 1。",
+    },
   );
-  const enabled = checkboxField(basicGrid, "启用 Profile", "enabled");
+  const enabled = checkboxField(
+    basicGrid,
+    "启用 Profile",
+    "enabled",
+    {
+      description: "关闭后，该 Profile 的代理地址将不可用。",
+    },
+  );
   enabled.checked = working.enabled;
   const isCurrentDefault = working.make_default;
   const makeDefault = checkboxField(
     basicGrid,
     "设为默认 Profile",
     "make_default",
+    {
+      description: "接收不带 slug 的 /v1/… 请求；默认 Profile 必须启用。",
+    },
   );
   makeDefault.checked = working.make_default;
   makeDefault.disabled = isCurrentDefault;
@@ -446,7 +469,11 @@ export function renderProfileEditor(root, source, actions = {}) {
         "模型 ID",
         `model-${index}-id`,
         model.id,
-        { required: true },
+        {
+          required: true,
+          description:
+            "必须与请求中的 model 完全一致；粘贴已收录 ID 可自动填充其余字段。",
+        },
       );
       id.setAttribute("data-model-field", "id");
       const contextWindow = fieldInput(
@@ -454,6 +481,10 @@ export function renderProfileEditor(root, source, actions = {}) {
         "上下文窗口",
         `model-${index}-context-window`,
         model.context_window,
+        {
+          description:
+            "选填，用于 Agent 上下文与自动压缩；支持 128K、1M 等写法。",
+        },
       );
       contextWindow.setAttribute("data-model-field", "context_window");
       contextWindow.setAttribute("placeholder", "例如 128K、256K、1M");
@@ -462,6 +493,10 @@ export function renderProfileEditor(root, source, actions = {}) {
         "最大输出 Token",
         `model-${index}-max-output-tokens`,
         model.max_output_tokens,
+        {
+          description:
+            "选填，用于预留输出空间；必须小于上下文窗口。",
+        },
       );
       maxOutputTokens.setAttribute(
         "data-model-field",
@@ -478,6 +513,10 @@ export function renderProfileEditor(root, source, actions = {}) {
           ["true", "是"],
           ["false", "否"],
         ],
+        {
+          description:
+            "“是”表示图片直接发送主模型；“否”表示可使用视觉增强。",
+        },
       );
       supportsVision.setAttribute("data-model-field", "supports_vision");
 
@@ -718,6 +757,9 @@ export function renderProfileEditor(root, source, actions = {}) {
     visionControls,
     "启用视觉预处理",
     "vision_enabled",
+    {
+      description: "仅在请求包含图片且目标模型需要增强时发起识图请求。",
+    },
   );
   visionEnabled.checked = Boolean(working.config.vision.enabled);
   const visionDetails = element("details", "card vision-details");
@@ -728,6 +770,10 @@ export function renderProfileEditor(root, source, actions = {}) {
     "识图模型",
     "vision_model",
     working.config.vision.model,
+    {
+      description:
+        "影子识图请求使用的模型；留空时不执行视觉增强。",
+    },
   );
   const visionUnlistedModelPolicy = fieldSelect(
     visionGrid,
@@ -738,45 +784,70 @@ export function renderProfileEditor(root, source, actions = {}) {
       ["bypass", "默认视为支持视觉，不增强"],
       ["enhance", "默认视为不支持视觉，使用增强"],
     ],
+    {
+      description:
+        "请求模型未出现在“模型能力”列表时采用的默认策略。",
+    },
   );
   const visionMaxTokens = fieldInput(
     visionGrid,
     "最大 Token",
     "vision_max_tokens",
     working.config.vision.max_tokens,
-    { type: "number", min: "1" },
+    {
+      type: "number",
+      min: "1",
+      description: "单张图片描述允许返回的最大 Token 数。",
+    },
   );
   const visionTimeout = fieldInput(
     visionGrid,
     "超时",
     "vision_timeout",
     working.config.vision.timeout,
+    {
+      description: "单张图片处理的总时限，例如 30s 或 2m。",
+    },
   );
   const visionMaxConcurrency = fieldInput(
     visionGrid,
     "最大并发",
     "vision_max_concurrency",
     working.config.vision.max_concurrency,
-    { type: "number", min: "1" },
+    {
+      type: "number",
+      min: "1",
+      description: "该 Profile 同时执行的识图请求上限。",
+    },
   );
   const visionCacheTTL = fieldInput(
     visionGrid,
     "缓存 TTL",
     "vision_cache_ttl",
     working.config.vision.cache_ttl,
+    {
+      description: "成功图片描述的缓存时间，例如 30m。",
+    },
   );
   const visionCacheMaxEntries = fieldInput(
     visionGrid,
     "缓存条目上限",
     "vision_cache_max_entries",
     working.config.vision.cache_max_entries,
-    { type: "number", min: "0" },
+    {
+      type: "number",
+      min: "0",
+      description: "该 Profile 最多保留的图片描述缓存条目。",
+    },
   );
   const visionPrompt = fieldTextarea(
     visionGrid,
     "提示词",
     "vision_prompt",
     working.config.vision.prompt,
+    {
+      description: "留空使用内置提示词；填写后作为基础识图提示词。图片同消息中的用户文本仍会自动用于提取当前问题相关的视觉证据。",
+    },
   );
   visionDetails.append(visionSummary, visionGrid);
   visionControls.append(visionDetails);
@@ -812,32 +883,50 @@ export function renderProfileEditor(root, source, actions = {}) {
         "状态码",
         `retry-${index}-status`,
         rule.status,
-        { type: "number", min: "100", max: "599" },
+        {
+          type: "number",
+          min: "100",
+          max: "599",
+          description: "需要重试的 HTTP 状态码，例如 429 或 529。",
+        },
       );
       const bodyContains = fieldInput(
         fields,
         "响应正文包含",
         `retry-${index}-body_contains`,
         rule.body_contains,
+        {
+          description: "选填；留空时仅按状态码匹配。",
+        },
       );
       const maxRetries = fieldInput(
         fields,
         "最大重试次数",
         `retry-${index}-max_retries`,
         rule.max_retries,
-        { type: "number", min: "0" },
+        {
+          type: "number",
+          min: "0",
+          description: "首次请求失败后最多追加的尝试次数。",
+        },
       );
       const delay = fieldInput(
         fields,
         "延迟",
         `retry-${index}-delay`,
         rule.delay,
+        {
+          description: "每次重试的基础等待时间，例如 1s。",
+        },
       );
       const jitter = fieldInput(
         fields,
         "抖动",
         `retry-${index}-jitter`,
         rule.jitter,
+        {
+          description: "随重试次数递增的额外等待时间，例如 500ms。",
+        },
       );
       retryRows.push({
         status,
@@ -1125,7 +1214,10 @@ function openCopyDialog(root, profile, actions, pageAlert) {
     "Slug",
     "copy-slug",
     `${profile.slug}-copy`,
-    { required: true },
+    {
+      required: true,
+      description: "新副本的 Profile URL 标识，保存后不能与现有 Slug 重复。",
+    },
   );
   const alert = element("div", "error-banner");
   alert.setAttribute("role", "alert");
@@ -1314,19 +1406,26 @@ function fieldInput(parent, labelText, name, value, options = {}) {
   if (options.max !== undefined) {
     input.setAttribute("max", options.max);
   }
-  appendField(parent, labelText, input);
+  appendField(parent, labelText, input, options.description);
   return input;
 }
 
-function fieldTextarea(parent, labelText, name, value) {
+function fieldTextarea(parent, labelText, name, value, options = {}) {
   const textarea = element("textarea");
   textarea.name = name;
   textarea.value = String(value ?? "");
-  appendField(parent, labelText, textarea);
+  appendField(parent, labelText, textarea, options.description);
   return textarea;
 }
 
-function fieldSelect(parent, labelText, name, value, choices) {
+function fieldSelect(
+  parent,
+  labelText,
+  name,
+  value,
+  choices,
+  options = {},
+) {
   const select = element("select");
   select.name = name;
   for (const [choiceValue, choiceLabel] of choices) {
@@ -1338,28 +1437,42 @@ function fieldSelect(parent, labelText, name, value, choices) {
     select.append(option);
   }
   select.value = String(value ?? "");
-  appendField(parent, labelText, select);
+  appendField(parent, labelText, select, options.description);
   return select;
 }
 
-function checkboxField(parent, labelText, name) {
+function checkboxField(parent, labelText, name, options = {}) {
   const wrapper = element("div", "form-field checkbox-field");
   const label = textElement("label", labelText);
   const input = element("input");
   input.name = name;
   input.type = "checkbox";
+  input.id = `profile-${name}`;
   label.append(input);
   wrapper.append(label);
+  appendFieldDescription(wrapper, input, options.description);
   parent.append(wrapper);
   return input;
 }
 
-function appendField(parent, labelText, control) {
+function appendField(parent, labelText, control, description = "") {
   const wrapper = element("div", "form-field");
   const label = textElement("label", labelText);
   const id = `profile-${control.name}`;
   control.id = id;
   label.setAttribute("for", id);
   wrapper.append(label, control);
+  appendFieldDescription(wrapper, control, description);
   parent.append(wrapper);
+}
+
+function appendFieldDescription(wrapper, control, description) {
+  if (!description) {
+    return;
+  }
+  const help = textElement("small", description);
+  help.className = "field-help";
+  help.id = `${control.id}-description`;
+  control.setAttribute("aria-describedby", help.id);
+  wrapper.append(help);
 }

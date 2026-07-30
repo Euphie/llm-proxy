@@ -200,6 +200,35 @@ func TestVisionClientRecordsPrettyJSONUsageThroughStatsDB(t *testing.T) {
 	}
 }
 
+func TestAnthropicVisionClientRequestBodyUsesContextPrompt(t *testing.T) {
+	client := newVisionClient(testVisionConfig("https://upstream.example"), nil, nil)
+	image := testImage()
+	image.taskContext = "能打多少分"
+
+	body, err := client.requestBody(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Messages []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Messages) != 1 || len(request.Messages[0].Content) != 2 {
+		t.Fatalf("messages=%+v", request.Messages)
+	}
+	if got := request.Messages[0].Content[1]; got.Type != "text" ||
+		got.Text != promptForImage(client.cfg.Prompt, image) {
+		t.Fatalf("prompt=%q", got.Text)
+	}
+}
+
 func TestVisionClientEffectivePrompt(t *testing.T) {
 	if got := effectivePrompt(" \n\t "); got != defaultPrompt {
 		t.Fatalf("blank prompt=%q", got)

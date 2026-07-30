@@ -214,10 +214,11 @@ func (p *Preprocessor) Process(
 		go func() {
 			defer wg.Done()
 			imageStarted := time.Now()
+			imagePrompt := promptForImage(p.prompt, image)
 
 			description, source, err := p.cache.getOrLoad(
 				workCtx,
-				scopedImageCacheKey(p.cacheKey, headers, p.headers, p.profile, p.model, p.prompt, image),
+				scopedImageCacheKey(p.cacheKey, headers, p.headers, p.profile, p.model, imagePrompt, image),
 				func(loadCtx context.Context) (string, error) {
 					operationCtx, operationCancel := context.WithTimeout(loadCtx, p.timeout)
 					defer operationCancel()

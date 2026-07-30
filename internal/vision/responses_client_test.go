@@ -127,6 +127,37 @@ func TestOpenAIVisionClientUsesResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAIVisionClientRequestBodyUsesContextPrompt(t *testing.T) {
+	cfg := testVisionConfig("https://upstream.example")
+	cfg.Protocol = profile.ProtocolOpenAI
+	client := newVisionClient(cfg, nil, nil)
+	image := testResponsesImage()
+	image.taskContext = "能打多少分"
+
+	body, err := client.requestBody(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Input []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Input) != 1 || len(request.Input[0].Content) != 2 {
+		t.Fatalf("input=%+v", request.Input)
+	}
+	if got := request.Input[0].Content[1]; got.Type != "input_text" ||
+		got.Text != promptForImage(client.cfg.Prompt, image) {
+		t.Fatalf("prompt=%q", got.Text)
+	}
+}
+
 func TestOpenAIVisionClientRecordsUsageBeforeRejectingMissingDescription(t *testing.T) {
 	responseBody := []byte(`{
 	  "model":"gpt-5.4-mini",

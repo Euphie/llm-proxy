@@ -240,7 +240,7 @@ func (c *visionClient) requestBody(image imageRef) ([]byte, error) {
 		Text string `json:"text"`
 	}{
 		Type: "text",
-		Text: effectivePrompt(c.cfg.Prompt),
+		Text: promptForImage(c.cfg.Prompt, image),
 	})
 	if err != nil {
 		return nil, err
@@ -275,7 +275,7 @@ func (c *visionClient) responsesRequestBody(image imageRef) ([]byte, error) {
 		Text string `json:"text"`
 	}{
 		Type: "input_text",
-		Text: effectivePrompt(c.cfg.Prompt),
+		Text: promptForImage(c.cfg.Prompt, image),
 	})
 	if err != nil {
 		return nil, err

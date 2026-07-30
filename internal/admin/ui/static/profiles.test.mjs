@@ -545,6 +545,22 @@ test("editor renders exact accessible labels and sections and submits every conf
   assert.equal(controlByName(root, "make_default").checked, true);
   assert.equal(controlByName(root, "make_default").disabled, true);
   assert.equal(controlByName(root, "vision_prompt").value, "Original prompt");
+  assert.match(
+    fieldDescription(root, controlByName(root, "slug")),
+    /Profile URL/,
+  );
+  assert.match(
+    fieldDescription(root, controlByName(root, "upstream")),
+    /请求转发/,
+  );
+  assert.match(
+    fieldDescription(root, controlByName(root, "vision_model")),
+    /影子识图请求/,
+  );
+  assert.match(
+    fieldDescription(root, controlByName(root, "retry-0-delay")),
+    /等待时间/,
+  );
   assert.equal(
     controls(root).some(
       (control) =>
@@ -603,6 +619,10 @@ test("model editor rows add and remove in Profile order with explicit token and 
 
   assert.deepEqual(modelIDs(root), ["manual-first", "manual-second"]);
   for (const row of modelRows(root)) {
+    assert.match(
+      fieldDescription(root, controlByField(row, "id")),
+      /粘贴/,
+    );
     assert.equal(
       controlByField(row, "context_window").getAttribute("placeholder"),
       "例如 128K、256K、1M",
@@ -1799,6 +1819,17 @@ function controlByName(root, name) {
   const control = controls(root).find((element) => element.name === name);
   assert.ok(control, `control ${name} not found`);
   return control;
+}
+
+function fieldDescription(root, control) {
+  const descriptionID = control.getAttribute("aria-describedby");
+  assert.ok(descriptionID, `control ${control.name} has no description`);
+  const description = descendants(root).find(
+    (element) => element.id === descriptionID,
+  );
+  assert.ok(description, `description ${descriptionID} not found`);
+  assert.equal(description.tagName, "SMALL");
+  return description.textContent;
 }
 
 function labelTexts(root) {

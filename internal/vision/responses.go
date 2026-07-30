@@ -61,12 +61,21 @@ func parseResponsesRoot(root map[string]json.RawMessage) (*responsesDocument, er
 			return nil, fmt.Errorf("parse input item %d content: %w", itemIndex, err)
 		}
 		node.arrayContent = true
+		var role string
+		if rawRole, ok := node.fields["role"]; ok {
+			_ = json.Unmarshal(rawRole, &role)
+		}
+		taskContext := ""
+		if role == "user" {
+			taskContext = collectTaskContext(node.content, "input_text")
+		}
 		for blockIndex, block := range node.content {
 			image, found, err := parseResponsesImageBlock(block, itemIndex, blockIndex)
 			if err != nil {
 				return nil, err
 			}
 			if found {
+				image.taskContext = taskContext
 				doc.imageRefs = append(doc.imageRefs, image)
 			}
 		}
@@ -155,7 +164,7 @@ func (d *responsesDocument) rewrite(descriptions []string) ([]byte, error) {
 	for imageIndex, image := range d.imageRefs {
 		replacement, err := json.Marshal(map[string]string{
 			"type": "input_text",
-			"text": descriptionPrefix + descriptions[imageIndex],
+			"text": replacementPrefix(image) + descriptions[imageIndex],
 		})
 		if err != nil {
 			return nil, fmt.Errorf("marshal image description %d: %w", imageIndex, err)

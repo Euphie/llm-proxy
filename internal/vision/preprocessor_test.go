@@ -352,6 +352,37 @@ func TestPreprocessorCoalescesIdenticalImages(t *testing.T) {
 	}
 }
 
+func TestPreprocessorContextPartitionsSequentialCache(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		contexts []string
+	)
+	fake := &fakeDescriber{describe: func(image imageRef) (string, error) {
+		mu.Lock()
+		contexts = append(contexts, image.taskContext)
+		mu.Unlock()
+		return "description for " + image.taskContext, nil
+	}}
+	p := testPreprocessor(2, fake)
+	first := contextualFileImageRequest("file-shared", "问题 A")
+	second := contextualFileImageRequest("file-shared", "问题 B")
+
+	for _, body := range [][]byte{first, first, second} {
+		if _, err := p.Process(context.Background(), nil, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if calls, _, _ := fake.snapshot(); calls != 2 {
+		t.Fatalf("Describe calls=%d, want 2", calls)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !equalStrings(contexts, []string{"问题 A", "问题 B"}) {
+		t.Fatalf("Describe task contexts=%q", contexts)
+	}
+}
+
 func TestPreprocessorPartitionsSequentialCacheByForwardedHeaders(t *testing.T) {
 	for _, headerName := range anthropicForwardedHeaders {
 		t.Run(headerName, func(t *testing.T) {
@@ -1080,10 +1111,14 @@ func (e *signalingDeadlineError) Is(target error) bool {
 }
 
 func testImageKey(p *Preprocessor, payload string) string {
-	return scopedImageCacheKey(p.cacheKey, nil, p.headers, p.profile, p.model, p.prompt, imageRef{
+	image := imageRef{
 		sourceType:   "url",
 		cachePayload: payload,
-	})
+	}
+	return scopedImageCacheKey(
+		p.cacheKey, nil, p.headers, p.profile, p.model,
+		promptForImage(p.prompt, image), image,
+	)
 }
 
 func imageRequest(payloads ...string) []byte {
@@ -1159,6 +1194,32 @@ func fileImageRequest(fileID string) []byte {
 					"file_id": fileID,
 				},
 			}},
+		}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+func contextualFileImageRequest(fileID, question string) []byte {
+	body, err := json.Marshal(map[string]any{
+		"model": "main",
+		"messages": []any{map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]string{
+					"type": "text",
+					"text": question,
+				},
+				map[string]any{
+					"type": "image",
+					"source": map[string]string{
+						"type":    "file",
+						"file_id": fileID,
+					},
+				},
+			},
 		}},
 	})
 	if err != nil {

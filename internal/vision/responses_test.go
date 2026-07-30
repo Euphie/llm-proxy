@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,11 @@ func TestParseResponsesRewritesInputImagesInPlace(t *testing.T) {
 	if images[0].sourceType != "url" || images[1].sourceType != "data_url" || images[2].sourceType != "file" {
 		t.Fatalf("source types=%q, %q, %q", images[0].sourceType, images[1].sourceType, images[2].sourceType)
 	}
+	for i, image := range images {
+		if image.taskContext != "before\nafter" {
+			t.Fatalf("image %d taskContext=%q, want %q", i, image.taskContext, "before\nafter")
+		}
+	}
 
 	rewritten, err := doc.rewrite([]string{"url description", "data description", "file description"})
 	if err != nil {
@@ -78,13 +84,132 @@ func TestParseResponsesRewritesInputImagesInPlace(t *testing.T) {
 	wantDescriptions := []string{"url description", "data description", "file description"}
 	for i, want := range wantDescriptions {
 		text := got.Input[0].Content[i+1].Text
-		if text != descriptionPrefix+want {
-			t.Fatalf("content %d text=%q, want %q", i+1, text, descriptionPrefix+want)
+		if text != evidencePrefix+want {
+			t.Fatalf("content %d text=%q, want %q", i+1, text, evidencePrefix+want)
 		}
 	}
 	if got.Input[1].Content[0].Type != "input_image" ||
 		got.Input[1].Content[0].ImageURL != "https://example.test/nested.png" {
 		t.Fatalf("non-message item was rewritten: %+v", got.Input[1].Content[0])
+	}
+}
+
+func TestParseResponsesProcessesMessageImagesWithoutNonUserContext(t *testing.T) {
+	body := []byte(`{
+	  "input": [
+	    {
+	      "type": "message",
+	      "role": "assistant",
+	      "content": [
+	        {"type": "input_text", "text": "assistant context"},
+	        {"type": "input_image", "image_url": "https://example.test/assistant.png"}
+	      ]
+	    },
+	    {
+	      "type": "message",
+	      "role": 42,
+	      "content": [
+	        {"type": "input_text", "text": "non-string role context"},
+	        {"type": "input_image", "file_id": "file-non-string-role"}
+	      ]
+	    },
+	    {
+	      "type": "message",
+	      "content": [
+	        {"type": "input_text", "text": "missing role context"},
+	        {"type": "input_image", "image_url": "https://example.test/missing-role.png"}
+	      ]
+	    },
+	    {
+	      "type": "function_call_output",
+	      "content": [
+	        {"type": "input_text", "text": "tool context"},
+	        {"type": "input_image", "image_url": "https://example.test/tool.png"}
+	      ]
+	    },
+	    {"type": "function_call", "arguments": "{}"},
+	    {
+	      "role": "user",
+	      "content": [
+	        {"type": "input_text", "text": "user context"},
+	        {"type": "input_image", "file_id": "file-123"}
+	      ]
+	    }
+	  ]
+	}`)
+
+	doc, err := parseResponses(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := doc.images()
+	if len(images) != 4 {
+		t.Fatalf("image count=%d, want 4 message images", len(images))
+	}
+	wantMessageIndexes := []int{0, 1, 2, 5}
+	wantContexts := []string{"", "", "", "user context"}
+	for i, image := range images {
+		if image.messageIndex != wantMessageIndexes[i] || image.taskContext != wantContexts[i] {
+			t.Fatalf(
+				"image %d messageIndex=%d taskContext=%q, want messageIndex=%d taskContext=%q",
+				i, image.messageIndex, image.taskContext, wantMessageIndexes[i], wantContexts[i],
+			)
+		}
+	}
+
+	rewritten, err := doc.rewrite([]string{
+		"assistant description",
+		"non-string role description",
+		"missing role description",
+		"user description",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Input []struct {
+			Content []struct {
+				Type   string `json:"type"`
+				Text   string `json:"text"`
+				FileID string `json:"file_id"`
+			} `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(rewritten, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Input[0].Content[0].Text != "assistant context" ||
+		got.Input[0].Content[1].Type != "input_text" ||
+		got.Input[0].Content[1].Text != descriptionPrefix+"assistant description" {
+		t.Fatalf("assistant image was not generically rewritten: %+v", got.Input[0].Content)
+	}
+	if got.Input[1].Content[0].Text != "non-string role context" ||
+		got.Input[1].Content[1].Type != "input_text" ||
+		got.Input[1].Content[1].Text != descriptionPrefix+"non-string role description" {
+		t.Fatalf("non-string role image was not generically rewritten: %+v", got.Input[1].Content)
+	}
+	if got.Input[2].Content[0].Text != "missing role context" ||
+		got.Input[2].Content[1].Type != "input_text" ||
+		got.Input[2].Content[1].Text != descriptionPrefix+"missing role description" {
+		t.Fatalf("missing role image was not generically rewritten: %+v", got.Input[2].Content)
+	}
+	var originalDocument, rewrittenDocument struct {
+		Input []any `json:"input"`
+	}
+	if err := json.Unmarshal(body, &originalDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rewritten, &rewrittenDocument); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rewrittenDocument.Input[3], originalDocument.Input[3]) {
+		t.Fatalf(
+			"function_call_output changed:\n got: %#v\nwant: %#v",
+			rewrittenDocument.Input[3], originalDocument.Input[3],
+		)
+	}
+	if got.Input[5].Content[1].Type != "input_text" || got.Input[5].Content[1].Text != evidencePrefix+"user description" {
+		t.Fatalf("user image was not rewritten with evidence prefix: %+v", got.Input[5].Content[1])
 	}
 }
 
@@ -130,6 +255,22 @@ func TestParseResponsesRejectsInvalidInputImageSource(t *testing.T) {
 	for _, block := range tests {
 		t.Run(block, func(t *testing.T) {
 			_, err := parseResponses([]byte(`{"input":[{"role":"user","content":[` + block + `]}]}`))
+			if err == nil || !strings.Contains(err.Error(), "input image") {
+				t.Fatalf("error=%v, want input image validation error", err)
+			}
+		})
+	}
+}
+
+func TestParseResponsesRejectsInvalidInputImageSourceInNonUserMessages(t *testing.T) {
+	items := []string{
+		`{"type":"message","role":"assistant","content":[{"type":"input_image"}]}`,
+		`{"type":"message","role":42,"content":[{"type":"input_image"}]}`,
+		`{"type":"message","content":[{"type":"input_image"}]}`,
+	}
+	for _, item := range items {
+		t.Run(item, func(t *testing.T) {
+			_, err := parseResponses([]byte(`{"input":[` + item + `]}`))
 			if err == nil || !strings.Contains(err.Error(), "input image") {
 				t.Fatalf("error=%v, want input image validation error", err)
 			}
@@ -201,7 +342,7 @@ func TestOpenAIPreprocessorRewritesResponsesRequest(t *testing.T) {
 		t.Fatal("stream setting was not preserved")
 	}
 	if request.Input[0].Content[1].Type != "input_text" ||
-		request.Input[0].Content[1].Text != descriptionPrefix+"a diagram" {
+		request.Input[0].Content[1].Text != evidencePrefix+"a diagram" {
 		t.Fatalf("rewritten content=%+v", request.Input[0].Content[1])
 	}
 }

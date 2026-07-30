@@ -763,6 +763,31 @@ test("Anthropic generator exposes exact scopes and temporary placeholder inputs"
     controls(dialog).some((control) => control.type === "password"),
     false,
   );
+  assert.match(
+    fieldDescription(
+      dialog,
+      controlByName(dialog, "generator-public-origin"),
+    ),
+    /不要包含.*Profile slug/,
+  );
+  assert.match(
+    fieldDescription(dialog, controlByName(dialog, "generator-sonnet")),
+    /选填/,
+  );
+  assert.match(
+    fieldDescription(
+      dialog,
+      controlByName(dialog, "generator-compaction-percent"),
+    ),
+    /不会保存/,
+  );
+  assert.match(
+    fieldDescription(
+      dialog,
+      controlByName(dialog, "generator-auth-variable"),
+    ),
+    /真实密钥/,
+  );
 
   const sonnet = controlByName(dialog, "generator-sonnet");
   sonnet.value = "kimi-k2.5";
@@ -1311,6 +1336,17 @@ function controlByName(root, name) {
   const control = controls(root).find((element) => element.name === name);
   assert.ok(control, `control ${name} not found`);
   return control;
+}
+
+function fieldDescription(root, control) {
+  const descriptionID = control.getAttribute("aria-describedby");
+  assert.ok(descriptionID, `control ${control.name} has no description`);
+  const description = descendants(root).find(
+    (element) => element.id === descriptionID,
+  );
+  assert.ok(description, `description ${descriptionID} not found`);
+  assert.equal(description.tagName, "SMALL");
+  return description.textContent;
 }
 
 function findText(root, text) {

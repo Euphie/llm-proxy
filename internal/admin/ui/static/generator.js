@@ -509,6 +509,9 @@ export function openConfigurationGenerator(
     "Agent",
     "generator-agent",
     availableAgentAdapters(protocol),
+    {
+      description: "选择要生成配置的客户端；可选项由 Profile 协议决定。",
+    },
   );
   const adapterRoot = generatorElement("div", "stack");
 
@@ -568,6 +571,10 @@ function renderAnthropicGenerator(parent, slug, origin, profileModels) {
     "公网地址",
     "generator-public-origin",
     normalizedOrigin(origin),
+    {
+      description:
+        "Agent 可访问的 llm-proxy 地址；不要包含 /_admin、Profile slug 或密钥。",
+    },
   );
   const sonnet = generatorModelInput(
     inputGrid,
@@ -575,6 +582,9 @@ function renderAnthropicGenerator(parent, slug, origin, profileModels) {
     "generator-sonnet",
     "",
     profileModels,
+    {
+      description: "选填；填写 Sonnet 别名要映射到的实际模型 ID。",
+    },
   );
   const haiku = generatorModelInput(
     inputGrid,
@@ -582,6 +592,9 @@ function renderAnthropicGenerator(parent, slug, origin, profileModels) {
     "generator-haiku",
     "",
     profileModels,
+    {
+      description: "选填；填写 Haiku 别名要映射到的实际模型 ID。",
+    },
   );
   const opus = generatorModelInput(
     inputGrid,
@@ -589,13 +602,21 @@ function renderAnthropicGenerator(parent, slug, origin, profileModels) {
     "generator-opus",
     "",
     profileModels,
+    {
+      description: "选填；填写 Opus 别名要映射到的实际模型 ID。",
+    },
   );
   const compactionPercent = generatorNumberInput(
     inputGrid,
     "自动压缩触发比例",
     "generator-compaction-percent",
     85,
-    { min: 1, max: 99, step: 1 },
+    {
+      min: 1,
+      max: 99,
+      step: 1,
+      description: "1–99；仅用于本次生成结果，不会保存到 Profile。",
+    },
   );
   const authVariable = generatorSelect(
     inputGrid,
@@ -606,6 +627,9 @@ function renderAnthropicGenerator(parent, slug, origin, profileModels) {
       ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"],
       ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
     ],
+    {
+      description: "只生成变量名和占位符；真实密钥仍由 Agent 本地设置。",
+    },
   );
   const secretNote = generatorText(
     "p",
@@ -753,6 +777,10 @@ function renderGenericGenerator(parent, protocol, slug, origin) {
     "公网地址",
     "generator-public-origin",
     normalizedOrigin(origin),
+    {
+      description:
+        "Agent 可访问的 llm-proxy 地址；不要包含 /_admin、Profile slug 或密钥。",
+    },
   );
   const alert = generatorElement("div", "error-banner");
   alert.setAttribute("role", "alert");
@@ -837,6 +865,10 @@ function renderOpenCodeGenerator(
     "公网地址",
     "generator-public-origin",
     normalizedOrigin(origin),
+    {
+      description:
+        "Agent 可访问的 llm-proxy 地址；不要包含 /_admin、Profile slug 或密钥。",
+    },
   );
   const model = generatorModelInput(
     inputGrid,
@@ -847,12 +879,18 @@ function renderOpenCodeGenerator(
       protocol === "openai" ? "gpt-5.4" : "sonnet",
     ),
     profileModels,
+    {
+      description: "使用 Profile 中保存的精确模型 ID，可从输入建议中选择。",
+    },
   );
   const envVariable = generatorInput(
     inputGrid,
     "密钥环境变量",
     "generator-env-variable",
     protocol === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY",
+    {
+      description: "只写入环境变量名，不会读取或保存真实密钥。",
+    },
   );
   const scope = generatorSelect(
     inputGrid,
@@ -862,13 +900,21 @@ function renderOpenCodeGenerator(
       ["global", "全局"],
       ["project", "项目"],
     ],
+    {
+      description: "决定生成文件应保存到全局配置还是当前项目。",
+    },
   );
   const compactionPercent = generatorNumberInput(
     inputGrid,
     "自动压缩触发比例",
     "generator-compaction-percent",
     85,
-    { min: 1, max: 99, step: 1 },
+    {
+      min: 1,
+      max: 99,
+      step: 1,
+      description: "1–99；仅用于本次生成结果，不会保存到 Profile。",
+    },
   );
   const note = generatorText(
     "p",
@@ -971,6 +1017,10 @@ function renderCodexGenerator(
     "公网地址",
     "generator-public-origin",
     normalizedOrigin(origin),
+    {
+      description:
+        "Agent 可访问的 llm-proxy 地址；不要包含 /_admin、Profile slug 或密钥。",
+    },
   );
   const model = generatorModelInput(
     inputGrid,
@@ -978,12 +1028,18 @@ function renderCodexGenerator(
     "generator-model",
     preferredModelID(profileModels, "gpt-5.4"),
     profileModels,
+    {
+      description: "使用 Profile 中保存的精确模型 ID，可从输入建议中选择。",
+    },
   );
   const envVariable = generatorInput(
     inputGrid,
     "密钥环境变量",
     "generator-env-variable",
     "OPENAI_API_KEY",
+    {
+      description: "只写入环境变量名，不会读取或保存真实密钥。",
+    },
   );
   const scope = generatorSelect(
     inputGrid,
@@ -993,19 +1049,30 @@ function renderCodexGenerator(
       ["global", "全局"],
       ["named", "命名 Profile"],
     ],
+    {
+      description: "全局配置直接生效；命名 Profile 通过启动参数选择。",
+    },
   );
   const profileName = generatorInput(
     inputGrid,
     "Codex Profile 名称",
     "generator-codex-profile",
     slug.replaceAll("-", "_"),
+    {
+      description: "用于生成命名配置文件和 codex --profile 启动参数。",
+    },
   );
   const compactionPercent = generatorNumberInput(
     inputGrid,
     "自动压缩触发比例",
     "generator-compaction-percent",
     85,
-    { min: 1, max: 99, step: 1 },
+    {
+      min: 1,
+      max: 99,
+      step: 1,
+      description: "1–99；仅用于本次生成结果，不会保存到 Profile。",
+    },
   );
   const protocolNote = generatorText(
     "p",
@@ -1183,12 +1250,12 @@ function generatorButton(text, variant) {
   return button;
 }
 
-function generatorInput(parent, labelText, name, value) {
+function generatorInput(parent, labelText, name, value, options = {}) {
   const input = generatorElement("input");
   input.type = "text";
   input.name = name;
   input.value = String(value ?? "");
-  appendGeneratorField(parent, labelText, input);
+  appendGeneratorField(parent, labelText, input, options.description);
   return input;
 }
 
@@ -1197,7 +1264,7 @@ function generatorNumberInput(
   labelText,
   name,
   value,
-  { min, max, step },
+  { min, max, step, description },
 ) {
   const input = generatorElement("input");
   input.type = "number";
@@ -1206,12 +1273,19 @@ function generatorNumberInput(
   input.min = String(min);
   input.max = String(max);
   input.step = String(step);
-  appendGeneratorField(parent, labelText, input);
+  appendGeneratorField(parent, labelText, input, description);
   return input;
 }
 
-function generatorModelInput(parent, labelText, name, value, profileModels) {
-  const input = generatorInput(parent, labelText, name, value);
+function generatorModelInput(
+  parent,
+  labelText,
+  name,
+  value,
+  profileModels,
+  options = {},
+) {
+  const input = generatorInput(parent, labelText, name, value, options);
   const models = (profileModels ?? []).filter(
     (model) => typeof model?.id === "string" && model.id,
   );
@@ -1309,7 +1383,7 @@ function renderCapabilityState(warningElement, summaryElement, result) {
   summaryElement.hidden = false;
 }
 
-function generatorSelect(parent, labelText, name, choices) {
+function generatorSelect(parent, labelText, name, choices, options = {}) {
   const select = generatorElement("select");
   select.name = name;
   for (const [value, label] of choices) {
@@ -1318,15 +1392,27 @@ function generatorSelect(parent, labelText, name, choices) {
     select.append(option);
   }
   select.value = choices[0][0];
-  appendGeneratorField(parent, labelText, select);
+  appendGeneratorField(parent, labelText, select, options.description);
   return select;
 }
 
-function appendGeneratorField(parent, labelText, control) {
+function appendGeneratorField(
+  parent,
+  labelText,
+  control,
+  description = "",
+) {
   const wrapper = generatorElement("div", "form-field");
   const label = generatorText("label", labelText);
   control.id = control.name;
   label.setAttribute("for", control.id);
   wrapper.append(label, control);
+  if (description) {
+    const help = generatorText("small", description);
+    help.className = "field-help";
+    help.id = `${control.id}-description`;
+    control.setAttribute("aria-describedby", help.id);
+    wrapper.append(help);
+  }
   parent.append(wrapper);
 }

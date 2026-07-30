@@ -19,6 +19,7 @@ type imageRef struct {
 	block        json.RawMessage
 	sourceType   string
 	cachePayload string
+	taskContext  string
 	messageIndex int
 	blockIndex   int
 }
@@ -78,12 +79,21 @@ func parseMessagesRoot(root map[string]json.RawMessage) (*messageDocument, error
 					return nil, fmt.Errorf("parse message %d content: %w", messageIndex, err)
 				}
 				node.arrayContent = true
+				var role string
+				if rawRole, ok := fields["role"]; ok {
+					_ = json.Unmarshal(rawRole, &role)
+				}
+				taskContext := ""
+				if role == "user" {
+					taskContext = collectTaskContext(node.content, "text")
+				}
 				for blockIndex, block := range node.content {
 					image, ok, err := parseImageBlock(block, messageIndex, blockIndex)
 					if err != nil {
 						return nil, err
 					}
 					if ok {
+						image.taskContext = taskContext
 						doc.imageRefs = append(doc.imageRefs, image)
 					}
 				}
@@ -167,7 +177,7 @@ func (d *messageDocument) rewrite(descriptions []string) ([]byte, error) {
 	for imageIndex, image := range d.imageRefs {
 		replacement, err := json.Marshal(map[string]string{
 			"type": "text",
-			"text": descriptionPrefix + descriptions[imageIndex],
+			"text": replacementPrefix(image) + descriptions[imageIndex],
 		})
 		if err != nil {
 			return nil, fmt.Errorf("marshal image description %d: %w", imageIndex, err)

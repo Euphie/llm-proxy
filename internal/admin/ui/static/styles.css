@@ -411,6 +411,11 @@ legend {
   color: var(--text-muted);
 }
 
+.field-help {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 input,
 select,
 textarea {
