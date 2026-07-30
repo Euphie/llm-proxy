@@ -57,6 +57,20 @@ func TestParseAndRewriteImages(t *testing.T) {
 	}
 }
 
+func TestParseMessagesRootReusesDecodedRequest(t *testing.T) {
+	root, err := parseRequestRoot([]byte(`{"model":"main","messages":[{"content":"hello"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := parseMessagesRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.messages) != 1 {
+		t.Fatalf("messages=%d, want 1", len(doc.messages))
+	}
+}
+
 func TestParseMessagesIgnoresTextContent(t *testing.T) {
 	for _, body := range [][]byte{
 		[]byte(`{"messages":[{"content":"plain text"}]}`),
@@ -153,7 +167,10 @@ func TestScopedImageCacheKeyFramesMultiValueHeaders(t *testing.T) {
 	keyFor := func(values ...string) string {
 		headers := make(http.Header)
 		headers["Authorization"] = values
-		return scopedImageCacheKey(secret, headers, "provider", "model", "prompt", image)
+		return scopedImageCacheKey(
+			secret, headers, anthropicForwardedHeaders[:],
+			"provider", "model", "prompt", image,
+		)
 	}
 
 	base := keyFor("ab", "c")
@@ -179,8 +196,14 @@ func TestScopedImageCacheKeyIgnoresAnthropicBeta(t *testing.T) {
 	first := http.Header{"Anthropic-Beta": {"agent-teams"}}
 	second := http.Header{"Anthropic-Beta": {"files-api-2025-04-14"}}
 
-	firstKey := scopedImageCacheKey(secret, first, "provider", "model", "prompt", image)
-	secondKey := scopedImageCacheKey(secret, second, "provider", "model", "prompt", image)
+	firstKey := scopedImageCacheKey(
+		secret, first, anthropicForwardedHeaders[:],
+		"provider", "model", "prompt", image,
+	)
+	secondKey := scopedImageCacheKey(
+		secret, second, anthropicForwardedHeaders[:],
+		"provider", "model", "prompt", image,
+	)
 	if firstKey != secondKey {
 		t.Fatal("non-forwarded Anthropic-Beta must not partition the cache")
 	}

@@ -9,10 +9,15 @@ Profile URL 选择运行配置，鉴权信息始终由请求透传，llm-proxy �
 
 - 多 Profile：按 URL 选择独立的 Anthropic 或 OpenAI 兼容上游。
 - 原子热更新：控制台保存后立即发布新的运行时快照，无需重启。
-- 视觉增强：为不支持图片的 Anthropic 主模型补充图片描述。
+- 模型能力：每个 Profile 保存精确模型 ID、上下文/可选输出上限和视觉支持事实；UI
+  推荐目录不参与运行时路由。
+- 视觉增强：为 Anthropic Messages 或 OpenAI Responses 中不支持图片的主模型
+  补充图片描述。
 - 弹性代理：流式转发，并按有序规则处理过载重试。
-- 用量统计：在同一 SQLite 数据库中记录主请求和视觉请求 Token。
-- 本地配置生成：浏览器生成 Agent 配置，只输出 `<SET_LOCALLY>` 占位符。
+- 用量统计：记录 Anthropic、OpenAI Chat Completions 和 Responses 主请求，并
+  单独记录图片识别影子请求 Token。
+- 本地配置生成：浏览器生成 Claude Code、OpenCode 和 Codex CLI 配置，不接收或
+  保存真实密钥。
 
 ## 快速开始
 
@@ -28,15 +33,13 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-打开 `http://<host>:<port>/_admin/`。首次登录账号和密码均为 `admin`；
-这是可被公网抢占的高风险初始凭据，登录后必须立即修改密码，再创建第一个
-Profile。
+打开 `http://<host>:<port>/_admin/`，使用 `admin/admin` 首次登录，并按页面提示
+设置新密码。随后创建 Profile、填写 Upstream，并从 Profile 列表生成 Agent 配置。
+完整操作见[管理控制台](docs/admin.md)。
 
 ## 架构
 
 ![llm-proxy Profile 架构](docs/assets/llm-proxy-architecture.svg)
-
-[可编辑的 Excalidraw 源文件](docs/assets/llm-proxy-architecture.excalidraw)
 
 ## 文档
 
@@ -44,11 +47,7 @@ Profile。
 |---|---|
 | [运行配置](docs/configuration.md) | 进程与 Docker Compose 环境变量 |
 | [Profiles](docs/profiles.md) | 路由、协议、上游、热更新、视觉和重试 |
-| [管理控制台](docs/admin.md) | 首次登录、Session、备份恢复和安全 |
+| [模型能力与 Agent 上下文](docs/models.md) | Profile 模型事实、UI 推荐与 Claude Code/Codex/OpenCode 映射 |
+| [管理控制台](docs/admin.md) | 登录、Profile 操作、配置生成、统计和系统管理 |
 | [图片预处理](docs/vision.md) | 图片来源、缓存、并发、失败与日志 |
 | [Token 用量统计](docs/statistics.md) | 控制台筛选、统计口径和协议限制 |
-
-## 升级提示
-
-**破坏性迁移：**旧版基于文件的运行配置不会加载。替换旧部署前，请先记录旧配置
-内容，再在新控制台重建 Profiles；不保留历史配置兼容性。

@@ -22,7 +22,7 @@ import (
 // Pass a non-nil *stats.DB to enable async token usage recording.
 func New(cfg profile.Runtime, client *http.Client, sdb *stats.DB) http.Handler {
 	var visionPreprocessor *vision.Preprocessor
-	if cfg.Protocol == profile.ProtocolAnthropic && cfg.Vision.Enabled {
+	if cfg.Vision.Enabled && strings.TrimSpace(cfg.Vision.Model) != "" {
 		visionPreprocessor = vision.New(cfg, client, sdb)
 	}
 	return &handler{
@@ -56,7 +56,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	if h.vision != nil && shouldPreprocessVision(r) {
+	if h.vision != nil && shouldPreprocessVision(h.cfg.Protocol, r) {
 		body, err = h.vision.Process(r.Context(), r.Header, body)
 		if err != nil {
 			if r.Context().Err() != nil {
@@ -168,8 +168,15 @@ func targetURL(upstream, requestURI string) string {
 	return strings.TrimRight(upstream, "/") + "/" + strings.TrimLeft(requestURI, "/")
 }
 
-func shouldPreprocessVision(r *http.Request) bool {
-	if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v1/messages" {
+func shouldPreprocessVision(protocol profile.Protocol, r *http.Request) bool {
+	path := ""
+	switch protocol {
+	case profile.ProtocolAnthropic:
+		path = "/v1/messages"
+	case profile.ProtocolOpenAI:
+		path = "/v1/responses"
+	}
+	if r.Method != http.MethodPost || r.URL.EscapedPath() != path {
 		return false
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

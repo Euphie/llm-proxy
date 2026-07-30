@@ -20,10 +20,24 @@ const defaultPrompt = `Describe this image in detail for a text-only model. Tran
 
 const debugLogContentLimit = 4096
 
-var forwardedHeaders = [...]string{
+var anthropicForwardedHeaders = [...]string{
 	"Authorization",
 	"X-Api-Key",
 	"Anthropic-Version",
+}
+
+var openAIForwardedHeaders = [...]string{
+	"Authorization",
+	"X-Api-Key",
+	"OpenAI-Organization",
+	"OpenAI-Project",
+}
+
+func forwardedHeadersForProtocol(protocol profile.Protocol) []string {
+	if protocol == profile.ProtocolOpenAI {
+		return openAIForwardedHeaders[:]
+	}
+	return anthropicForwardedHeaders[:]
 }
 
 type describer interface {
@@ -32,11 +46,14 @@ type describer interface {
 
 type visionClient struct {
 	profileSlug string
+	protocol    profile.Protocol
 	upstream    string
 	cfg         profile.VisionRuntime
 	rules       []provider.Rule
 	httpClient  *http.Client
 	sleep       func(context.Context, time.Duration) error
+	parse       func([]byte) (string, error)
+	headers     []string
 	recordUsage func([]byte)
 }
 
@@ -46,13 +63,24 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 	}
 	httpClient = shadowHTTPClient(httpClient)
 
+	path := "/v1/messages"
+	parser := stats.NewParser("anthropic")
+	parse := parseDescription
+	if cfg.Protocol == profile.ProtocolOpenAI {
+		path = "/v1/responses"
+		parser = stats.NewParser("openai")
+		parse = parseResponsesDescription
+	}
 	client := &visionClient{
 		profileSlug: cfg.Slug,
-		upstream:    strings.TrimRight(cfg.Upstream, "/") + "/v1/messages",
+		protocol:    cfg.Protocol,
+		upstream:    strings.TrimRight(cfg.Upstream, "/") + path,
 		cfg:         cfg.Vision,
 		rules:       append([]provider.Rule(nil), cfg.OverloadRules...),
 		httpClient:  httpClient,
 		sleep:       sleepContext,
+		parse:       parse,
+		headers:     forwardedHeadersForProtocol(cfg.Protocol),
 		recordUsage: func([]byte) {},
 	}
 	if sdb != nil {
@@ -62,8 +90,8 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 				ProfileSlug: cfg.Slug,
 				Protocol:    string(cfg.Protocol),
 				Kind:        "vision",
-				Path:        "/v1/messages",
-			}, body, stats.NewParser("anthropic"))
+				Path:        path,
+			}, body, parser)
 		}
 	}
 	return client
@@ -126,7 +154,8 @@ func (c *visionClient) Describe(ctx context.Context, headers http.Header, image 
 		}
 
 		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
-			description, err := parseDescription(responseBody)
+			c.recordUsage(responseBody)
+			description, err := c.parse(responseBody)
 			if err != nil {
 				c.logAttempt(image, attempt+1, attemptStarted, "invalid_response",
 					response.StatusCode, len(responseBody), false)
@@ -134,7 +163,6 @@ func (c *visionClient) Describe(ctx context.Context, headers http.Header, image 
 			}
 			c.logAttempt(image, attempt+1, attemptStarted, "none",
 				response.StatusCode, len(responseBody), false)
-			c.recordUsage(responseBody)
 			return description, nil
 		}
 
@@ -204,6 +232,9 @@ func truncateDebugContent(content string) (string, bool) {
 }
 
 func (c *visionClient) requestBody(image imageRef) ([]byte, error) {
+	if c.protocol == profile.ProtocolOpenAI {
+		return c.responsesRequestBody(image)
+	}
 	prompt, err := json.Marshal(struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -238,6 +269,43 @@ func (c *visionClient) requestBody(image imageRef) ([]byte, error) {
 	return json.Marshal(request)
 }
 
+func (c *visionClient) responsesRequestBody(image imageRef) ([]byte, error) {
+	prompt, err := json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{
+		Type: "input_text",
+		Text: effectivePrompt(c.cfg.Prompt),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	request := struct {
+		Model           string `json:"model"`
+		MaxOutputTokens int    `json:"max_output_tokens"`
+		Stream          bool   `json:"stream"`
+		Store           bool   `json:"store"`
+		Input           []struct {
+			Role    string            `json:"role"`
+			Content []json.RawMessage `json:"content"`
+		} `json:"input"`
+	}{
+		Model:           c.cfg.Model,
+		MaxOutputTokens: c.cfg.MaxTokens,
+		Stream:          false,
+		Store:           false,
+		Input: []struct {
+			Role    string            `json:"role"`
+			Content []json.RawMessage `json:"content"`
+		}{{
+			Role:    "user",
+			Content: []json.RawMessage{image.block, prompt},
+		}},
+	}
+	return json.Marshal(request)
+}
+
 func (c *visionClient) do(
 	ctx context.Context,
 	headers http.Header,
@@ -247,7 +315,7 @@ func (c *visionClient) do(
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range forwardedHeaders {
+	for _, name := range c.headers {
 		for _, value := range headers.Values(name) {
 			request.Header.Add(name, value)
 		}

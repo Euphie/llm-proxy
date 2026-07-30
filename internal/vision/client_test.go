@@ -84,7 +84,13 @@ func TestVisionClientRequestHeadersResponseAndUsage(t *testing.T) {
 				handlerErr = errors.New("wrong allowed header: " + name)
 			}
 		}
-		for _, name := range []string{"Anthropic-Beta", "Cookie", "Accept-Encoding"} {
+		for _, name := range []string{
+			"Anthropic-Beta",
+			"OpenAI-Organization",
+			"OpenAI-Project",
+			"Cookie",
+			"Accept-Encoding",
+		} {
 			if got := r.Header.Get(name); got != "" {
 				handlerErr = errors.New("copied disallowed header: " + name)
 			}
@@ -101,12 +107,14 @@ func TestVisionClientRequestHeadersResponseAndUsage(t *testing.T) {
 	usage := make(chan []byte, 1)
 	client.recordUsage = func(body []byte) { usage <- append([]byte(nil), body...) }
 	headers := http.Header{
-		"Authorization":     {"Bearer secret"},
-		"X-Api-Key":         {"key"},
-		"Anthropic-Version": {"2023-06-01"},
-		"Anthropic-Beta":    {"files-api-2025-04-14"},
-		"Cookie":            {"must-not-copy"},
-		"Accept-Encoding":   {"gzip"},
+		"Authorization":       {"Bearer secret"},
+		"X-Api-Key":           {"key"},
+		"Anthropic-Version":   {"2023-06-01"},
+		"Anthropic-Beta":      {"files-api-2025-04-14"},
+		"OpenAI-Organization": {"must-not-copy"},
+		"OpenAI-Project":      {"must-not-copy"},
+		"Cookie":              {"must-not-copy"},
+		"Accept-Encoding":     {"gzip"},
 	}
 
 	got, err := client.Describe(context.Background(), headers, testImage())

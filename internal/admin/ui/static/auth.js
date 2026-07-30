@@ -1,3 +1,5 @@
+import { createWindowFrame } from "./chrome.js";
+
 export function nextScreen(session) {
   if (!session?.authenticated) {
     return "login";
@@ -143,10 +145,16 @@ function createPasswordChangeCard(heading, handlers) {
 }
 
 function createAuthLayout(card) {
-  const layout = document.createElement("section");
-  layout.className = "auth-layout";
-  layout.append(card);
-  return layout;
+  const stage = document.createElement("section");
+  stage.className = "desktop-stage auth-stage auth-layout";
+  stage.append(
+    createWindowFrame({
+      titleText: "llm-proxy",
+      className: "auth-window",
+      children: [card],
+    }),
+  );
+  return stage;
 }
 
 function createAuthCard(headingText) {

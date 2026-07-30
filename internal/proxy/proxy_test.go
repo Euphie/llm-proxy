@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	visionImageBody = `{"model":"main-model","max_tokens":256,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"text","text":"What is shown?"}]}]}`
-	visionTextBody  = `{"model":"main-model","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}`
+	visionImageBody    = `{"model":"main-model","max_tokens":256,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"text","text":"What is shown?"}]}]}`
+	visionTextBody     = `{"model":"main-model","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}`
+	responsesImageBody = `{"model":"main-model","stream":true,"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="},{"type":"input_text","text":"What is shown?"}]}]}`
 )
 
 type visionUpstream struct {
@@ -197,7 +198,7 @@ func newVisionUpstreamWithResponders(
 			  "content":[{"type":"text","text":"screen description"}],
 			  "usage":{"input_tokens":10,"output_tokens":20}
 			}`)
-		case "main-model":
+		case "main-model", "native-model", "unknown-model":
 			upstream.mainCalls.Add(1)
 			upstream.mainBodies <- append([]byte(nil), body...)
 			upstream.mainURIs <- r.RequestURI
@@ -224,18 +225,22 @@ func (u *visionUpstream) proxy(enabled bool) http.Handler {
 		Slug:     "test",
 		Protocol: profile.ProtocolAnthropic,
 		Upstream: u.server.URL,
+		Models: profile.ModelCatalog{
+			"main-model": {ID: "main-model", SupportsVision: false},
+		},
 		OverloadRules: []provider.Rule{{
 			Status:     http.StatusServiceUnavailable,
 			MaxRetries: 0,
 		}},
 		Vision: profile.VisionRuntime{
-			Enabled:         enabled,
-			Model:           "sonnet",
-			MaxTokens:       2048,
-			Timeout:         2 * time.Second,
-			MaxConcurrency:  4,
-			CacheTTL:        30 * time.Minute,
-			CacheMaxEntries: 512,
+			Enabled:             enabled,
+			Model:               "sonnet",
+			UnlistedModelPolicy: profile.UnlistedModelBypass,
+			MaxTokens:           2048,
+			Timeout:             2 * time.Second,
+			MaxConcurrency:      4,
+			CacheTTL:            30 * time.Minute,
+			CacheMaxEntries:     512,
 		},
 	}, u.server.Client(), nil)
 }
@@ -281,6 +286,77 @@ func TestVisionEnabledRewritesImageBeforeMainRequest(t *testing.T) {
 	}
 	if bytes.Contains(mainBody, []byte(`"type":"image"`)) {
 		t.Fatalf("main body still contains image block: %s", mainBody)
+	}
+}
+
+func TestVisionNativeAndUnlistedBypassReachMainUnchanged(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		models profile.ModelCatalog
+	}{
+		{
+			name:  "native vision",
+			model: "native-model",
+			models: profile.ModelCatalog{
+				"native-model": {ID: "native-model", SupportsVision: true},
+			},
+		},
+		{
+			name:   "unlisted",
+			model:  "unknown-model",
+			models: profile.ModelCatalog{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := newVisionUpstream(t, nil)
+			body := []byte(strings.Replace(visionImageBody, `"main-model"`, `"`+test.model+`"`, 1))
+			runtime := profile.Runtime{
+				Slug:     "test",
+				Protocol: profile.ProtocolAnthropic,
+				Upstream: upstream.server.URL,
+				Models:   test.models,
+				Vision: profile.VisionRuntime{
+					Enabled:             true,
+					Model:               "sonnet",
+					UnlistedModelPolicy: profile.UnlistedModelBypass,
+					MaxTokens:           2048,
+					Timeout:             2 * time.Second,
+					MaxConcurrency:      4,
+					CacheTTL:            30 * time.Minute,
+					CacheMaxEntries:     512,
+				},
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			New(runtime, upstream.server.Client(), nil).ServeHTTP(response, request)
+
+			if got := upstream.visionCalls.Load(); got != 0 {
+				t.Fatalf("vision calls=%d, want 0", got)
+			}
+			if got := upstream.mainCalls.Load(); got != 1 {
+				t.Fatalf("main calls=%d, want 1", got)
+			}
+			if got := <-upstream.mainBodies; !bytes.Equal(got, body) {
+				t.Fatalf("main body changed:\n got: %s\nwant: %s", got, body)
+			}
+		})
+	}
+}
+
+func TestNewSuppressesInvalidVisionPreprocessor(t *testing.T) {
+	h := New(profile.Runtime{
+		Protocol: profile.ProtocolAnthropic,
+		Vision: profile.VisionRuntime{
+			Enabled: true,
+			Model:   " \t ",
+		},
+	}, http.DefaultClient, nil).(*handler)
+	if h.vision != nil {
+		t.Fatal("invalid vision configuration created a preprocessor")
 	}
 }
 
@@ -443,6 +519,214 @@ func TestVisionSkipsOpenAIProfile(t *testing.T) {
 	}
 	if got := upstream.mainCalls.Load(); got != 1 {
 		t.Fatalf("main calls=%d, want 1", got)
+	}
+}
+
+func TestOpenAIVisionRewritesResponsesImageBeforeMainRequest(t *testing.T) {
+	var visionCalls atomic.Int32
+	var mainCalls atomic.Int32
+	mainBodies := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.Error(w, "wrong path", http.StatusNotFound)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read request", http.StatusInternalServerError)
+			return
+		}
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		switch request.Model {
+		case "vision-model":
+			visionCalls.Add(1)
+			_, _ = io.WriteString(w, `{
+			  "model":"vision-model",
+			  "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"screen description","annotations":[]}]}],
+			  "usage":{"input_tokens":10,"output_tokens":20}
+			}`)
+		case "main-model":
+			mainCalls.Add(1)
+			mainBodies <- append([]byte(nil), body...)
+			_, _ = io.WriteString(w, `{
+			  "model":"main-model",
+			  "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}],
+			  "usage":{"input_tokens":30,"output_tokens":40}
+			}`)
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer upstream.Close()
+
+	runtime := profile.Runtime{
+		Slug:     "test",
+		Protocol: profile.ProtocolOpenAI,
+		Upstream: upstream.URL,
+		Models: profile.ModelCatalog{
+			"main-model": {ID: "main-model", SupportsVision: false},
+		},
+		Vision: profile.VisionRuntime{
+			Enabled:             true,
+			Model:               "vision-model",
+			UnlistedModelPolicy: profile.UnlistedModelBypass,
+			MaxTokens:           512,
+			Timeout:             2 * time.Second,
+			MaxConcurrency:      4,
+			CacheTTL:            30 * time.Minute,
+			CacheMaxEntries:     512,
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(responsesImageBody))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, upstream.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d, body=%q", response.Code, response.Body.String())
+	}
+	if got := visionCalls.Load(); got != 1 {
+		t.Fatalf("vision calls=%d, want 1", got)
+	}
+	if got := mainCalls.Load(); got != 1 {
+		t.Fatalf("main calls=%d, want 1", got)
+	}
+	mainBody := <-mainBodies
+	var rewritten struct {
+		Stream bool `json:"stream"`
+		Input  []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(mainBody, &rewritten); err != nil {
+		t.Fatal(err)
+	}
+	if !rewritten.Stream {
+		t.Fatal("stream setting was not preserved")
+	}
+	if rewritten.Input[0].Content[0].Type != "input_text" ||
+		!strings.Contains(rewritten.Input[0].Content[0].Text, "screen description") {
+		t.Fatalf("rewritten content=%+v", rewritten.Input[0].Content[0])
+	}
+}
+
+func TestOpenAIVisionNativeAndUnlistedBypassReachMainUnchanged(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		models profile.ModelCatalog
+	}{
+		{
+			name:  "native vision",
+			model: "native-model",
+			models: profile.ModelCatalog{
+				"native-model": {ID: "native-model", SupportsVision: true},
+			},
+		},
+		{
+			name:   "unlisted",
+			model:  "unknown-model",
+			models: profile.ModelCatalog{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var visionCalls atomic.Int32
+			var mainCalls atomic.Int32
+			mainBodies := make(chan []byte, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read request", http.StatusInternalServerError)
+					return
+				}
+				var request struct {
+					Model string `json:"model"`
+				}
+				if err := json.Unmarshal(body, &request); err != nil {
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				if request.Model == "vision-model" {
+					visionCalls.Add(1)
+				} else {
+					mainCalls.Add(1)
+					mainBodies <- append([]byte(nil), body...)
+				}
+				_, _ = io.WriteString(w, `{"output":[]}`)
+			}))
+			defer upstream.Close()
+
+			body := []byte(strings.Replace(responsesImageBody, `"main-model"`, `"`+test.model+`"`, 1))
+			runtime := profile.Runtime{
+				Slug:     "test",
+				Protocol: profile.ProtocolOpenAI,
+				Upstream: upstream.URL,
+				Models:   test.models,
+				Vision: profile.VisionRuntime{
+					Enabled:             true,
+					Model:               "vision-model",
+					UnlistedModelPolicy: profile.UnlistedModelBypass,
+					MaxTokens:           512,
+					Timeout:             2 * time.Second,
+					MaxConcurrency:      4,
+					CacheTTL:            30 * time.Minute,
+					CacheMaxEntries:     512,
+				},
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			New(runtime, upstream.Client(), nil).ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+			}
+			if got := visionCalls.Load(); got != 0 {
+				t.Fatalf("vision calls=%d, want 0", got)
+			}
+			if got := mainCalls.Load(); got != 1 {
+				t.Fatalf("main calls=%d, want 1", got)
+			}
+			if got := <-mainBodies; !bytes.Equal(got, body) {
+				t.Fatalf("main body changed:\n got: %s\nwant: %s", got, body)
+			}
+		})
+	}
+}
+
+func TestShouldPreprocessVisionMatchesProtocolEndpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol profile.Protocol
+		path     string
+		want     bool
+	}{
+		{name: "anthropic messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages", want: true},
+		{name: "anthropic responses", protocol: profile.ProtocolAnthropic, path: "/v1/responses", want: false},
+		{name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses", want: true},
+		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: false},
+		{name: "openai messages", protocol: profile.ProtocolOpenAI, path: "/v1/messages", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, test.path, nil)
+			request.Header.Set("Content-Type", "application/json")
+			if got := shouldPreprocessVision(test.protocol, request); got != test.want {
+				t.Fatalf("shouldPreprocessVision()=%v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

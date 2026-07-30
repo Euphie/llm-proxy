@@ -15,3 +15,7 @@ config-bak.yaml
 .idea/
 .vscode/
 *.swp
+
+# 本地开发与设计临时文件
+.superpowers/
+docs/superpowers/

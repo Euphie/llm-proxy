@@ -3,6 +3,7 @@ package vision
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -64,15 +65,24 @@ func HTTPStatus(err error) int {
 	return http.StatusBadGateway
 }
 
+type requestDocument interface {
+	images() []imageRef
+	rewrite([]string) ([]byte, error)
+}
+
 type Preprocessor struct {
-	profile   string
-	model     string
-	prompt    string
-	describer describer
-	cache     *resultCache
-	slots     chan struct{}
-	timeout   time.Duration
-	cacheKey  []byte
+	profile             string
+	model               string
+	models              profile.ModelCatalog
+	unlistedModelPolicy profile.UnlistedModelPolicy
+	prompt              string
+	parse               func(map[string]json.RawMessage) (requestDocument, error)
+	headers             []string
+	describer           describer
+	cache               *resultCache
+	slots               chan struct{}
+	timeout             time.Duration
+	cacheKey            []byte
 }
 
 type processLoader struct {
@@ -82,8 +92,10 @@ type processLoader struct {
 }
 
 func New(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *Preprocessor {
-	return newPreprocessor(
+	return newPreprocessorForProtocol(
+		cfg.Protocol,
 		cfg.Slug,
+		cfg.Models,
 		cfg.Vision,
 		newVisionClient(cfg, httpClient, sdb),
 		newResultCache(cfg.Vision.CacheMaxEntries, cfg.Vision.CacheTTL),
@@ -96,15 +108,45 @@ func newPreprocessor(
 	d describer,
 	cache *resultCache,
 ) *Preprocessor {
+	return newPreprocessorForProtocol(
+		profile.ProtocolAnthropic,
+		profileSlug,
+		nil,
+		cfg,
+		d,
+		cache,
+	)
+}
+
+func newPreprocessorForProtocol(
+	protocol profile.Protocol,
+	profileSlug string,
+	models profile.ModelCatalog,
+	cfg profile.VisionRuntime,
+	d describer,
+	cache *resultCache,
+) *Preprocessor {
+	parse := func(root map[string]json.RawMessage) (requestDocument, error) {
+		return parseMessagesRoot(root)
+	}
+	if protocol == profile.ProtocolOpenAI {
+		parse = func(root map[string]json.RawMessage) (requestDocument, error) {
+			return parseResponsesRoot(root)
+		}
+	}
 	return &Preprocessor{
-		profile:   profileSlug,
-		model:     cfg.Model,
-		prompt:    effectivePrompt(cfg.Prompt),
-		describer: d,
-		cache:     cache,
-		slots:     make(chan struct{}, cfg.MaxConcurrency),
-		timeout:   cfg.Timeout,
-		cacheKey:  newCacheKey(),
+		profile:             profileSlug,
+		model:               cfg.Model,
+		models:              models,
+		unlistedModelPolicy: cfg.UnlistedModelPolicy,
+		prompt:              effectivePrompt(cfg.Prompt),
+		parse:               parse,
+		headers:             forwardedHeadersForProtocol(protocol),
+		describer:           d,
+		cache:               cache,
+		slots:               make(chan struct{}, cfg.MaxConcurrency),
+		timeout:             cfg.Timeout,
+		cacheKey:            newCacheKey(),
 	}
 }
 
@@ -121,7 +163,24 @@ func (p *Preprocessor) Process(
 	headers http.Header,
 	body []byte,
 ) ([]byte, error) {
-	doc, err := parseMessages(body)
+	root, err := parseRequestRoot(body)
+	if err != nil {
+		return nil, &processError{
+			status: http.StatusBadRequest,
+			err:    err,
+		}
+	}
+	model, ok := requestModel(root)
+	if !ok {
+		slog.Debug("vision.skipped", "profile", p.profile, "reason", "invalid_model")
+		return body, nil
+	}
+	enhance, reason := p.shouldEnhance(model)
+	if !enhance {
+		slog.Debug("vision.skipped", "profile", p.profile, "model", model, "reason", reason)
+		return body, nil
+	}
+	doc, err := p.parse(root)
 	if err != nil {
 		return nil, &processError{
 			status: http.StatusBadRequest,
@@ -158,7 +217,7 @@ func (p *Preprocessor) Process(
 
 			description, source, err := p.cache.getOrLoad(
 				workCtx,
-				scopedImageCacheKey(p.cacheKey, headers, p.profile, p.model, p.prompt, image),
+				scopedImageCacheKey(p.cacheKey, headers, p.headers, p.profile, p.model, p.prompt, image),
 				func(loadCtx context.Context) (string, error) {
 					operationCtx, operationCancel := context.WithTimeout(loadCtx, p.timeout)
 					defer operationCancel()
@@ -242,6 +301,19 @@ func (p *Preprocessor) Process(
 		"image_count", len(images),
 		"duration_ms", time.Since(processStarted).Milliseconds())
 	return rewritten, nil
+}
+
+func (p *Preprocessor) shouldEnhance(model string) (bool, string) {
+	if capability, ok := p.models.Lookup(model); ok {
+		if capability.SupportsVision {
+			return false, "native_vision"
+		}
+		return true, "listed_text_only"
+	}
+	if p.unlistedModelPolicy == profile.UnlistedModelEnhance {
+		return true, "unlisted_enhance"
+	}
+	return false, "unlisted_bypass"
 }
 
 func cacheSourceName(source resultSource) string {

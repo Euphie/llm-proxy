@@ -6,6 +6,10 @@ import {
   renderLogin,
   renderPasswordChange,
 } from "./auth.js";
+import {
+  createWindowChrome,
+  createWindowFrame,
+} from "./chrome.js";
 
 test("anonymous users see login", () => {
   assert.equal(nextScreen({ authenticated: false }), "login");
@@ -31,6 +35,44 @@ test("initialized admin reaches profiles", () => {
   );
 });
 
+test("window chrome is decorative and has exactly three lights", (t) => {
+  const root = installFakeDOM(t);
+  const chrome = createWindowChrome("llm-proxy");
+  root.append(chrome);
+
+  assert.equal(chrome.className, "window-titlebar");
+  const controls = chrome.children[0];
+  assert.equal(controls.getAttribute("aria-hidden"), "true");
+  assert.equal(controls.children.length, 3);
+  assert.ok(
+    controls.children.every((light) => light.tagName === "SPAN"),
+  );
+  assert.equal(
+    controls.children.some(
+      (light) => light.getAttribute("tabindex") !== null,
+    ),
+    false,
+  );
+});
+
+test("window frame keeps caller content in a dedicated body", (t) => {
+  const root = installFakeDOM(t);
+  const content = document.createElement("p");
+  content.textContent = "content";
+
+  const frame = createWindowFrame({
+    titleText: "llm-proxy",
+    className: "auth-window",
+    children: [content],
+  });
+  root.append(frame);
+
+  assert.match(frame.className, /mac-window/);
+  assert.match(frame.className, /auth-window/);
+  assert.equal(frame.children[1].className, "mac-window-body");
+  assert.equal(frame.children[1].children[0], content);
+});
+
 test("login renders the fixed accessible copy and submits transient credentials", async (t) => {
   const root = installFakeDOM(t);
   root.append(new FakeElement("p"));
@@ -43,6 +85,13 @@ test("login renders the fixed accessible copy and submits transient credentials"
   });
 
   assert.equal(root.children.length, 1);
+  assert.equal(elementsByClass(root, "auth-stage").length, 1);
+  assert.equal(elementsByClass(root, "auth-window").length, 1);
+  assert.equal(elementsByClass(root, "window-control").length, 3);
+  assert.equal(
+    descendants(root).some((element) => element.tagName === "NAV"),
+    false,
+  );
   assert.ok(findText(root, "首次登录存在公网抢占风险"));
   assert.deepEqual(labelTexts(root), ["用户名", "密码"]);
   assert.equal(buttonByText(root, "登录").type, "submit");
@@ -92,6 +141,13 @@ test("password change renders only exact fixed labels with empty password fields
     changePassword: async () => {},
   });
 
+  assert.equal(elementsByClass(root, "auth-stage").length, 1);
+  assert.equal(elementsByClass(root, "auth-window").length, 1);
+  assert.equal(elementsByClass(root, "window-control").length, 3);
+  assert.equal(
+    descendants(root).some((element) => element.tagName === "NAV"),
+    false,
+  );
   assert.ok(findText(root, "修改初始密码"));
   assert.deepEqual(labelTexts(root), [
     "当前密码",
@@ -210,6 +266,14 @@ test("authenticated bootstrap renders only the fixed navigation and Profiles pla
   });
 
   assert.deepEqual(navigationTexts(root), ["Profiles", "统计", "系统", "退出"]);
+  assert.equal(elementsByClass(root, "desktop-stage").length, 1);
+  assert.equal(elementsByClass(root, "app-window").length, 1);
+  assert.equal(elementsByClass(root, "window-control").length, 3);
+  assert.equal(
+    elementsByClass(root, "window-controls")[0].getAttribute("aria-hidden"),
+    "true",
+  );
+  assert.equal(elementsByClass(root, "app-sidebar").length, 1);
   assert.equal(findHeading(root, "Profiles").tagName, "H1");
 });
 
@@ -339,6 +403,9 @@ test("bootstrap API failures render an accessible alert", async (t) => {
   });
 
   const alert = findRole(root, "alert");
+  assert.equal(elementsByClass(root, "auth-stage").length, 1);
+  assert.equal(elementsByClass(root, "auth-window").length, 1);
+  assert.equal(elementsByClass(root, "window-control").length, 3);
   assert.equal(alert.hidden, false);
   assert.equal(alert.textContent, "服务暂不可用");
 });
@@ -450,6 +517,14 @@ function installFakeDOM(t) {
 
 function descendants(root) {
   return [root, ...root.children.flatMap(descendants)];
+}
+
+function elementsByClass(root, className) {
+  return descendants(root).filter((element) =>
+    String(element.className ?? "")
+      .split(/\s+/)
+      .includes(className),
+  );
 }
 
 function findTag(root, tagName) {

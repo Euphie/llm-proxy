@@ -1,11 +1,15 @@
 package profile
 
 import (
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+const browserMaxSafeInteger int64 = 9_007_199_254_740_991
 
 func TestRecordResolveAppliesRuntimeValues(t *testing.T) {
 	record := Record{
@@ -24,6 +28,117 @@ func TestRecordResolveAppliesRuntimeValues(t *testing.T) {
 		runtime.Vision.Timeout != 2*time.Minute ||
 		runtime.Vision.CacheTTL != 30*time.Minute {
 		t.Fatalf("vision defaults=%+v", runtime.Vision)
+	}
+}
+
+func TestRecordResolveLegacyUnlistedModelPolicyDefaultsToBypass(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string
+	}{
+		{name: "missing stored policy"},
+		{name: "empty stored policy", policy: `,"unlisted_model_policy":""`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := `{
+				"version":1,
+				"protocol":"anthropic",
+				"upstream":"https://example.test",
+				"vision":{
+					"enabled":false,
+					"model":"sonnet"` + tt.policy + `,
+					"max_tokens":2048,
+					"timeout":"2m",
+					"max_concurrency":4,
+					"cache_ttl":"30m",
+					"cache_max_entries":512
+				},
+				"overload_rules":[]
+			}`
+			var config Config
+			if err := json.Unmarshal([]byte(raw), &config); err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := (Record{
+				Slug:        "legacy",
+				DisplayName: "Legacy",
+				Enabled:     true,
+				Config:      config,
+			}).Resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runtime.Models) != 0 {
+				t.Fatalf("models=%+v, want empty legacy catalog", runtime.Models)
+			}
+			if runtime.Vision.UnlistedModelPolicy != UnlistedModelBypass {
+				t.Fatalf(
+					"policy=%q, want %q",
+					runtime.Vision.UnlistedModelPolicy,
+					UnlistedModelBypass,
+				)
+			}
+		})
+	}
+}
+
+func TestRecordResolveAcceptsBrowserSafeIntegerLimitBoundary(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("browser safe integer boundary is not representable as int")
+	}
+	limit := int(browserMaxSafeInteger)
+	supportsVision := true
+	record := Record{
+		Slug: "coding", DisplayName: "Coding", Enabled: true,
+		Config: NewConfig(ProtocolAnthropic, "https://example.test"),
+	}
+	record.Config.Models = []ModelCapabilityConfig{
+		{ID: "context-boundary", ContextWindow: &limit, SupportsVision: &supportsVision},
+		{ID: "output-boundary", MaxOutputTokens: &limit, SupportsVision: &supportsVision},
+	}
+
+	if _, err := record.Resolve(); err != nil {
+		t.Fatalf("Resolve() error=%v, want browser-safe boundary accepted", err)
+	}
+}
+
+func TestRecordResolveRejectsLimitsBeyondBrowserSafeInteger(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("values beyond the browser safe integer boundary are not representable as int")
+	}
+	tooLarge := int(browserMaxSafeInteger + 1)
+	supportsVision := true
+	tests := []struct {
+		name  string
+		model ModelCapabilityConfig
+	}{
+		{
+			name: "context window",
+			model: ModelCapabilityConfig{
+				ID: "context-too-large", ContextWindow: &tooLarge, SupportsVision: &supportsVision,
+			},
+		},
+		{
+			name: "max output tokens",
+			model: ModelCapabilityConfig{
+				ID: "output-too-large", MaxOutputTokens: &tooLarge, SupportsVision: &supportsVision,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := Record{
+				Slug: "coding", DisplayName: "Coding", Enabled: true,
+				Config: NewConfig(ProtocolAnthropic, "https://example.test"),
+			}
+			record.Config.Models = []ModelCapabilityConfig{tt.model}
+			if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Resolve() error=%v, want ErrInvalidConfig", err)
+			}
+		})
 	}
 }
 
@@ -84,6 +199,102 @@ func TestRecordResolveValidation(t *testing.T) {
 			want: ErrInvalidProtocol,
 		},
 		{
+			name: "empty model capability ID",
+			mutate: func(r *Record) {
+				supportsVision := true
+				r.Config.Models = []ModelCapabilityConfig{{SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "model capability ID has surrounding whitespace",
+			mutate: func(r *Record) {
+				supportsVision := true
+				r.Config.Models = []ModelCapabilityConfig{{ID: " glm-5 ", SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "duplicate exact model capability IDs",
+			mutate: func(r *Record) {
+				supportsVision := true
+				r.Config.Models = []ModelCapabilityConfig{
+					{ID: "glm-5", SupportsVision: &supportsVision},
+					{ID: "glm-5", SupportsVision: &supportsVision},
+				}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "absent model supports vision",
+			mutate: func(r *Record) {
+				r.Config.Models = []ModelCapabilityConfig{{ID: "glm-5"}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "zero model context window",
+			mutate: func(r *Record) {
+				supportsVision := true
+				zero := 0
+				r.Config.Models = []ModelCapabilityConfig{{ID: "glm-5", ContextWindow: &zero, SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "negative model context window",
+			mutate: func(r *Record) {
+				supportsVision := true
+				negative := -1
+				r.Config.Models = []ModelCapabilityConfig{{ID: "glm-5", ContextWindow: &negative, SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "zero model max output tokens",
+			mutate: func(r *Record) {
+				supportsVision := true
+				zero := 0
+				r.Config.Models = []ModelCapabilityConfig{{ID: "glm-5", MaxOutputTokens: &zero, SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "negative model max output tokens",
+			mutate: func(r *Record) {
+				supportsVision := true
+				negative := -1
+				r.Config.Models = []ModelCapabilityConfig{{ID: "glm-5", MaxOutputTokens: &negative, SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "model output equals context window",
+			mutate: func(r *Record) {
+				supportsVision := true
+				limit := 32
+				r.Config.Models = []ModelCapabilityConfig{{ID: "glm-5", ContextWindow: &limit, MaxOutputTokens: &limit, SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "model output exceeds context window",
+			mutate: func(r *Record) {
+				supportsVision := true
+				contextWindow := 32
+				maxOutputTokens := 33
+				r.Config.Models = []ModelCapabilityConfig{{ID: "glm-5", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutputTokens, SupportsVision: &supportsVision}}
+			},
+			want: ErrInvalidConfig,
+		},
+		{
+			name: "unsupported unlisted model policy",
+			mutate: func(r *Record) {
+				r.Config.Vision.UnlistedModelPolicy = "other"
+			},
+			want: ErrInvalidConfig,
+		},
+		{
 			name: "upstream credentials",
 			mutate: func(r *Record) {
 				r.Config.Upstream = "https://user:password@example.test"
@@ -101,14 +312,6 @@ func TestRecordResolveValidation(t *testing.T) {
 			name: "upstream fragment",
 			mutate: func(r *Record) {
 				r.Config.Upstream = "https://example.test#fragment"
-			},
-			want: ErrInvalidConfig,
-		},
-		{
-			name: "openai vision",
-			mutate: func(r *Record) {
-				r.Config.Protocol = ProtocolOpenAI
-				r.Config.Vision.Enabled = true
 			},
 			want: ErrInvalidConfig,
 		},
@@ -183,6 +386,14 @@ func TestRecordResolveValidation(t *testing.T) {
 			want: ErrInvalidConfig,
 		},
 		{
+			name: "empty enabled vision model",
+			mutate: func(r *Record) {
+				r.Config.Vision.Enabled = true
+				r.Config.Vision.Model = " \t"
+			},
+			want: ErrInvalidConfig,
+		},
+		{
 			name: "invalid retry delay",
 			mutate: func(r *Record) {
 				r.Config.OverloadRules = []RetryRule{{Delay: "invalid"}}
@@ -206,6 +417,71 @@ func TestRecordResolveValidation(t *testing.T) {
 				t.Fatalf("error=%v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestRecordResolveBuildsModelCatalog(t *testing.T) {
+	withoutLimits := false
+	withLimits := true
+	contextWindow := 128000
+	maxOutputTokens := 8192
+	record := Record{
+		Slug: "coding", DisplayName: "Coding", Enabled: true,
+		Config: NewConfig(ProtocolAnthropic, "https://example.test"),
+	}
+	record.Config.Models = []ModelCapabilityConfig{
+		{ID: "GLM-5", SupportsVision: &withoutLimits},
+		{ID: "glm-5", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutputTokens, SupportsVision: &withLimits},
+	}
+
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Models) != 2 {
+		t.Fatalf("models=%+v", runtime.Models)
+	}
+	upper, ok := runtime.Models.Lookup("GLM-5")
+	if !ok || upper.HasContextWindow || upper.HasMaxOutputTokens || upper.SupportsVision {
+		t.Fatalf("upper=%+v ok=%t", upper, ok)
+	}
+	lower, ok := runtime.Models.Lookup("glm-5")
+	if !ok || !lower.HasContextWindow || lower.ContextWindow != contextWindow ||
+		!lower.HasMaxOutputTokens || lower.MaxOutputTokens != maxOutputTokens || !lower.SupportsVision {
+		t.Fatalf("lower=%+v ok=%t", lower, ok)
+	}
+}
+
+func TestRecordResolveTrimsEnabledVisionModelForRuntime(t *testing.T) {
+	record := Record{
+		Slug: "coding", DisplayName: "Coding", Enabled: true,
+		Config: NewConfig(ProtocolAnthropic, "https://example.test"),
+	}
+	record.Config.Vision.Enabled = true
+	record.Config.Vision.Model = "  vision-model\t"
+
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Vision.Model != "vision-model" || record.Config.Vision.Model != "  vision-model\t" {
+		t.Fatalf("runtime=%q config=%q", runtime.Vision.Model, record.Config.Vision.Model)
+	}
+}
+
+func TestRecordResolveAllowsOpenAIVision(t *testing.T) {
+	record := Record{
+		Slug: "openai", DisplayName: "OpenAI", Enabled: true,
+		Config: NewConfig(ProtocolOpenAI, "https://example.test"),
+	}
+	record.Config.Vision.Enabled = true
+
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Protocol != ProtocolOpenAI || !runtime.Vision.Enabled {
+		t.Fatalf("runtime=%+v", runtime)
 	}
 }
 

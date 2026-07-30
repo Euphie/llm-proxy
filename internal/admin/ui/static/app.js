@@ -4,6 +4,7 @@ import {
   renderLogin,
   renderPasswordChange,
 } from "./auth.js";
+import { createWindowFrame } from "./chrome.js";
 import {
   defaultProfileDraft,
   profileDraft,
@@ -78,8 +79,10 @@ function renderPasswordScreen(root, client, generateProfile, path) {
 
 async function renderAuthenticated(root, client, generateProfile, path) {
   const pageName = pageForPath(path);
-  const header = document.createElement("header");
-  header.className = "app-header";
+  const stage = document.createElement("div");
+  stage.className = "desktop-stage";
+  const sidebar = document.createElement("aside");
+  sidebar.className = "app-sidebar";
   const brand = document.createElement("p");
   brand.className = "app-brand";
   brand.textContent = "llm-proxy";
@@ -89,14 +92,37 @@ async function renderAuthenticated(root, client, generateProfile, path) {
   list.className = "app-nav";
 
   for (const item of [
-    { name: "profiles", text: "Profiles", href: "/_admin/profiles" },
-    { name: "stats", text: "统计", href: "/_admin/stats" },
-    { name: "system", text: "系统", href: "/_admin/system" },
+    {
+      name: "profiles",
+      text: "Profiles",
+      href: "/_admin/profiles",
+      iconClass: "nav-icon-blue",
+      iconText: "P",
+    },
+    {
+      name: "stats",
+      text: "统计",
+      href: "/_admin/stats",
+      iconClass: "nav-icon-orange",
+      iconText: "S",
+    },
+    {
+      name: "system",
+      text: "系统",
+      href: "/_admin/system",
+      iconClass: "nav-icon-gray",
+      iconText: "⚙",
+    },
   ]) {
     const entry = document.createElement("li");
     const link = document.createElement("a");
     link.textContent = item.text;
     link.setAttribute("href", item.href);
+    const icon = document.createElement("span");
+    icon.className = `app-nav-icon ${item.iconClass}`;
+    icon.textContent = item.iconText;
+    icon.setAttribute("aria-hidden", "true");
+    link.append(icon);
     if (item.name === pageName) {
       link.setAttribute("aria-current", "page");
     }
@@ -111,7 +137,7 @@ async function renderAuthenticated(root, client, generateProfile, path) {
   logoutEntry.append(logout);
   list.append(logoutEntry);
   navigation.append(list);
-  header.append(brand, navigation);
+  sidebar.append(brand, navigation);
 
   const content = document.createElement("section");
   content.className = "app-content";
@@ -266,7 +292,15 @@ async function renderAuthenticated(root, client, generateProfile, path) {
   });
 
   root.className = "app-shell";
-  root.replaceChildren(header, content);
+  stage.append(
+    createWindowFrame({
+      titleText: "llm-proxy",
+      className: "app-window",
+      bodyClassName: "app-window-body",
+      children: [sidebar, content],
+    }),
+  );
+  root.replaceChildren(stage);
   if (pageName === "stats") {
     await showStats();
     return;
@@ -279,8 +313,8 @@ async function renderAuthenticated(root, client, generateProfile, path) {
 }
 
 function renderFatalError(root, error) {
-  const layout = document.createElement("section");
-  layout.className = "auth-layout";
+  const stage = document.createElement("section");
+  stage.className = "desktop-stage auth-stage auth-layout";
   const card = document.createElement("div");
   card.className = "card auth-card";
   const heading = document.createElement("h1");
@@ -291,9 +325,15 @@ function renderFatalError(root, error) {
   alert.textContent = error?.message || "请求失败，请重试。";
   alert.hidden = false;
   card.append(heading, alert);
-  layout.append(card);
+  stage.append(
+    createWindowFrame({
+      titleText: "llm-proxy",
+      className: "auth-window",
+      children: [card],
+    }),
+  );
   root.className = "";
-  root.replaceChildren(layout);
+  root.replaceChildren(stage);
 }
 
 function isUnauthorized(error) {

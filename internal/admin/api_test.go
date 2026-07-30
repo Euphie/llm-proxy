@@ -869,6 +869,86 @@ func TestAPICanonicalPathBoundary(t *testing.T) {
 	}
 }
 
+// Break caught: leaking model resolution details or mapping invalid model fields to 500.
+func TestAPIInvalidModelCapabilitiesUseStructuredProfileValidationError(t *testing.T) {
+	tests := []struct {
+		name   string
+		models string
+	}{
+		{
+			name:   "blank ID",
+			models: `[{"id":"","supports_vision":false}]`,
+		},
+		{
+			name:   "missing vision choice",
+			models: `[{"id":"missing-choice"}]`,
+		},
+		{
+			name: "duplicate exact ID",
+			models: `[{"id":"same","supports_vision":false},` +
+				`{"id":"same","supports_vision":true}]`,
+		},
+		{
+			name: "output not below context",
+			models: `[{"id":"invalid-limits","context_window":128000,` +
+				`"max_output_tokens":128000,"supports_vision":false}]`,
+		},
+		{
+			name: "context exceeds browser safe integer",
+			models: `[{"id":"unsafe-context","context_window":9007199254740992,` +
+				`"supports_vision":false}]`,
+		},
+		{
+			name: "output exceeds browser safe integer",
+			models: `[{"id":"unsafe-output","max_output_tokens":9007199254740992,` +
+				`"supports_vision":false}]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newTestAPI(t)
+			cookies, csrf := fixture.changePassword(t)
+			config := profileConfigJSON("anthropic", "https://invalid.example")
+			config = strings.Replace(config, `"vision":`, `"models":`+tt.models+`,"vision":`, 1)
+			body := fmt.Sprintf(
+				`{"slug":"invalid","display_name":"Invalid","enabled":true,"config":%s,"make_default":false}`,
+				config,
+			)
+
+			response := fixture.request(
+				t,
+				http.MethodPost,
+				"/_admin/api/profiles",
+				body,
+				cookies,
+				csrf,
+			)
+
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var got errorResponse
+			decodeTestJSON(t, response, &got)
+			if got.Error.Code != "validation_error" ||
+				got.Error.Message != "Profile validation failed." ||
+				len(got.Error.Fields) != 1 ||
+				got.Error.Fields["profile"] != "Profile configuration is invalid." {
+				t.Fatalf("error=%+v", got.Error)
+			}
+			for _, internal := range []string{
+				"supports_vision",
+				"duplicate model capability",
+				"max output tokens",
+			} {
+				if strings.Contains(response.Body.String(), internal) {
+					t.Fatalf("response leaks %q: %s", internal, response.Body.String())
+				}
+			}
+		})
+	}
+}
+
 // Break caught: changing rate-limit domain failures into generic authentication failures.
 func TestAPILoginRateLimitErrorMapping(t *testing.T) {
 	fixture := newTestAPI(t)

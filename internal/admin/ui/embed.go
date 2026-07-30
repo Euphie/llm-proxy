@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	assetPrefix = "/_admin/assets/"
-	uiCSP       = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+	assetPrefix        = "/_admin/assets/"
+	currentAssetPrefix = assetPrefix + "current/"
+	uiCSP              = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 )
 
 //go:embed static/*.html static/*.css static/*.js
@@ -24,8 +25,13 @@ func NewHandler() http.Handler {
 			return
 		}
 
-		if r.URL.Path == strings.TrimSuffix(assetPrefix, "/") {
+		if r.URL.Path == strings.TrimSuffix(assetPrefix, "/") ||
+			r.URL.Path == strings.TrimSuffix(currentAssetPrefix, "/") {
 			http.NotFound(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, currentAssetPrefix) {
+			serveAsset(w, strings.TrimPrefix(r.URL.Path, currentAssetPrefix))
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, assetPrefix) {
@@ -57,7 +63,6 @@ func serveAsset(w http.ResponseWriter, name string) {
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
 }

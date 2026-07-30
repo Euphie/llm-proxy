@@ -8,8 +8,8 @@ Profile 是一套可独立选择的代理运行配置。请在 `/_admin/profiles
 - `slug` 必须匹配 `^[a-z0-9][a-z0-9-]{0,62}$`，最长 63 个字符。
 - `v1` 是默认路由的保留值，不能作为 slug。
 - 名称不能为空；slug 在数据库中唯一。
-- `anthropic` 支持 Anthropic Messages、视觉增强和 Anthropic 用量解析。
-- `openai` 用于 OpenAI 兼容接口；视觉增强必须关闭。
+- `anthropic` 支持 Anthropic Messages、图片增强和 Anthropic 用量解析。
+- `openai` 支持 OpenAI Chat Completions 与 Responses；图片增强只处理 Responses。
 
 ## 路由与 Upstream
 
@@ -43,12 +43,15 @@ Profile 必须启用，不能直接停用；切换默认项时目标也必须启
 
 ## 视觉设置
 
-视觉增强仅适用于 Anthropic Profile。字段和默认值如下：
+视觉增强适用于 Anthropic `POST /v1/messages` 和 OpenAI
+`POST /v1/responses`。其他路径（包括 Chat Completions）保持原样转发。字段和默认值
+如下：
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
 | `enabled` | `false` | 是否在主请求前处理直接图片块 |
 | `model` | `sonnet` | 上游实际接受的视觉模型名 |
+| `unlisted_model_policy` | `bypass` | 控制台“默认视为支持视觉，不增强”；改为 `enhance` 时显示“默认视为不支持视觉，使用增强” |
 | `max_tokens` | `2048` | 单张图片描述最大输出 Token |
 | `timeout` | `2m` | 单图总时限，包含排队、请求和重试 |
 | `max_concurrency` | `4` | 当前 Profile 视觉请求的共享并发上限 |
@@ -56,7 +59,43 @@ Profile 必须启用，不能直接停用；切换默认项时目标也必须启
 | `cache_max_entries` | `512` | LRU 缓存条目上限 |
 | `prompt` | 内置提示词 | 非空时完整替换内置提示词 |
 
+影子请求沿用 Profile 协议；OpenAI Responses 影子请求固定使用 `store: false`。
 行为、安全边界和调优说明见[图片预处理](vision.md)。
+
+## 模型能力
+
+模型能力只保存在 `profile.config.models`，是运行时唯一使用的模型事实。例如：
+
+```json
+{
+  "models": [
+    {"id": "GLM-5", "context_window": 204800, "supports_vision": false},
+    {
+      "id": "Kimi-K2.5",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true
+    }
+  ],
+  "vision": {"unlisted_model_policy": "bypass"}
+}
+```
+
+`id` 是精确、区分大小写的运行时键；`GLM-5` 与 `glm-5` 是不同模型。每行都必须明确
+填写 `supports_vision`。`context_window` 和 `max_output_tokens` 可省略；已填写时必须为
+不大于 `9,007,199,254,740,991` 的正整数，且二者同时存在时输出上限必须小于上下文
+窗口。控制台接受整数或十进制 `K`/`M` 简写，保存为整数。模型建议只辅助填写表单，
+不能改变这些保存的事实。
+
+缺失 `models` 等于空目录，因此所有模型均未收录。缺失或空
+`vision.unlisted_model_policy` 只会让未收录模型默认 `bypass`；已收录模型始终按其
+`supports_vision` 判定。
+
+**破坏性行为变更：**旧 Profile 通常同时缺少目录和策略，因此其所有模型都未收录并
+默认 bypass，不再沿用旧的默认影子请求行为。如需增强，必须保存模型行，或显式将策略
+改为 `enhance`。不提供旧行为兼容层。
+
+模型事实、建议来源和 Agent 上下文映射见[模型能力与 Agent 上下文](models.md)。
 
 ## 有序重试规则
 
@@ -76,10 +115,33 @@ Profile 必须启用，不能直接停用；切换默认项时目标也必须启
 
 ## Agent 配置生成
 
-Profile 列表和编辑页的“生成配置”在浏览器内即时生成 Claude Code 或 OpenAI
-客户端设置。公网地址、模型映射和认证变量选择都是临时输入，不写入服务器；
-关闭或刷新后恢复为空。
+Profile 决定代理协议和 Upstream，Agent 只决定如何生成客户端配置；二者不绑定，
+同一 Profile 可以为多个兼容 Agent 生成配置。可选目标由 Profile 协议筛选：
 
-生成结果只包含 `<SET_LOCALLY>` 占位符，不提供真实密钥输入。复制或下载后，请在
-客户端本地设置凭据，并在使用前核对 Profile URL。该功能是配置生成器，不会修改
-Profile，也不会导入客户端配置。
+| Agent | Profile 协议 | 生成内容 |
+|---|---|---|
+| Claude Code | `anthropic` | Claude settings JSON 或 Shell 环境变量 |
+| OpenCode | `anthropic` 或 `openai` | `opencode.json` Provider 配置 |
+| Codex CLI | `openai` | 用户或命名 Profile 的 TOML 配置，仅使用 Responses API |
+
+Claude Code 的 Anthropic Base URL 为 `https://host/<slug>`；OpenCode Provider
+和 OpenAI API Base 使用 `https://host/<slug>/v1`。Codex Provider 固定使用
+`wire_api = "responses"`，其 Upstream 必须支持 `/v1/responses`。
+
+公网地址、Agent、模型映射和认证变量都是浏览器中的临时输入，不写入服务器，关闭
+或刷新后即丢弃。生成结果只使用客户端原生环境变量引用、变量名或
+`<SET_LOCALLY>` 占位符，不提供真实密钥输入。OpenCode 使用 `{env:VARIABLE}`，
+Codex 使用 `env_key`，真实值均由客户端本地环境提供。该功能不会修改 Profile，
+也不会读取或导入客户端现有配置。
+
+生成器显示的目标位置如下：
+
+| Agent | 全局配置 | 项目或命名配置 |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json` | `.claude/settings.json` 或 `.claude/settings.local.json` |
+| OpenCode | `~/.config/opencode/opencode.json` | `opencode.json` |
+| Codex CLI | `~/.codex/config.toml` | `~/.codex/<name>.config.toml`，使用 `codex --profile <name>` 启动 |
+
+Codex 不生成已废弃的 `[profiles.*]` 配置；项目级 `.codex/config.toml` 也不用于覆盖
+Provider 或认证设置。格式依据 [Codex 配置文档](https://developers.openai.com/codex/config-reference)
+和 [OpenCode Provider 文档](https://opencode.ai/docs/providers)。

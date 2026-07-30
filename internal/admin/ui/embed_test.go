@@ -19,9 +19,9 @@ func TestHandlerServesSPAAndAssets(t *testing.T) {
 	}{
 		{"/_admin/", "text/html", `<main id="app"`},
 		{"/_admin/profiles", "text/html", `<main id="app"`},
-		{"/_admin/assets/app.js", "text/javascript", "bootstrap"},
-		{"/_admin/assets/api.js", "text/javascript", "export const api"},
-		{"/_admin/assets/styles.css", "text/css", ":root"},
+		{"/_admin/assets/current/app.js", "text/javascript", "bootstrap"},
+		{"/_admin/assets/current/api.js", "text/javascript", "export const api"},
+		{"/_admin/assets/current/styles.css", "text/css", ":root"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			response := serveUI(handler, http.MethodGet, tc.path)
@@ -45,6 +45,7 @@ func TestHandlerSeparatesMissingAssetsFromSPAFallback(t *testing.T) {
 	for _, path := range []string{
 		"/_admin/assets",
 		"/_admin/assets/missing.js",
+		"/_admin/assets/current/missing.js",
 	} {
 		missing := serveUI(handler, http.MethodGet, path)
 		if missing.Code != http.StatusNotFound {
@@ -69,24 +70,21 @@ func TestHandlerSeparatesMissingAssetsFromSPAFallback(t *testing.T) {
 	}
 }
 
-// Break caught: caching HTML or omitting the API-equivalent browser security policy from UI responses.
+// Break caught: caching unversioned UI files or omitting the API-equivalent browser security policy.
 func TestHandlerAppliesSecurityAndCachePolicy(t *testing.T) {
 	handler := NewHandler()
-	for _, tc := range []struct {
-		path         string
-		cacheControl string
-	}{
-		{path: "/_admin/", cacheControl: "no-store"},
-		{path: "/_admin/profiles", cacheControl: "no-store"},
-		{path: "/_admin/assets/app.js", cacheControl: "public, max-age=3600"},
-		{path: "/_admin/assets/styles.css", cacheControl: "public, max-age=3600"},
+	for _, path := range []string{
+		"/_admin/",
+		"/_admin/profiles",
+		"/_admin/assets/current/app.js",
+		"/_admin/assets/current/styles.css",
 	} {
-		t.Run(tc.path, func(t *testing.T) {
-			response := serveUI(handler, http.MethodGet, tc.path)
+		t.Run(path, func(t *testing.T) {
+			response := serveUI(handler, http.MethodGet, path)
 			if response.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 			}
-			assertUIHeaders(t, response, tc.cacheControl)
+			assertUIHeaders(t, response, "no-store")
 		})
 	}
 }
@@ -100,8 +98,8 @@ func TestHandlerRejectsNonGETMethods(t *testing.T) {
 	}{
 		{method: http.MethodPost, path: "/_admin/"},
 		{method: http.MethodPut, path: "/_admin/profiles"},
-		{method: http.MethodDelete, path: "/_admin/assets/app.js"},
-		{method: http.MethodHead, path: "/_admin/assets/styles.css"},
+		{method: http.MethodDelete, path: "/_admin/assets/current/app.js"},
+		{method: http.MethodHead, path: "/_admin/assets/current/styles.css"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := serveUI(handler, tc.method, tc.path)
@@ -124,8 +122,8 @@ func TestHandlerShellUsesOnlyLocalExternalAssets(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, required := range []string{
-		`<link rel="stylesheet" href="/_admin/assets/styles.css">`,
-		`<script type="module" src="/_admin/assets/app.js"></script>`,
+		`<link rel="stylesheet" href="/_admin/assets/current/styles.css">`,
+		`<script type="module" src="/_admin/assets/current/app.js"></script>`,
 	} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("shell does not contain %q", required)

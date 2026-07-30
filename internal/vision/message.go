@@ -1,4 +1,4 @@
-// Package vision parses and rewrites Anthropic image content blocks.
+// Package vision parses and rewrites supported image content blocks.
 package vision
 
 import (
@@ -36,14 +36,14 @@ type messageDocument struct {
 }
 
 func parseMessages(body []byte) (*messageDocument, error) {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(body, &root); err != nil {
-		return nil, fmt.Errorf("parse request: %w", err)
+	root, err := parseRequestRoot(body)
+	if err != nil {
+		return nil, err
 	}
-	if root == nil {
-		return nil, fmt.Errorf("request must be an object")
-	}
+	return parseMessagesRoot(root)
+}
 
+func parseMessagesRoot(root map[string]json.RawMessage) (*messageDocument, error) {
 	messagesRaw, ok := root["messages"]
 	if !ok {
 		return nil, fmt.Errorf("request messages is required")
@@ -249,6 +249,7 @@ func imageCacheKey(provider, model, prompt string, image imageRef) string {
 func scopedImageCacheKey(
 	secret []byte,
 	headers http.Header,
+	forwardedHeaders []string,
 	provider, model, prompt string,
 	image imageRef,
 ) string {

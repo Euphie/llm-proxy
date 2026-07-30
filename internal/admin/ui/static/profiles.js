@@ -1,8 +1,14 @@
 import { openConfigurationGenerator } from "./generator.js";
+import {
+  matchModelSuggestions,
+  parseTokenLimit,
+} from "./model-catalog.js";
+import { profileIconVisual } from "./visual.js";
 
 const defaultVision = {
   enabled: false,
   model: "sonnet",
+  unlisted_model_policy: "bypass",
   max_tokens: 2048,
   timeout: "2m",
   max_concurrency: 4,
@@ -31,6 +37,7 @@ export function defaultProfileDraft(protocol = "anthropic") {
       version: 1,
       protocol,
       upstream: "",
+      models: [],
       vision: { ...defaultVision },
       overload_rules: [],
     },
@@ -41,7 +48,14 @@ export function profilePayload(draft) {
   const config = draft.config || {};
   const protocol = String(draft.protocol ?? config.protocol ?? "anthropic");
   const vision = draft.vision || config.vision || {};
+  const models = draft.models || config.models || [];
   const rules = draft.overload_rules || config.overload_rules || [];
+  const unlistedModelPolicy = String(
+    vision.unlisted_model_policy || "bypass",
+  );
+  if (!["bypass", "enhance"].includes(unlistedModelPolicy)) {
+    throw new Error("未收录模型策略无效。");
+  }
 
   return {
     slug: String(draft.slug ?? ""),
@@ -52,9 +66,11 @@ export function profilePayload(draft) {
       version: Number(draft.version ?? config.version ?? 1),
       protocol,
       upstream: String(draft.upstream ?? config.upstream ?? ""),
+      models: modelCapabilitiesPayload(models),
       vision: {
-        enabled: protocol === "anthropic" && Boolean(vision.enabled),
+        enabled: Boolean(vision.enabled),
         model: String(vision.model ?? ""),
+        unlisted_model_policy: unlistedModelPolicy,
         max_tokens: Number(vision.max_tokens),
         timeout: String(vision.timeout ?? ""),
         max_concurrency: Number(vision.max_concurrency),
@@ -71,6 +87,22 @@ export function profilePayload(draft) {
       })),
     },
   };
+}
+
+export function addModelCapability(models) {
+  return [
+    ...models,
+    {
+      id: "",
+      context_window: "",
+      max_output_tokens: "",
+      supports_vision: "",
+    },
+  ];
+}
+
+export function removeModelCapability(models, index) {
+  return models.filter((_, current) => current !== index);
 }
 
 export function addRetryRule(rules) {
@@ -112,9 +144,19 @@ export function profileDraft(profile, defaultProfileID = 0) {
         profile?.config?.protocol ?? draft.config.protocol,
       ),
       upstream: String(profile?.config?.upstream ?? ""),
+      models: (profile?.config?.models || []).map((model) => ({
+        ...model,
+        id: String(model?.id ?? ""),
+        supports_vision:
+          typeof model?.supports_vision === "boolean"
+            ? model.supports_vision
+            : "",
+      })),
       vision: {
         ...defaultVision,
         ...(profile?.config?.vision || {}),
+        unlisted_model_policy:
+          profile?.config?.vision?.unlisted_model_policy || "bypass",
       },
       overload_rules: (profile?.config?.overload_rules || []).map((rule) => ({
         status: Number(rule.status),
@@ -148,31 +190,37 @@ export function renderProfileList(root, data, actions = {}) {
 
   const page = element("div", "stack");
   const heading = element("div", "page-heading cluster");
-  const titleGroup = element("div");
-  const title = textElement("h2", "Profiles");
   const description = textElement(
     "p",
     "管理协议、上游地址、视觉增强和容错规则。",
   );
   description.className = "muted";
-  titleGroup.append(title, description);
   const create = actionButton("新建 Profile", "button");
   create.addEventListener("click", () => actions.create?.());
-  heading.append(titleGroup, create);
+  heading.append(description, create);
 
   const alert = element("div", "error-banner");
   alert.setAttribute("role", "alert");
   alert.hidden = true;
 
-  const grid = element("div", "profile-grid");
+  const group = element("div", "profile-settings-group");
   for (const profile of profiles) {
-    const card = element("article", "card profile-card");
-    const header = element("div", "card-header");
-    const identity = element("div");
+    const card = element("article", "profile-settings-row");
+    const header = element("div", "card-header profile-row-header");
+    const identity = element("div", "profile-identity");
+    const visual = profileIconVisual(profile);
+    const icon = element(
+      "span",
+      `profile-icon ${visual.className}`,
+    );
+    icon.textContent = visual.label;
+    icon.setAttribute("aria-hidden", "true");
+    const identityCopy = element("div", "profile-identity-copy");
     const name = textElement("h2", String(profile.display_name ?? ""));
     const slug = textElement("p", String(profile.slug ?? ""));
     slug.className = "profile-slug";
-    identity.append(name, slug);
+    identityCopy.append(name, slug);
+    identity.append(icon, identityCopy);
 
     const badges = element("div", "cluster profile-badges");
     if (Number(profile.id) === defaultProfileID) {
@@ -266,10 +314,10 @@ export function renderProfileList(root, data, actions = {}) {
 
     buttons.append(edit, generate, copy, setDefault, toggle, remove);
     card.append(header, summary, metrics, buttons);
-    grid.append(card);
+    group.append(card);
   }
 
-  page.append(heading, alert, grid);
+  page.append(heading, alert, group);
   root.replaceChildren(page);
 }
 
@@ -362,10 +410,307 @@ export function renderProfileEditor(root, source, actions = {}) {
   });
   basic.append(basicGrid, slugWarning);
 
+  const models = editorSection("模型能力");
+  const modelHelp = textElement(
+    "p",
+    "选填。用于判断模型是否需要视觉增强，并为 Agent 生成上下文与自动压缩配置；不添加时不影响请求转发。",
+  );
+  modelHelp.className = "muted";
+  const modelList = element("div", "stack model-capability-list");
+  let modelRows = [];
+  let modelRecommendationStates = working.config.models.map(() => ({
+    autoValues: {},
+  }));
+
+  function syncModelCapabilities() {
+    working.config.models = modelRows.map((row) => ({
+      id: row.id.value,
+      context_window: row.contextWindow.value,
+      max_output_tokens: row.maxOutputTokens.value,
+      supports_vision: selectBooleanValue(row.supportsVision.value),
+    }));
+  }
+
+  function renderModelCapabilities() {
+    modelRows = [];
+    const rows = working.config.models.map((model, index) => {
+      const recommendationState = modelRecommendationStates[index] ?? {
+        autoValues: {},
+      };
+      modelRecommendationStates[index] = recommendationState;
+      const row = element("fieldset", "card model-capability-row");
+      const legend = textElement("legend", `模型 ${index + 1}`);
+      const fields = element("div", "form-grid model-capability-fields");
+      const id = fieldInput(
+        fields,
+        "模型 ID",
+        `model-${index}-id`,
+        model.id,
+        { required: true },
+      );
+      id.setAttribute("data-model-field", "id");
+      const contextWindow = fieldInput(
+        fields,
+        "上下文窗口",
+        `model-${index}-context-window`,
+        model.context_window,
+      );
+      contextWindow.setAttribute("data-model-field", "context_window");
+      contextWindow.setAttribute("placeholder", "例如 128K、256K、1M");
+      const maxOutputTokens = fieldInput(
+        fields,
+        "最大输出 Token",
+        `model-${index}-max-output-tokens`,
+        model.max_output_tokens,
+      );
+      maxOutputTokens.setAttribute(
+        "data-model-field",
+        "max_output_tokens",
+      );
+      maxOutputTokens.setAttribute("placeholder", "例如 128K、256K、1M");
+      const supportsVision = fieldSelect(
+        fields,
+        "支持视觉",
+        `model-${index}-supports-vision`,
+        booleanSelectValue(model.supports_vision),
+        [
+          ["", "请选择"],
+          ["true", "是"],
+          ["false", "否"],
+        ],
+      );
+      supportsVision.setAttribute("data-model-field", "supports_vision");
+
+      const recommendation = element(
+        "div",
+        "model-recommendation stack",
+      );
+      recommendation.id = `${id.id}-recommendations`;
+      recommendation.setAttribute("aria-live", "polite");
+      id.setAttribute("aria-controls", recommendation.id);
+
+      const capabilityControls = {
+        context_window: contextWindow,
+        max_output_tokens: maxOutputTokens,
+        supports_vision: supportsVision,
+      };
+      let renderedRecommendationQuery = null;
+      let renderedRecommendationSignature = null;
+      let renderedMatches = [];
+
+      function applyRecommendation(match) {
+        for (const [field, control] of Object.entries(capabilityControls)) {
+          const owned = Object.hasOwn(
+            recommendationState.autoValues,
+            field,
+          );
+          const oldAutoValue = recommendationState.autoValues[field];
+          const canWrite = control.value === "" ||
+            (owned && control.value === oldAutoValue);
+
+          if (!canWrite) {
+            if (owned) {
+              delete recommendationState.autoValues[field];
+            }
+            continue;
+          }
+
+          if (!Object.hasOwn(match.entry, field)) {
+            if (owned) {
+              control.value = "";
+              delete recommendationState.autoValues[field];
+            }
+            continue;
+          }
+
+          const value = field === "supports_vision"
+            ? booleanSelectValue(match.entry[field])
+            : String(match.entry[field]);
+          control.value = value;
+          recommendationState.autoValues[field] = value;
+        }
+      }
+
+      function clearAutomaticValues() {
+        for (const [field, control] of Object.entries(capabilityControls)) {
+          if (!Object.hasOwn(recommendationState.autoValues, field)) {
+            continue;
+          }
+          if (control.value === recommendationState.autoValues[field]) {
+            control.value = "";
+          }
+          delete recommendationState.autoValues[field];
+        }
+      }
+
+      function renderRecommendation(match) {
+        const card = element(
+          "article",
+          "card model-recommendation-card stack",
+        );
+        const header = element("div", "cluster model-recommendation-header");
+        const name = textElement(
+          "h3",
+          reliableValue(match.entry.name),
+        );
+        const lifecycle = textElement(
+          "span",
+          `生命周期：${lifecycleLabel(match.entry.lifecycle)}`,
+        );
+        lifecycle.className = "badge";
+        header.append(name, lifecycle);
+
+        const provider = textElement(
+          "p",
+          `提供方：${reliableValue(match.entry.provider)}`,
+        );
+        const details = textElement(
+          "p",
+          `匹配：${suggestionLabel(match.match)} · 来源：${
+            reliableValue(match.entry.source?.name)
+          }`,
+        );
+        const dates = textElement(
+          "p",
+          `获取：${reliableValue(match.entry.source?.retrieved)} · 更新：${
+            reliableValue(match.entry.lastUpdated)
+          }`,
+        );
+        const capabilities = textElement(
+          "p",
+          `上下文窗口：${recommendedField(match.entry, "context_window")} · ` +
+            `最大输出 Token：${
+              recommendedField(match.entry, "max_output_tokens")
+            } · 视觉：${recommendedVision(match.entry)}`,
+        );
+        provider.className = "muted model-recommendation-provider";
+        details.className = "muted model-recommendation-source";
+        dates.className = "muted model-recommendation-meta";
+        capabilities.className = "model-recommendation-capabilities";
+        card.append(header, provider, details, dates, capabilities);
+
+        if (!match.autoApply) {
+          const apply = actionButton(
+            `应用 ${reliableValue(match.entry.name)} 推荐值`,
+            "button-secondary",
+          );
+          apply.addEventListener("click", () => applyRecommendation(match));
+          card.append(apply);
+        }
+        return card;
+      }
+
+      function calculateRecommendations() {
+        const query = String(id.value);
+        const matches = matchModelSuggestions(query, { limit: 5 });
+        const signature = matches.map((match) => [
+          match.entry.canonicalId ?? match.entry.id ?? "",
+          match.match,
+          match.autoApply ? "1" : "0",
+        ].join("\u0000")).join("\u0001");
+        return { query, matches, signature };
+      }
+
+      function renderRecommendations(result) {
+        if (
+          result.query === renderedRecommendationQuery &&
+          result.signature === renderedRecommendationSignature
+        ) {
+          return;
+        }
+        recommendation.replaceChildren(
+          ...result.matches.map(renderRecommendation),
+        );
+        renderedRecommendationQuery = result.query;
+        renderedRecommendationSignature = result.signature;
+        renderedMatches = result.matches;
+      }
+
+      function currentRecommendations() {
+        if (String(id.value) === renderedRecommendationQuery) {
+          return renderedMatches;
+        }
+        const result = calculateRecommendations();
+        renderRecommendations(result);
+        return result.matches;
+      }
+
+      function refreshRecommendations() {
+        const result = calculateRecommendations();
+        renderRecommendations(result);
+      }
+
+      function commitRecommendations() {
+        const matches = currentRecommendations();
+        if (
+          matches.length === 1 &&
+          matches[0].autoApply
+        ) {
+          applyRecommendation(matches[0]);
+        } else {
+          clearAutomaticValues();
+        }
+      }
+
+      for (const [field, control] of Object.entries(capabilityControls)) {
+        const releaseOwnership = () => {
+          delete recommendationState.autoValues[field];
+        };
+        control.addEventListener("input", releaseOwnership);
+        control.addEventListener("change", releaseOwnership);
+      }
+      id.addEventListener("input", (event) => {
+        refreshRecommendations();
+        if (event.inputType === "insertFromPaste") {
+          commitRecommendations();
+        }
+      });
+      id.addEventListener("change", commitRecommendations);
+      id.addEventListener("blur", commitRecommendations);
+      refreshRecommendations();
+
+      const controls = element("div", "cluster model-capability-actions");
+      const remove = actionButton("删除模型", "button-danger");
+      remove.addEventListener("click", () => {
+        syncModelCapabilities();
+        working.config.models = removeModelCapability(
+          working.config.models,
+          index,
+        );
+        modelRecommendationStates = modelRecommendationStates.filter(
+          (_, current) => current !== index,
+        );
+        renderModelCapabilities();
+      });
+      controls.append(remove);
+      row.append(legend, fields, recommendation, controls);
+      modelRows.push({
+        id,
+        contextWindow,
+        maxOutputTokens,
+        supportsVision,
+      });
+      return row;
+    });
+    modelList.replaceChildren(...rows);
+  }
+
+  renderModelCapabilities();
+  const addModel = actionButton("添加模型", "button-secondary");
+  addModel.addEventListener("click", () => {
+    syncModelCapabilities();
+    working.config.models = addModelCapability(working.config.models);
+    modelRecommendationStates.push({ autoValues: {} });
+    renderModelCapabilities();
+  });
+  const modelListActions = element("div", "cluster model-list-actions");
+  modelListActions.append(addModel);
+  models.append(modelHelp, modelList, modelListActions);
+
   const vision = editorSection("视觉增强");
   const visionNote = textElement(
     "p",
-    "视觉预处理目前需要 Anthropic 协议。",
+    "",
   );
   visionNote.className = "warning-banner";
   const visionControls = element("div", "vision-controls stack");
@@ -380,9 +725,19 @@ export function renderProfileEditor(root, source, actions = {}) {
   const visionGrid = element("div", "form-grid details-content");
   const visionModel = fieldInput(
     visionGrid,
-    "模型",
+    "识图模型",
     "vision_model",
     working.config.vision.model,
+  );
+  const visionUnlistedModelPolicy = fieldSelect(
+    visionGrid,
+    "未收录模型",
+    "vision_unlisted_model_policy",
+    working.config.vision.unlisted_model_policy || "bypass",
+    [
+      ["bypass", "默认视为支持视觉，不增强"],
+      ["enhance", "默认视为不支持视觉，使用增强"],
+    ],
   );
   const visionMaxTokens = fieldInput(
     visionGrid,
@@ -558,6 +913,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   footer.append(save, cancel);
 
   function syncForm() {
+    syncModelCapabilities();
     syncRetryRules();
     working.display_name = displayName.value;
     working.slug = slug.value;
@@ -567,9 +923,9 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.protocol = protocol.value;
     working.config.upstream = upstream.value;
     working.config.vision = {
-      enabled:
-        protocol.value === "anthropic" && visionEnabled.checked,
+      enabled: visionEnabled.checked,
       model: visionModel.value,
+      unlisted_model_policy: visionUnlistedModelPolicy.value || "bypass",
       max_tokens: visionMaxTokens.value,
       timeout: visionTimeout.value,
       max_concurrency: visionMaxConcurrency.value,
@@ -581,13 +937,12 @@ export function renderProfileEditor(root, source, actions = {}) {
 
   function applyProtocolState() {
     const isAnthropic = protocol.value === "anthropic";
-    visionControls.hidden = !isAnthropic;
-    visionNote.hidden = isAnthropic;
-    visionEnabled.disabled = !isAnthropic;
-    if (!isAnthropic) {
-      visionEnabled.checked = false;
-      working.config.vision.enabled = false;
-    }
+    visionControls.hidden = false;
+    visionNote.hidden = false;
+    visionNote.textContent = isAnthropic
+      ? "Anthropic 协议处理 /v1/messages 中的图片内容块。"
+      : "OpenAI 协议仅处理 /v1/responses 输入消息里的 input_image；其他 OpenAI 路径不处理。";
+    visionEnabled.disabled = false;
   }
 
   protocol.addEventListener("change", () => {
@@ -613,13 +968,142 @@ export function renderProfileEditor(root, source, actions = {}) {
     save.disabled = true;
     try {
       await runEditorAction(alert, () => actions.save?.(profilePayload(working)));
+    } catch {
     } finally {
       save.disabled = false;
     }
   });
 
-  form.append(basic, vision, retries, generator, alert, footer);
+  form.append(basic, models, vision, retries, generator, alert, footer);
   root.replaceChildren(form);
+}
+
+function modelCapabilitiesPayload(models) {
+  const ids = new Set();
+  return models.map((model, index) => {
+    const id = String(model?.id ?? "");
+    if (id.trim() === "") {
+      throw new Error(`模型 ${index + 1}：模型 ID 不能为空。`);
+    }
+    if (id.trim() !== id) {
+      throw new Error(`模型 ${index + 1}：模型 ID 前后不能有空格。`);
+    }
+    if (ids.has(id)) {
+      throw new Error(`模型 ID 不能重复：${id}`);
+    }
+    ids.add(id);
+    if (typeof model?.supports_vision !== "boolean") {
+      throw new Error(`模型 ${id}：请选择是否支持视觉。`);
+    }
+
+    let contextWindow;
+    let maxOutputTokens;
+    try {
+      contextWindow = parseTokenLimit(
+        model.context_window,
+        { optional: true },
+      );
+    } catch {
+      throw new Error(`模型 ${id}：上下文窗口格式无效。`);
+    }
+    try {
+      maxOutputTokens = parseTokenLimit(
+        model.max_output_tokens,
+        { optional: true },
+      );
+    } catch {
+      throw new Error(`模型 ${id}：最大输出 Token 格式无效。`);
+    }
+    if (
+      contextWindow !== null &&
+      maxOutputTokens !== null &&
+      maxOutputTokens >= contextWindow
+    ) {
+      throw new Error(`模型 ${id}：最大输出 Token 必须小于上下文窗口。`);
+    }
+
+    const result = {
+      id,
+      supports_vision: model.supports_vision,
+    };
+    if (contextWindow !== null) {
+      result.context_window = contextWindow;
+    }
+    if (maxOutputTokens !== null) {
+      result.max_output_tokens = maxOutputTokens;
+    }
+    return result;
+  });
+}
+
+function booleanSelectValue(value) {
+  if (value === true) {
+    return "true";
+  }
+  if (value === false) {
+    return "false";
+  }
+  return "";
+}
+
+function selectBooleanValue(value) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return "";
+}
+
+function suggestionLabel(match) {
+  switch (match) {
+    case "exact":
+      return "精确匹配";
+    case "alias":
+      return "别名匹配";
+    case "compatibility":
+      return "兼容别名匹配";
+    case "wrapper":
+      return "包装器匹配";
+    case "snapshot":
+      return "快照匹配";
+    case "family":
+      return "同系列候选";
+    default:
+      return "同系列候选";
+  }
+}
+
+function lifecycleLabel(lifecycle) {
+  switch (lifecycle) {
+    case "stable":
+      return "稳定";
+    case "preview":
+      return "预览";
+    case "deprecated":
+      return "已弃用";
+    default:
+      return "暂无可靠数据";
+  }
+}
+
+function reliableValue(value) {
+  const text = String(value ?? "").trim();
+  return text || "暂无可靠数据";
+}
+
+function recommendedField(entry, field) {
+  return Object.hasOwn(entry, field)
+    ? String(entry[field])
+    : "暂无可靠数据";
+}
+
+function recommendedVision(entry) {
+  if (!Object.hasOwn(entry, "supports_vision")) {
+    return "暂无可靠数据";
+  }
+  return entry.supports_vision ? "是" : "否";
 }
 
 function openCopyDialog(root, profile, actions, pageAlert) {

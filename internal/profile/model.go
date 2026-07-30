@@ -28,14 +28,15 @@ const (
 )
 
 type VisionConfig struct {
-	Enabled         bool   `json:"enabled"`
-	Model           string `json:"model"`
-	MaxTokens       int    `json:"max_tokens"`
-	Timeout         string `json:"timeout"`
-	MaxConcurrency  int    `json:"max_concurrency"`
-	CacheTTL        string `json:"cache_ttl"`
-	CacheMaxEntries int    `json:"cache_max_entries"`
-	Prompt          string `json:"prompt,omitempty"`
+	Enabled             bool                `json:"enabled"`
+	Model               string              `json:"model"`
+	UnlistedModelPolicy UnlistedModelPolicy `json:"unlisted_model_policy"`
+	MaxTokens           int                 `json:"max_tokens"`
+	Timeout             string              `json:"timeout"`
+	MaxConcurrency      int                 `json:"max_concurrency"`
+	CacheTTL            string              `json:"cache_ttl"`
+	CacheMaxEntries     int                 `json:"cache_max_entries"`
+	Prompt              string              `json:"prompt,omitempty"`
 }
 
 type RetryRule struct {
@@ -47,11 +48,12 @@ type RetryRule struct {
 }
 
 type Config struct {
-	Version       int          `json:"version"`
-	Protocol      Protocol     `json:"protocol"`
-	Upstream      string       `json:"upstream"`
-	Vision        VisionConfig `json:"vision"`
-	OverloadRules []RetryRule  `json:"overload_rules"`
+	Version       int                     `json:"version"`
+	Protocol      Protocol                `json:"protocol"`
+	Upstream      string                  `json:"upstream"`
+	Models        []ModelCapabilityConfig `json:"models,omitempty"`
+	Vision        VisionConfig            `json:"vision"`
+	OverloadRules []RetryRule             `json:"overload_rules"`
 }
 
 type Record struct {
@@ -65,14 +67,15 @@ type Record struct {
 }
 
 type VisionRuntime struct {
-	Enabled         bool
-	Model           string
-	MaxTokens       int
-	Timeout         time.Duration
-	MaxConcurrency  int
-	CacheTTL        time.Duration
-	CacheMaxEntries int
-	Prompt          string
+	Enabled             bool
+	Model               string
+	UnlistedModelPolicy UnlistedModelPolicy
+	MaxTokens           int
+	Timeout             time.Duration
+	MaxConcurrency      int
+	CacheTTL            time.Duration
+	CacheMaxEntries     int
+	Prompt              string
 }
 
 type Runtime struct {
@@ -82,6 +85,7 @@ type Runtime struct {
 	Enabled       bool
 	Protocol      Protocol
 	Upstream      string
+	Models        ModelCatalog
 	Vision        VisionRuntime
 	OverloadRules []provider.Rule
 }
@@ -118,7 +122,11 @@ func (r Record) Resolve() (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
-	vision, err := resolveVision(r.Config.Protocol, r.Config.Vision)
+	vision, err := resolveVision(r.Config.Vision)
+	if err != nil {
+		return Runtime{}, err
+	}
+	models, err := resolveModelCatalog(r.Config.Models)
 	if err != nil {
 		return Runtime{}, err
 	}
@@ -134,6 +142,7 @@ func (r Record) Resolve() (Runtime, error) {
 		Enabled:       r.Enabled,
 		Protocol:      r.Config.Protocol,
 		Upstream:      upstream,
+		Models:        models,
 		Vision:        vision,
 		OverloadRules: rules,
 	}, nil
@@ -151,7 +160,21 @@ func resolveUpstream(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func resolveVision(protocol Protocol, config VisionConfig) (VisionRuntime, error) {
+func resolveVision(config VisionConfig) (VisionRuntime, error) {
+	model := strings.TrimSpace(config.Model)
+	if config.Enabled && model == "" {
+		return VisionRuntime{}, fmt.Errorf(
+			"%w: vision model is required when vision is enabled",
+			ErrInvalidConfig,
+		)
+	}
+	policy := config.UnlistedModelPolicy
+	if policy == "" {
+		policy = UnlistedModelBypass
+	}
+	if policy != UnlistedModelBypass && policy != UnlistedModelEnhance {
+		return VisionRuntime{}, fmt.Errorf("%w: unsupported unlisted model policy %q", ErrInvalidConfig, policy)
+	}
 	timeout, err := time.ParseDuration(config.Timeout)
 	if err != nil {
 		return VisionRuntime{}, fmt.Errorf("%w: vision timeout: %v", ErrInvalidConfig, err)
@@ -160,23 +183,21 @@ func resolveVision(protocol Protocol, config VisionConfig) (VisionRuntime, error
 	if err != nil {
 		return VisionRuntime{}, fmt.Errorf("%w: vision cache TTL: %v", ErrInvalidConfig, err)
 	}
-	if config.Enabled && protocol == ProtocolOpenAI {
-		return VisionRuntime{}, fmt.Errorf("%w: vision is only supported by anthropic", ErrInvalidConfig)
-	}
 	if config.Enabled && (config.MaxTokens <= 0 || timeout <= 0 || config.MaxConcurrency <= 0 ||
 		cacheTTL <= 0 || config.CacheMaxEntries <= 0) {
 		return VisionRuntime{}, fmt.Errorf("%w: vision limits must be positive", ErrInvalidConfig)
 	}
 
 	return VisionRuntime{
-		Enabled:         config.Enabled,
-		Model:           config.Model,
-		MaxTokens:       config.MaxTokens,
-		Timeout:         timeout,
-		MaxConcurrency:  config.MaxConcurrency,
-		CacheTTL:        cacheTTL,
-		CacheMaxEntries: config.CacheMaxEntries,
-		Prompt:          config.Prompt,
+		Enabled:             config.Enabled,
+		Model:               model,
+		UnlistedModelPolicy: policy,
+		MaxTokens:           config.MaxTokens,
+		Timeout:             timeout,
+		MaxConcurrency:      config.MaxConcurrency,
+		CacheTTL:            cacheTTL,
+		CacheMaxEntries:     config.CacheMaxEntries,
+		Prompt:              config.Prompt,
 	}, nil
 }
 

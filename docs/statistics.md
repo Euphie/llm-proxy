@@ -36,9 +36,9 @@ llm-proxy 捕获成功 Upstream 响应的内容；只要已捕获字节包含可
 Anthropic 的非流式 JSON 和 SSE 会解析模型、输入/输出 Token，以及
 cache read / cache creation 输入 Token。
 
-OpenAI 非流式响应会解析 prompt、completion 和 cached prompt Token。流式响应
-只有在 Upstream 最终事件包含 usage 时才能统计；Chat Completions 客户端通常需要
-请求：
+OpenAI Chat Completions 解析 `usage.prompt_tokens`、
+`usage.completion_tokens` 和 `usage.prompt_tokens_details.cached_tokens`。
+流式客户端通常需要请求：
 
 ```json
 {
@@ -49,9 +49,16 @@ OpenAI 非流式响应会解析 prompt、completion 和 cached prompt Token。�
 }
 ```
 
+OpenAI Responses 解析 `usage.input_tokens`、`usage.output_tokens` 和
+`usage.input_tokens_details.cached_tokens`，并将
+`usage.input_tokens_details.cache_write_tokens` 计入 cache creation；流式响应
+通常从 `response.completed.response.usage` 获取这些字段。`total_tokens` 不单独
+存储，页面仍以输入加输出计算总 Token；`output_tokens_details.reasoning_tokens`
+也不单独展示。
+
 Upstream 非成功响应或已捕获字节中没有可解析 usage 时不会产生记录。下游取消或
 流读取中断通常会让捕获不完整；但如果 usage 已在中断前到达，仍可能异步落库。
-llm-proxy 不估算缺失 Token。
+输入和输出同时为零时也不会产生记录。llm-proxy 不估算缺失 Token。
 
 ## 持久化与运维
 

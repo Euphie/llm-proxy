@@ -122,6 +122,97 @@ func TestCoordinatorSerializesCommitThroughRuntimePublish(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPublishesModelCapabilitySnapshotAtomically(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	store := profile.NewStore(db)
+	nativeVision := true
+	config := profile.NewConfig(profile.ProtocolAnthropic, "https://upstream.example")
+	config.Models = []profile.ModelCapabilityConfig{{
+		ID:             "main-model",
+		SupportsVision: &nativeVision,
+	}}
+	initial, err := store.Save(context.Background(), profile.SaveInput{
+		Slug:        "coding",
+		DisplayName: "Coding",
+		Enabled:     true,
+		Config:      config,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	builder := func(record profile.Record) (http.Handler, error) {
+		runtime, err := record.Resolve()
+		if err != nil {
+			return nil, err
+		}
+		capability, ok := runtime.Models.Lookup("main-model")
+		if !ok {
+			return nil, errors.New("main-model capability missing")
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if capability.SupportsVision {
+				close(oldStarted)
+				<-releaseOld
+				_, _ = io.WriteString(w, "bypass")
+				return
+			}
+			_, _ = io.WriteString(w, "enhance")
+		}), nil
+	}
+	registry := NewRegistry()
+	if err := registry.Load([]profile.Record{initial}, initial.ID, builder); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(registry)
+
+	oldResponse := httptest.NewRecorder()
+	oldDone := make(chan struct{})
+	go func() {
+		router.ServeHTTP(
+			oldResponse,
+			httptest.NewRequest(http.MethodPost, "/v1/messages", nil),
+		)
+		close(oldDone)
+	}()
+	<-oldStarted
+
+	nativeVision = false
+	config.Models[0].SupportsVision = &nativeVision
+	coordinator := NewCoordinator(store, registry, builder)
+	if _, err := coordinator.Save(context.Background(), profile.SaveInput{
+		ID:          initial.ID,
+		Slug:        initial.Slug,
+		DisplayName: initial.DisplayName,
+		Enabled:     true,
+		Config:      config,
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	nextResponse := httptest.NewRecorder()
+	router.ServeHTTP(
+		nextResponse,
+		httptest.NewRequest(http.MethodPost, "/v1/messages", nil),
+	)
+	if nextResponse.Code != http.StatusOK || nextResponse.Body.String() != "enhance" {
+		t.Fatalf("next request status=%d body=%q", nextResponse.Code, nextResponse.Body.String())
+	}
+
+	close(releaseOld)
+	<-oldDone
+	if oldResponse.Code != http.StatusOK || oldResponse.Body.String() != "bypass" {
+		t.Fatalf("in-flight request status=%d body=%q", oldResponse.Code, oldResponse.Body.String())
+	}
+}
+
 func TestCoordinatorResyncsAfterIncrementalPublishFailure(t *testing.T) {
 	db, err := database.Open(t.TempDir())
 	if err != nil {

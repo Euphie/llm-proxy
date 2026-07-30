@@ -69,6 +69,155 @@ func TestPreprocessorPassesThroughRequestWithoutImages(t *testing.T) {
 	}
 }
 
+func TestPreprocessorGatesEnhancementByMainModel(t *testing.T) {
+	nativeCatalog := profile.ModelCatalog{
+		"Kimi-K2.5": {ID: "Kimi-K2.5", SupportsVision: true},
+	}
+	textCatalog := profile.ModelCatalog{
+		"GLM-5": {ID: "GLM-5", SupportsVision: false},
+	}
+	tests := []struct {
+		name          string
+		requestModel  any
+		models        profile.ModelCatalog
+		policy        profile.UnlistedModelPolicy
+		wantDescribe  int
+		wantSameBytes bool
+	}{
+		{"listed native vision", "Kimi-K2.5", nativeCatalog, profile.UnlistedModelEnhance, 0, true},
+		{"listed needs enhancement", "GLM-5", textCatalog, profile.UnlistedModelBypass, 1, false},
+		{"unlisted bypass", "unknown", textCatalog, profile.UnlistedModelBypass, 0, true},
+		{"unlisted enhance", "unknown", textCatalog, profile.UnlistedModelEnhance, 1, false},
+		{"case mismatch follows unlisted policy", "glm-5", textCatalog, profile.UnlistedModelBypass, 0, true},
+		{"missing model bypasses", nil, textCatalog, profile.UnlistedModelEnhance, 0, true},
+		{"non-string model bypasses", 42, textCatalog, profile.UnlistedModelEnhance, 0, true},
+		{"empty model bypasses", "", textCatalog, profile.UnlistedModelEnhance, 0, true},
+	}
+	protocols := []struct {
+		name     string
+		protocol profile.Protocol
+		body     func(any) []byte
+	}{
+		{"messages", profile.ProtocolAnthropic, anthropicGateRequest},
+		{"responses", profile.ProtocolOpenAI, responsesGateRequest},
+	}
+
+	for _, protocol := range protocols {
+		t.Run(protocol.name, func(t *testing.T) {
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					fake := &fakeDescriber{describe: func(imageRef) (string, error) {
+						return "description", nil
+					}}
+					p := New(profile.Runtime{
+						Slug:     "provider",
+						Protocol: protocol.protocol,
+						Models:   test.models,
+						Vision: profile.VisionRuntime{
+							Model:               "vision-model",
+							UnlistedModelPolicy: test.policy,
+							Prompt:              "describe",
+							Timeout:             time.Second,
+							MaxConcurrency:      2,
+						},
+					}, nil, nil)
+					p.describer = fake
+					p.cache = newResultCache(32, time.Minute)
+					body := protocol.body(test.requestModel)
+
+					got, err := p.Process(context.Background(), nil, body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if calls, _, _ := fake.snapshot(); calls != test.wantDescribe {
+						t.Fatalf("Describe calls=%d, want %d", calls, test.wantDescribe)
+					}
+					if same := bytes.Equal(got, body); same != test.wantSameBytes {
+						t.Fatalf("byte-identical=%v, want %v\ngot:  %s\nwant: %s", same, test.wantSameBytes, got, body)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPreprocessorBypassDoesNotValidateImages(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol profile.Protocol
+		body     []byte
+	}{
+		{
+			"messages",
+			profile.ProtocolAnthropic,
+			[]byte(`{ "model":"native", "messages":[{"content":[{"type":"image","source":{"type":"url"}}]}] }`),
+		},
+		{
+			"responses",
+			profile.ProtocolOpenAI,
+			[]byte(`{ "model":"native", "input":[{"role":"user","content":[{"type":"input_image"}]}] }`),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeDescriber{describe: func(imageRef) (string, error) {
+				t.Fatal("Describe called for bypassed request")
+				return "", nil
+			}}
+			p := New(profile.Runtime{
+				Slug:     "provider",
+				Protocol: test.protocol,
+				Models: profile.ModelCatalog{
+					"native": {ID: "native", SupportsVision: true},
+				},
+				Vision: profile.VisionRuntime{
+					Model:               "vision-model",
+					UnlistedModelPolicy: profile.UnlistedModelEnhance,
+					Timeout:             time.Second,
+					MaxConcurrency:      1,
+				},
+			}, nil, nil)
+			p.describer = fake
+			p.cache = nil
+
+			got, err := p.Process(context.Background(), nil, test.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, test.body) {
+				t.Fatalf("body changed:\n got: %s\nwant: %s", got, test.body)
+			}
+		})
+	}
+}
+
+func TestPreprocessorRejectsMalformedTopLevelJSONBeforeModelGate(t *testing.T) {
+	for _, protocol := range []profile.Protocol{
+		profile.ProtocolAnthropic,
+		profile.ProtocolOpenAI,
+	} {
+		t.Run(string(protocol), func(t *testing.T) {
+			p := New(profile.Runtime{
+				Slug:     "provider",
+				Protocol: protocol,
+				Vision: profile.VisionRuntime{
+					Model:               "vision-model",
+					UnlistedModelPolicy: profile.UnlistedModelBypass,
+					Timeout:             time.Second,
+					MaxConcurrency:      1,
+				},
+			}, nil, nil)
+			got, err := p.Process(context.Background(), nil, []byte(`{"model":`))
+			if got != nil {
+				t.Fatalf("body=%s, want nil", got)
+			}
+			if status := HTTPStatus(err); status != http.StatusBadRequest {
+				t.Fatalf("status=%d err=%v", status, err)
+			}
+		})
+	}
+}
+
 func TestPreprocessorPreservesImageOrderAcrossConcurrentCompletion(t *testing.T) {
 	thirdDone := make(chan struct{})
 	secondDone := make(chan struct{})
@@ -204,7 +353,7 @@ func TestPreprocessorCoalescesIdenticalImages(t *testing.T) {
 }
 
 func TestPreprocessorPartitionsSequentialCacheByForwardedHeaders(t *testing.T) {
-	for _, headerName := range forwardedHeaders {
+	for _, headerName := range anthropicForwardedHeaders {
 		t.Run(headerName, func(t *testing.T) {
 			var calls atomic.Int32
 			d := describerFunc(func(_ context.Context, headers http.Header, _ imageRef) (string, error) {
@@ -402,6 +551,7 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 	defer server.Close()
 
 	cfg := testVisionConfig(server.URL)
+	cfg.Vision.UnlistedModelPolicy = profile.UnlistedModelEnhance
 	cfg.Vision.Prompt = promptSecret
 	cfg.Vision.MaxConcurrency = 3
 	cfg.Vision.CacheTTL = time.Minute
@@ -531,6 +681,7 @@ func TestVisionDebugLogsContent(t *testing.T) {
 	defer server.Close()
 
 	cfg := testVisionConfig(server.URL)
+	cfg.Vision.UnlistedModelPolicy = profile.UnlistedModelEnhance
 	cfg.Vision.MaxConcurrency = 1
 	cfg.Vision.CacheTTL = time.Minute
 	cfg.Vision.CacheMaxEntries = 8
@@ -828,7 +979,7 @@ func TestPreprocessorClassifiesInvalidRequestsAsBadRequest(t *testing.T) {
 	p := testPreprocessor(1, fake)
 	tests := map[string][]byte{
 		"invalid JSON": []byte(`{"messages":`),
-		"invalid source": []byte(`{"messages":[{"content":[
+		"invalid source": []byte(`{"model":"main","messages":[{"content":[
 			{"type":"image","source":{"type":"url"}}
 		]}]}`),
 	}
@@ -895,10 +1046,11 @@ func testPreprocessor(maxConcurrency int, d describer) *Preprocessor {
 
 func testPreprocessorWithTimeout(maxConcurrency int, timeout time.Duration, d describer) *Preprocessor {
 	return newPreprocessor("provider", profile.VisionRuntime{
-		Model:          "vision-model",
-		Prompt:         "describe",
-		Timeout:        timeout,
-		MaxConcurrency: maxConcurrency,
+		Model:               "vision-model",
+		UnlistedModelPolicy: profile.UnlistedModelEnhance,
+		Prompt:              "describe",
+		Timeout:             timeout,
+		MaxConcurrency:      maxConcurrency,
 	}, d, newResultCache(32, time.Minute))
 }
 
@@ -928,7 +1080,7 @@ func (e *signalingDeadlineError) Is(target error) bool {
 }
 
 func testImageKey(p *Preprocessor, payload string) string {
-	return scopedImageCacheKey(p.cacheKey, nil, p.profile, p.model, p.prompt, imageRef{
+	return scopedImageCacheKey(p.cacheKey, nil, p.headers, p.profile, p.model, p.prompt, imageRef{
 		sourceType:   "url",
 		cachePayload: payload,
 	})
@@ -955,6 +1107,43 @@ func imageRequest(payloads ...string) []byte {
 	if err != nil {
 		panic(err)
 	}
+	return body
+}
+
+func anthropicGateRequest(model any) []byte {
+	request := map[string]any{
+		"messages": []any{map[string]any{
+			"role": "user",
+			"content": []any{map[string]any{
+				"type": "image",
+				"source": map[string]any{
+					"type": "url",
+					"url":  "https://example.test/image.png",
+				},
+			}},
+		}},
+	}
+	if model != nil {
+		request["model"] = model
+	}
+	body, _ := json.Marshal(request)
+	return body
+}
+
+func responsesGateRequest(model any) []byte {
+	request := map[string]any{
+		"input": []any{map[string]any{
+			"role": "user",
+			"content": []any{map[string]any{
+				"type":      "input_image",
+				"image_url": "https://example.test/image.png",
+			}},
+		}},
+	}
+	if model != nil {
+		request["model"] = model
+	}
+	body, _ := json.Marshal(request)
 	return body
 }
 

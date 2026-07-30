@@ -341,6 +341,46 @@ func TestStoreRejectsInvalidInputBeforePersisting(t *testing.T) {
 	}
 }
 
+func TestStoreRoundTripsModelCapabilities(t *testing.T) {
+	db := openStoreTestDB(t)
+	store := NewStore(db)
+	contextWindow := 128000
+	maxOutputTokens := 8192
+	supportsVision := true
+	doesNotSupportVision := false
+	config := NewConfig(ProtocolAnthropic, "https://example.test")
+	config.Models = []ModelCapabilityConfig{
+		{ID: "GLM-5", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutputTokens, SupportsVision: &supportsVision},
+		{ID: "glm-5", SupportsVision: &doesNotSupportVision},
+	}
+	config.Vision.UnlistedModelPolicy = UnlistedModelEnhance
+
+	saved, err := store.Save(context.Background(), SaveInput{
+		Slug: "models", DisplayName: "Models", Enabled: true, Config: config,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Get(context.Background(), saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Config.Vision.UnlistedModelPolicy != UnlistedModelEnhance || len(loaded.Config.Models) != 2 {
+		t.Fatalf("config=%+v", loaded.Config)
+	}
+	first := loaded.Config.Models[0]
+	if first.ID != "GLM-5" || first.ContextWindow == nil || *first.ContextWindow != contextWindow ||
+		first.MaxOutputTokens == nil || *first.MaxOutputTokens != maxOutputTokens ||
+		first.SupportsVision == nil || !*first.SupportsVision {
+		t.Fatalf("first=%+v", first)
+	}
+	second := loaded.Config.Models[1]
+	if second.ID != "glm-5" || second.ContextWindow != nil || second.MaxOutputTokens != nil ||
+		second.SupportsVision == nil || *second.SupportsVision {
+		t.Fatalf("second=%+v", second)
+	}
+}
+
 func TestStoreRejectsUnsupportedPersistedConfigVersion(t *testing.T) {
 	db := openStoreTestDB(t)
 	ctx := context.Background()

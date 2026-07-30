@@ -2,7 +2,7 @@ BIN     := llm-proxy
 CMD     := ./cmd/llm-proxy
 IMAGE   := llm-proxy
 
-.PHONY: build run test vet test-e2e docker-build docker-up docker-down clean
+.PHONY: build run test vet test-e2e docker-build docker-up docker-down clean update-model-catalog
 
 ## build: compile binary to ./bin/llm-proxy
 build:
@@ -27,10 +27,21 @@ test-ui:
 		-v "$(CURDIR)":/src:ro -w /src \
 		node:24-alpine \
 		node --test \
+			scripts/model-catalog-lib.test.mjs \
+			scripts/model-catalog-update-lib.test.mjs \
+			internal/admin/ui/static/visual.test.mjs \
+			internal/admin/ui/static/model-catalog.test.mjs \
 			internal/admin/ui/static/auth.test.mjs \
 			internal/admin/ui/static/profiles.test.mjs \
 			internal/admin/ui/static/generator.test.mjs \
 			internal/admin/ui/static/stats.test.mjs
+
+## update-model-catalog: refresh the pinned Models.dev browser snapshot
+update-model-catalog:
+	docker run --rm \
+		-v "$(CURDIR)":/src -w /src \
+		node:24-alpine \
+		node scripts/update-model-catalog.mjs
 
 ## test-e2e: run the isolated Chromium admin workflow
 test-e2e:

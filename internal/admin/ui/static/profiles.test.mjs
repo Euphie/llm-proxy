@@ -4,11 +4,13 @@ import test from "node:test";
 import { api } from "./api.js";
 import { bootstrap } from "./app.js";
 import {
+  addModelCapability,
   addRetryRule,
   defaultProfileDraft,
   moveRetryRule,
   profileDraft,
   profilePayload,
+  removeModelCapability,
   removeRetryRule,
   renderProfileEditor,
   renderProfileList,
@@ -20,10 +22,167 @@ test("new Anthropic Profile contains explicit defaults", () => {
   assert.equal(draft.config.protocol, "anthropic");
   assert.equal(draft.config.vision.model, "sonnet");
   assert.equal(draft.config.vision.timeout, "2m");
+  assert.equal(draft.config.vision.unlisted_model_policy, "bypass");
+  assert.deepEqual(draft.config.models, []);
   assert.deepEqual(draft.config.overload_rules, []);
 });
 
-test("OpenAI draft disables vision", () => {
+test("saved Profile model capabilities and unlisted policy remain authoritative in its draft", () => {
+  const draft = profileDraft(profileFixture({
+    config: {
+      version: 1,
+      protocol: "anthropic",
+      upstream: "https://profile.example",
+      models: [
+        {
+          id: "GLM-5",
+          context_window: 204800,
+          max_output_tokens: 131072,
+          supports_vision: false,
+        },
+        {
+          id: "vision-only",
+          supports_vision: true,
+        },
+      ],
+      vision: {
+        enabled: true,
+        model: "vision-only",
+        unlisted_model_policy: "enhance",
+        max_tokens: 2048,
+        timeout: "2m",
+        max_concurrency: 4,
+        cache_ttl: "30m",
+        cache_max_entries: 512,
+        prompt: "",
+      },
+      overload_rules: [],
+    },
+  }));
+
+  assert.deepEqual(draft.config.models, [
+    {
+      id: "GLM-5",
+      context_window: 204800,
+      max_output_tokens: 131072,
+      supports_vision: false,
+    },
+    {
+      id: "vision-only",
+      supports_vision: true,
+    },
+  ]);
+  assert.equal(draft.config.vision.unlisted_model_policy, "enhance");
+});
+
+test("model capability helpers append an explicit row and remove without sorting", () => {
+  const first = {
+    id: "first",
+    context_window: 128000,
+    supports_vision: false,
+  };
+  const second = {
+    id: "second",
+    max_output_tokens: 64000,
+    supports_vision: true,
+  };
+
+  assert.deepEqual(addModelCapability([first, second]), [
+    first,
+    second,
+    {
+      id: "",
+      context_window: "",
+      max_output_tokens: "",
+      supports_vision: "",
+    },
+  ]);
+  assert.deepEqual(removeModelCapability([first, second], 0), [second]);
+});
+
+test("payload parses decimal K/M model limits and omits blank optional limits", () => {
+  const draft = defaultProfileDraft();
+  draft.config.models = [
+    {
+      id: "compact",
+      context_window: "128K",
+      max_output_tokens: "",
+      supports_vision: false,
+    },
+    {
+      id: "large",
+      context_window: "1.5M",
+      max_output_tokens: "262144",
+      supports_vision: true,
+    },
+  ];
+
+  const payload = profilePayload(draft);
+  assert.deepEqual(payload.config.models, [
+    {
+      id: "compact",
+      context_window: 128000,
+      supports_vision: false,
+    },
+    {
+      id: "large",
+      context_window: 1500000,
+      max_output_tokens: 262144,
+      supports_vision: true,
+    },
+  ]);
+  assert.equal(payload.config.vision.unlisted_model_policy, "bypass");
+});
+
+test("payload rejects invalid model rows while keeping exact IDs case-sensitive", () => {
+  const modelDraft = (models) => {
+    const draft = defaultProfileDraft();
+    draft.config.models = models;
+    return draft;
+  };
+
+  assert.throws(
+    () => profilePayload(modelDraft([
+      { id: "", supports_vision: false },
+    ])),
+    /模型 ID 不能为空/,
+  );
+  assert.throws(
+    () => profilePayload(modelDraft([
+      { id: "same", supports_vision: false },
+      { id: "same", supports_vision: true },
+    ])),
+    /模型 ID 不能重复/,
+  );
+  assert.throws(
+    () => profilePayload(modelDraft([
+      { id: "missing-choice", supports_vision: "" },
+    ])),
+    /是否支持视觉/,
+  );
+  assert.throws(
+    () => profilePayload(modelDraft([
+      {
+        id: "invalid-limits",
+        context_window: "128K",
+        max_output_tokens: "128K",
+        supports_vision: false,
+      },
+    ])),
+    /最大输出 Token 必须小于上下文窗口/,
+  );
+
+  const payload = profilePayload(modelDraft([
+    { id: "GLM-5", supports_vision: false },
+    { id: "glm-5", supports_vision: false },
+  ]));
+  assert.deepEqual(payload.config.models.map(({ id }) => id), [
+    "GLM-5",
+    "glm-5",
+  ]);
+});
+
+test("OpenAI draft preserves the vision switch", () => {
   const draft = defaultProfileDraft("openai");
   draft.config.vision.enabled = true;
   const payload = profilePayload({
@@ -34,7 +193,7 @@ test("OpenAI draft disables vision", () => {
   });
   assert.equal(payload.config.protocol, "openai");
   assert.equal(payload.config.upstream, "https://example.test");
-  assert.equal(payload.config.vision.enabled, false);
+  assert.equal(payload.config.vision.enabled, true);
 });
 
 test("payload preserves every configured field with numeric JSON types and retry order", () => {
@@ -81,9 +240,11 @@ test("payload preserves every configured field with numeric JSON types and retry
       version: 1,
       protocol: "anthropic",
       upstream: "https://upstream.example",
+      models: [],
       vision: {
         enabled: true,
         model: "vision-model",
+        unlisted_model_policy: "bypass",
         max_tokens: 4096,
         timeout: "75s",
         max_concurrency: 6,
@@ -270,7 +431,18 @@ test("Profile list shows identity badges usage and usable action hooks without i
   assert.ok(findText(root, "已停用"));
   assert.ok(findText(root, "视觉增强"));
   assert.ok(findText(root, "<img src=x onerror=alert(1)>"));
+  assert.equal(sectionHeadings(root).includes("Profiles"), false);
   assert.equal(findAllTags(root, "IMG").length, 0);
+
+  const rows = elementsByClass(root, "profile-settings-row");
+  const icons = elementsByClass(root, "profile-icon");
+  assert.equal(rows.length, 3);
+  assert.equal(icons.length, 3);
+  assert.equal(icons[0].textContent, "P");
+  assert.match(
+    icons[0].className,
+    /profile-icon-(blue|cyan|green|orange|red|yellow)/,
+  );
 
   const primary = profileCard(root, "primary");
   const secondary = profileCard(root, "secondary");
@@ -332,10 +504,23 @@ test("editor renders exact accessible labels and sections and submits every conf
 
   assert.deepEqual(sectionHeadings(root), [
     "基础配置",
+    "模型能力",
     "视觉增强",
     "容错规则",
     "配置生成",
   ]);
+  assert.ok(
+    findText(
+      root,
+      "选填。用于判断模型是否需要视觉增强，并为 Agent 生成上下文与自动压缩配置；不添加时不影响请求转发。",
+    ),
+  );
+  assert.equal(
+    descendants(root).some((element) =>
+      element.textContent.includes("Token 上限支持整数或十进制 K/M 简写")
+    ),
+    false,
+  );
   for (const exactLabel of [
     "名称",
     "Slug",
@@ -350,6 +535,11 @@ test("editor renders exact accessible labels and sections and submits every conf
   assert.equal(controlByName(root, "vision_max_tokens").type, "number");
   assert.equal(controlByName(root, "vision_max_concurrency").type, "number");
   assert.equal(controlByName(root, "vision_cache_max_entries").type, "number");
+  assert.ok(labelTexts(root).includes("识图模型"));
+  assert.equal(
+    controlByName(root, "vision_unlisted_model_policy").value,
+    "bypass",
+  );
   assert.equal(controlByName(root, "enabled").checked, true);
   assert.equal(controlByName(root, "enabled").disabled, true);
   assert.equal(controlByName(root, "make_default").checked, true);
@@ -377,12 +567,670 @@ test("editor renders exact accessible labels and sections and submits every conf
   assert.equal(saves.length, 1);
   assert.equal(saves[0].slug, "primary-renamed");
   assert.equal(saves[0].config.vision.max_tokens, 8192);
+  assert.equal(
+    saves[0].config.vision.unlisted_model_policy,
+    "bypass",
+  );
   assert.equal(saves[0].config.vision.prompt, "Original prompt");
   assert.equal(saves[0].config.overload_rules[0].status, 529);
   assert.equal(typeof saves[0].config.overload_rules[0].max_retries, "number");
 
   await buttonByText(root, "生成配置").dispatch("click");
   assert.deepEqual(generated, ["primary-renamed"]);
+});
+
+test("model editor rows add and remove in Profile order with explicit token and vision controls", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [
+    {
+      id: "manual-first",
+      context_window: 900000,
+      max_output_tokens: 90000,
+      supports_vision: false,
+    },
+    {
+      id: "manual-second",
+      supports_vision: true,
+    },
+  ];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  assert.deepEqual(modelIDs(root), ["manual-first", "manual-second"]);
+  for (const row of modelRows(root)) {
+    assert.equal(
+      controlByField(row, "context_window").getAttribute("placeholder"),
+      "例如 128K、256K、1M",
+    );
+    assert.equal(
+      controlByField(row, "max_output_tokens").getAttribute("placeholder"),
+      "例如 128K、256K、1M",
+    );
+    const choice = controlByField(row, "supports_vision");
+    assert.equal(choice.tagName, "SELECT");
+    assert.deepEqual(
+      choice.children.map((option) => [option.value, option.textContent]),
+      [["", "请选择"], ["true", "是"], ["false", "否"]],
+    );
+  }
+  assert.ok(findText(root, "不添加时不影响请求转发"));
+
+  const addModel = buttonByText(root, "添加模型");
+  assert.ok(
+    addModel.parentNode.className.split(/\s+/).includes("model-list-actions"),
+  );
+  await addModel.dispatch("click");
+  assert.deepEqual(modelIDs(root), ["manual-first", "manual-second", ""]);
+  await buttonsByText(root, "删除模型")[0].dispatch("click");
+  assert.deepEqual(modelIDs(root), ["manual-second", ""]);
+  assert.equal(buttonTexts(root).includes("上移"), false);
+});
+
+test("saved model rows retain empty optional limits while still showing catalog provenance", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [
+    {
+      id: "GLM-5",
+      context_window: 204800,
+      max_output_tokens: "",
+      supports_vision: false,
+    },
+  ];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const [exact] = modelRows(root);
+  assert.equal(controlByField(exact, "id").value, "GLM-5");
+  assert.equal(controlByField(exact, "context_window").value, "204800");
+  assert.equal(controlByField(exact, "max_output_tokens").value, "");
+  assert.equal(controlByField(exact, "supports_vision").value, "false");
+  assert.ok(findText(exact, "来源：Models.dev"));
+  assert.ok(findText(exact, "更新：2026-02-12"));
+  assert.ok(findText(exact, "获取：2026-07-30"));
+});
+
+test("progressive model input renders recommendations but waits for change before applying exact values", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const [row] = modelRows(root);
+  const id = controlByField(row, "id");
+  const context = controlByField(row, "context_window");
+  const output = controlByField(row, "max_output_tokens");
+  const vision = controlByField(row, "supports_vision");
+
+  id.value = "glm-5";
+  await id.dispatch("input");
+  assert.equal(context.value, "");
+
+  id.value = "glm-5.2";
+  await id.dispatch("input");
+  assert.equal(context.value, "");
+  assert.equal(output.value, "");
+  assert.equal(vision.value, "");
+
+  await id.dispatch("change");
+  assert.equal(context.value, "1000000");
+  assert.equal(output.value, "131072");
+  assert.equal(vision.value, "false");
+  assert.equal(id.value, "glm-5.2");
+});
+
+test("pasting a unique model ID immediately applies its safe recommendation", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  id.value = "claude-haiku-4-5-20251001";
+  await id.dispatch("input", { inputType: "insertFromPaste" });
+
+  assert.equal(id.value, "claude-haiku-4-5-20251001");
+  assert.equal(controlByField(row, "context_window").value, "200000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "64000");
+  assert.equal(controlByField(row, "supports_vision").value, "true");
+});
+
+test("compatibility aliases retain the exact entered ID when change auto-applies values", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  id.value = "claude-glm-5.2";
+  await id.dispatch("input");
+  assert.equal(controlByField(row, "context_window").value, "");
+
+  await id.dispatch("change");
+  assert.equal(id.value, "claude-glm-5.2");
+  assert.equal(controlByField(row, "context_window").value, "1000000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "131072");
+  assert.equal(controlByField(row, "supports_vision").value, "false");
+});
+
+test("initial render shows an exact recommendation without filling saved blank fields", (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "glm-5.2",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  assert.equal(controlByField(row, "context_window").value, "");
+  assert.equal(controlByField(row, "max_output_tokens").value, "");
+  assert.equal(controlByField(row, "supports_vision").value, "");
+  assert.ok(findText(row, "GLM-5.2"));
+  assert.ok(findText(row, "精确匹配"));
+});
+
+test("switching exact models preserves manually edited fields and replaces still-owned values", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  const context = controlByField(row, "context_window");
+  const output = controlByField(row, "max_output_tokens");
+  const vision = controlByField(row, "supports_vision");
+
+  id.value = "glm-5.2";
+  await id.dispatch("change");
+  context.value = "900000";
+  await context.dispatch("input");
+
+  id.value = "gpt-5.6-sol";
+  await id.dispatch("input");
+  assert.equal(context.value, "900000");
+  assert.equal(output.value, "131072");
+  assert.equal(vision.value, "false");
+
+  await id.dispatch("change");
+  assert.equal(context.value, "900000");
+  assert.equal(output.value, "128000");
+  assert.equal(vision.value, "true");
+});
+
+test("switching to a recommendation without output clears the old still-owned output", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  id.value = "glm-5.2";
+  await id.dispatch("change");
+  assert.equal(controlByField(row, "max_output_tokens").value, "131072");
+
+  id.value = "command-a-translate-08-2025";
+  await id.dispatch("change");
+  assert.equal(controlByField(row, "context_window").value, "8000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "");
+  assert.equal(controlByField(row, "supports_vision").value, "false");
+});
+
+test("committing an unmatched ID clears old automatic values but preserves manual edits", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  const context = controlByField(row, "context_window");
+  const output = controlByField(row, "max_output_tokens");
+  const vision = controlByField(row, "supports_vision");
+  id.value = "glm-5.2";
+  await id.dispatch("change");
+  context.value = "900000";
+  await context.dispatch("change");
+
+  id.value = "custom-unlisted-model";
+  await id.dispatch("input");
+  assert.equal(context.value, "900000");
+  assert.equal(output.value, "131072");
+  assert.equal(vision.value, "false");
+
+  await id.dispatch("change");
+  assert.equal(context.value, "900000");
+  assert.equal(output.value, "");
+  assert.equal(vision.value, "");
+
+  await id.dispatch("blur");
+  assert.equal(context.value, "900000");
+  assert.equal(output.value, "");
+  assert.equal(vision.value, "");
+});
+
+test("committing a family candidate clears old automatic values until its named action is used", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  const context = controlByField(row, "context_window");
+  const output = controlByField(row, "max_output_tokens");
+  const vision = controlByField(row, "supports_vision");
+  id.value = "glm-5.2";
+  await id.dispatch("change");
+
+  id.value = "gpt-5.6-sol-preview";
+  await id.dispatch("input");
+  assert.equal(context.value, "1000000");
+  assert.equal(output.value, "131072");
+  assert.equal(vision.value, "false");
+
+  await id.dispatch("change");
+  assert.equal(context.value, "");
+  assert.equal(output.value, "");
+  assert.equal(vision.value, "");
+
+  await buttonByText(row, "应用 GPT-5.6 Sol 推荐值").dispatch("click");
+  assert.equal(id.value, "gpt-5.6-sol-preview");
+  assert.equal(context.value, "1050000");
+  assert.equal(output.value, "128000");
+  assert.equal(vision.value, "true");
+});
+
+test("automatic-value ownership survives model-row add and delete rerenders", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  let row = modelRows(root)[0];
+  let id = controlByField(row, "id");
+  id.value = "glm-5.2";
+  await id.dispatch("change");
+
+  await buttonByText(root, "添加模型").dispatch("click");
+  row = modelRows(root)[0];
+  id = controlByField(row, "id");
+  id.value = "gpt-5.6-sol";
+  await id.dispatch("change");
+  assert.equal(controlByField(row, "context_window").value, "1050000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "128000");
+  assert.equal(controlByField(row, "supports_vision").value, "true");
+
+  await buttonsByText(root, "删除模型")[1].dispatch("click");
+  row = modelRows(root)[0];
+  id = controlByField(row, "id");
+  id.value = "command-a-translate-08-2025";
+  await id.dispatch("change");
+  assert.equal(controlByField(row, "context_window").value, "8000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "");
+  assert.equal(controlByField(row, "supports_vision").value, "false");
+});
+
+test("family candidates show complete provenance and expose a named apply action", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "gpt-5.6-sol-preview",
+    context_window: "777K",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  assert.equal(controlByField(row, "context_window").value, "777K");
+  assert.equal(controlByField(row, "max_output_tokens").value, "");
+  assert.equal(controlByField(row, "supports_vision").value, "");
+  const cards = elementsByClass(row, "model-recommendation-card");
+  assert.equal(cards.length, 1);
+  assert.ok(cards.length <= 5);
+  assert.ok(findText(cards[0], "GPT-5.6 Sol"));
+  assert.ok(findText(cards[0], "OpenAI"));
+  assert.ok(findText(cards[0], "生命周期：稳定"));
+  assert.ok(findText(cards[0], "匹配：同系列候选"));
+  assert.ok(findText(cards[0], "来源：Models.dev"));
+  assert.ok(findText(cards[0], "获取：2026-07-30"));
+  assert.ok(findText(cards[0], "更新：2026-07-09"));
+  assert.ok(findText(cards[0], "上下文窗口：1050000"));
+  assert.ok(findText(cards[0], "最大输出 Token：128000"));
+  assert.ok(findText(cards[0], "视觉：是"));
+
+  await buttonByText(row, "应用 GPT-5.6 Sol 推荐值").dispatch("click");
+  assert.equal(controlByField(row, "id").value, "gpt-5.6-sol-preview");
+  assert.equal(controlByField(row, "context_window").value, "777K");
+  assert.equal(controlByField(row, "max_output_tokens").value, "128000");
+  assert.equal(controlByField(row, "supports_vision").value, "true");
+});
+
+test("a candidate button keeps its DOM identity through change and blur before direct click", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  id.value = "gpt-5.6-sol-preview";
+  await id.dispatch("input");
+  const recommendation = findClass(row, "model-recommendation");
+  const card = findClass(row, "model-recommendation-card");
+  const apply = buttonByText(row, "应用 GPT-5.6 Sol 推荐值");
+
+  await id.dispatch("input");
+  assert.equal(findClass(row, "model-recommendation"), recommendation);
+  assert.equal(findClass(row, "model-recommendation-card"), card);
+  assert.equal(
+    buttonByText(row, "应用 GPT-5.6 Sol 推荐值"),
+    apply,
+  );
+
+  await id.dispatch("change");
+  assert.equal(findClass(row, "model-recommendation-card"), card);
+  assert.equal(
+    buttonByText(row, "应用 GPT-5.6 Sol 推荐值"),
+    apply,
+  );
+
+  await id.dispatch("blur");
+  assert.equal(findClass(row, "model-recommendation-card"), card);
+  assert.equal(
+    buttonByText(row, "应用 GPT-5.6 Sol 推荐值"),
+    apply,
+  );
+
+  await apply.dispatch("click");
+  assert.equal(controlByField(row, "context_window").value, "1050000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "128000");
+  assert.equal(controlByField(row, "supports_vision").value, "true");
+});
+
+test("model IDs announce recommendation updates through a controlled live region", (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  const recommendation = findClass(row, "model-recommendation");
+  assert.equal(
+    recommendation.id,
+    "profile-model-0-id-recommendations",
+  );
+  assert.equal(id.getAttribute("aria-controls"), recommendation.id);
+  assert.equal(recommendation.getAttribute("aria-live"), "polite");
+  assert.equal(recommendation.getAttribute("role"), null);
+});
+
+test("recommendation details label every matcher kind in Chinese", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  for (const [modelID, label] of [
+    ["glm-5.2", "精确匹配"],
+    ["zhipuai/glm-5.2", "别名匹配"],
+    ["claude-glm-5.2", "兼容别名匹配"],
+    ["proxy/glm-5.2", "包装器匹配"],
+    ["claude-haiku-4-5-20251231", "快照匹配"],
+    ["gpt-5.6-sol-preview", "同系列候选"],
+  ]) {
+    id.value = modelID;
+    await id.dispatch("input");
+    assert.ok(findText(row, `匹配：${label}`), modelID);
+  }
+});
+
+test("unknown recommendation fields state that reliable data is unavailable", (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "command-a-translate-08-2025",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  assert.ok(findText(row, "最大输出 Token：暂无可靠数据"));
+  assert.equal(controlByField(row, "max_output_tokens").value, "");
+});
+
+test("an unmatched model clears candidates without errors and remains saveable", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "custom-unlisted-model",
+    context_window: "128K",
+    max_output_tokens: "32K",
+    supports_vision: false,
+  }];
+  let saved;
+
+  renderProfileEditor(root, draft, {
+    save: async (payload) => {
+      saved = payload;
+    },
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  id.value = "no-such-model";
+  await id.dispatch("input");
+  assert.equal(elementsByClass(row, "model-recommendation-card").length, 0);
+  await findTag(root, "FORM").dispatch("submit");
+
+  assert.equal(saved.config.models[0].id, "no-such-model");
+  assert.equal(saved.config.models[0].context_window, 128000);
+  assert.equal(saved.config.models[0].max_output_tokens, 32000);
+  assert.equal(saved.config.models[0].supports_vision, false);
+  assert.equal(findClass(root, "error-banner").hidden, true);
+});
+
+test("model editor rejects invalid rows inline before save", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "too-large-output",
+    context_window: "128K",
+    max_output_tokens: "256K",
+    supports_vision: false,
+  }];
+  let saves = 0;
+
+  renderProfileEditor(root, draft, {
+    save: async () => {
+      saves += 1;
+    },
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  await findTag(root, "FORM").dispatch("submit");
+
+  assert.equal(saves, 0);
+  const alert = findClass(root, "error-banner");
+  assert.equal(alert.hidden, false);
+  assert.match(alert.textContent, /最大输出 Token 必须小于上下文窗口/);
+});
+
+test("unlisted model policy offers approved Chinese choices and persists selection", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.vision.unlisted_model_policy = "enhance";
+  let saved;
+
+  renderProfileEditor(root, draft, {
+    save: async (payload) => {
+      saved = payload;
+    },
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const policy = controlByName(root, "vision_unlisted_model_policy");
+  assert.equal(policy.value, "enhance");
+  assert.deepEqual(
+    policy.children.map((option) => [option.value, option.textContent]),
+    [
+      ["bypass", "默认视为支持视觉，不增强"],
+      ["enhance", "默认视为不支持视觉，使用增强"],
+    ],
+  );
+  policy.value = "bypass";
+  await findTag(root, "FORM").dispatch("submit");
+  assert.equal(saved.config.vision.unlisted_model_policy, "bypass");
 });
 
 test("editor Generate rejection stays inline without replacing the editor", async (t) => {
@@ -453,7 +1301,7 @@ test("default submission cannot contain enabled false even with inconsistent con
   assert.equal(saved.enabled, true);
 });
 
-test("switching the editor to OpenAI hides and disables vision with an explicit note", async (t) => {
+test("switching the editor to OpenAI preserves vision and explains its Responses boundary", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft("anthropic");
   draft.slug = "openai";
@@ -474,17 +1322,20 @@ test("switching the editor to OpenAI hides and disables vision with an explicit 
   protocol.value = "openai";
   await protocol.dispatch("change");
 
-  assert.equal(findClass(root, "vision-controls").hidden, true);
+  assert.equal(findClass(root, "vision-controls").hidden, false);
   assert.equal(
-    findText(root, "视觉预处理目前需要 Anthropic 协议。").hidden,
+    findText(
+      root,
+      "OpenAI 协议仅处理 /v1/responses 输入消息里的 input_image；其他 OpenAI 路径不处理。",
+    ).hidden,
     false,
   );
-  assert.equal(controlByName(root, "vision_enabled").checked, false);
-  assert.equal(controlByName(root, "vision_enabled").disabled, true);
+  assert.equal(controlByName(root, "vision_enabled").checked, true);
+  assert.equal(controlByName(root, "vision_enabled").disabled, false);
 
   await findTag(root, "FORM").dispatch("submit");
   assert.equal(saved.config.protocol, "openai");
-  assert.equal(saved.config.vision.enabled, false);
+  assert.equal(saved.config.vision.enabled, true);
 });
 
 test("retry editor add remove up and down actions keep visible first-match order", async (t) => {
@@ -834,8 +1685,9 @@ class FakeElement {
     this.listeners.set(name, listeners);
   }
 
-  async dispatch(name) {
+  async dispatch(name, eventInit = {}) {
     const event = {
+      ...eventInit,
       target: this,
       currentTarget: this,
       defaultPrevented: false,
@@ -899,6 +1751,14 @@ function restoreGlobal(name, value) {
 
 function descendants(root) {
   return [root, ...root.children.flatMap(descendants)];
+}
+
+function elementsByClass(root, className) {
+  return descendants(root).filter((element) =>
+    String(element.className ?? "")
+      .split(/\s+/)
+      .includes(className),
+  );
 }
 
 function findAllTags(root, tagName) {
@@ -968,7 +1828,7 @@ function sectionHeadings(root) {
 function profileCard(root, slug) {
   const card = descendants(root).find(
     (element) =>
-      element.className.split(/\s+/).includes("profile-card") &&
+      element.className.split(/\s+/).includes("profile-settings-row") &&
       descendants(element).some((child) => child.textContent === slug),
   );
   assert.ok(card, `Profile card ${slug} not found`);
@@ -979,6 +1839,22 @@ function retryBodies(root) {
   return controls(root)
     .filter((control) => /^retry-\d+-body_contains$/.test(control.name))
     .map((control) => control.value);
+}
+
+function modelRows(root) {
+  return elementsByClass(root, "model-capability-row");
+}
+
+function modelIDs(root) {
+  return modelRows(root).map((row) => controlByField(row, "id").value);
+}
+
+function controlByField(root, field) {
+  const control = controls(root).find(
+    (candidate) => candidate.getAttribute("data-model-field") === field,
+  );
+  assert.ok(control, `model control ${field} not found`);
+  return control;
 }
 
 function openDialog(root) {
