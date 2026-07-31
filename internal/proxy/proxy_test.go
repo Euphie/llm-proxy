@@ -670,10 +670,23 @@ func TestOpenAIVisionChatTransportKeepsResponsesMainRequest(t *testing.T) {
 			CacheMaxEntries:     512,
 		},
 	}
+	body := `{
+		"model":"main-model",
+		"stream":true,
+		"input":[
+			{"role":"user","content":[
+				{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="},
+				{"type":"input_text","text":"What is shown?"}
+			]},
+			{"type":"function_call_output","call_id":"call-1","output":[
+				{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2Uy"}
+			]}
+		]
+	}`
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/responses",
-		strings.NewReader(responsesImageBody),
+		strings.NewReader(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -683,7 +696,7 @@ func TestOpenAIVisionChatTransportKeepsResponsesMainRequest(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
-	if chatCalls.Load() != 1 || responsesCalls.Load() != 1 {
+	if chatCalls.Load() != 2 || responsesCalls.Load() != 1 {
 		t.Fatalf("chat=%d responses=%d", chatCalls.Load(), responsesCalls.Load())
 	}
 	mainBody := <-mainBodies

@@ -347,12 +347,45 @@ func (p *Preprocessor) ProcessTarget(
 			err:    fmt.Errorf("rewrite request: %w", err),
 		}
 	}
+	unhandledImageCount, err := p.countImages(rewritten)
+	if err != nil {
+		return nil, &processError{
+			status: http.StatusBadGateway,
+			err:    fmt.Errorf("validate rewritten request: %w", err),
+		}
+	}
+	if unhandledImageCount > 0 {
+		slog.Warn("vision.rewrite.incomplete",
+			"profile", p.profile,
+			"transport", p.transport,
+			"unhandled_image_count", unhandledImageCount)
+		return nil, &processError{
+			status: http.StatusBadGateway,
+			err: fmt.Errorf(
+				"rewrite request left %d image blocks unhandled",
+				unhandledImageCount,
+			),
+		}
+	}
 	slog.Info("vision.rewrite.completed",
 		"profile", p.profile,
 		"transport", p.transport,
 		"image_count", len(images),
+		"unhandled_image_count", unhandledImageCount,
 		"duration_ms", time.Since(processStarted).Milliseconds())
 	return rewritten, nil
+}
+
+func (p *Preprocessor) countImages(body []byte) (int, error) {
+	root, err := parseRequestRoot(body)
+	if err != nil {
+		return 0, err
+	}
+	doc, err := p.parse(root)
+	if err != nil {
+		return 0, err
+	}
+	return len(doc.images()), nil
 }
 
 func (p *Preprocessor) shouldEnhance(model string) (bool, string) {

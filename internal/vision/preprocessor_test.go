@@ -27,6 +27,19 @@ type fakeDescriber struct {
 	describe  func(imageRef) (string, error)
 }
 
+type incompleteRewriteDocument struct {
+	body  []byte
+	image imageRef
+}
+
+func (d incompleteRewriteDocument) images() []imageRef {
+	return []imageRef{d.image}
+}
+
+func (d incompleteRewriteDocument) rewrite([]string) ([]byte, error) {
+	return d.body, nil
+}
+
 func (f *fakeDescriber) DescribeTarget(
 	_ context.Context,
 	_ http.Header,
@@ -71,6 +84,30 @@ func TestPreprocessorPassesThroughRequestWithoutImages(t *testing.T) {
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("Describe calls=%d, want 0", calls)
+	}
+}
+
+func TestPreprocessorRejectsIncompleteRewrite(t *testing.T) {
+	body := imageRequest("unhandled")
+	fake := &fakeDescriber{describe: func(imageRef) (string, error) {
+		return "description", nil
+	}}
+	p := testPreprocessor(1, fake)
+	p.parse = func(map[string]json.RawMessage) (requestDocument, error) {
+		return incompleteRewriteDocument{
+			body: body,
+			image: imageRef{
+				sourceType:   "url",
+				imageURL:     "https://example.test/unhandled.png",
+				cachePayload: "unhandled",
+			},
+		}, nil
+	}
+
+	_, err := p.Process(context.Background(), nil, body)
+	if err == nil || HTTPStatus(err) != http.StatusBadGateway ||
+		!strings.Contains(err.Error(), "left 1 image blocks unhandled") {
+		t.Fatalf("error=%v, want incomplete rewrite bad gateway", err)
 	}
 }
 
@@ -644,25 +681,26 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 		"vision.debug.upstream_response": false,
 	}
 	allowedFields := map[string]bool{
-		"time":           true,
-		"level":          true,
-		"msg":            true,
-		"profile":        true,
-		"transport":      true,
-		"image_count":    true,
-		"image_index":    true,
-		"source_type":    true,
-		"cache_source":   true,
-		"attempt":        true,
-		"duration_ms":    true,
-		"error_class":    true,
-		"model":          true,
-		"status_code":    true,
-		"response_bytes": true,
-		"retry_matched":  true,
-		"description":    true,
-		"response_body":  true,
-		"truncated":      true,
+		"time":                  true,
+		"level":                 true,
+		"msg":                   true,
+		"profile":               true,
+		"transport":             true,
+		"image_count":           true,
+		"unhandled_image_count": true,
+		"image_index":           true,
+		"source_type":           true,
+		"cache_source":          true,
+		"attempt":               true,
+		"duration_ms":           true,
+		"error_class":           true,
+		"model":                 true,
+		"status_code":           true,
+		"response_bytes":        true,
+		"retry_matched":         true,
+		"description":           true,
+		"response_body":         true,
+		"truncated":             true,
 	}
 	for _, line := range strings.Split(strings.TrimSpace(logText), "\n") {
 		if line == "" {

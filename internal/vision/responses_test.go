@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,9 +29,12 @@ func TestParseResponsesRewritesInputImagesInPlace(t *testing.T) {
 	    },
 	    {
 	      "type": "function_call_output",
-	      "content": [
+	      "call_id": "call-123",
+	      "output": [
+	        {"type": "input_text", "text": "tool output"},
 	        {"type": "input_image", "image_url": "https://example.test/nested.png"}
-	      ]
+	      ],
+	      "tool_extra": true
 	    }
 	  ]
 	}`)
@@ -42,31 +44,46 @@ func TestParseResponsesRewritesInputImagesInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	images := doc.images()
-	if len(images) != 3 {
-		t.Fatalf("image count=%d, want 3", len(images))
+	if len(images) != 4 {
+		t.Fatalf("image count=%d, want 4", len(images))
 	}
-	if images[0].sourceType != "url" || images[1].sourceType != "data_url" || images[2].sourceType != "file" {
-		t.Fatalf("source types=%q, %q, %q", images[0].sourceType, images[1].sourceType, images[2].sourceType)
+	wantSourceTypes := []string{"url", "data_url", "file", "url"}
+	for i, want := range wantSourceTypes {
+		if images[i].sourceType != want {
+			t.Fatalf("image %d source type=%q, want %q", i, images[i].sourceType, want)
+		}
 	}
-	for i, image := range images {
+	for i, image := range images[:3] {
 		if image.taskContext != "before\nafter" {
 			t.Fatalf("image %d taskContext=%q, want %q", i, image.taskContext, "before\nafter")
 		}
 	}
+	if images[3].taskContext != "" {
+		t.Fatalf("function output taskContext=%q, want empty", images[3].taskContext)
+	}
 
-	rewritten, err := doc.rewrite([]string{"url description", "data description", "file description"})
+	rewritten, err := doc.rewrite([]string{
+		"url description",
+		"data description",
+		"file description",
+		"tool description",
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	type part struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL string `json:"image_url"`
 	}
 	var got struct {
 		Metadata map[string]string `json:"metadata"`
 		Input    []struct {
-			Extra   bool `json:"extra"`
-			Content []struct {
-				Type     string `json:"type"`
-				Text     string `json:"text"`
-				ImageURL string `json:"image_url"`
-			} `json:"content"`
+			Extra     bool   `json:"extra"`
+			ToolExtra bool   `json:"tool_extra"`
+			CallID    string `json:"call_id"`
+			Content   []part `json:"content"`
+			Output    []part `json:"output"`
 		} `json:"input"`
 	}
 	if err := json.Unmarshal(rewritten, &got); err != nil {
@@ -88,9 +105,13 @@ func TestParseResponsesRewritesInputImagesInPlace(t *testing.T) {
 			t.Fatalf("content %d text=%q, want %q", i+1, text, evidencePrefix+want)
 		}
 	}
-	if got.Input[1].Content[0].Type != "input_image" ||
-		got.Input[1].Content[0].ImageURL != "https://example.test/nested.png" {
-		t.Fatalf("non-message item was rewritten: %+v", got.Input[1].Content[0])
+	if got.Input[1].CallID != "call-123" || !got.Input[1].ToolExtra {
+		t.Fatalf("function output fields were not preserved: %+v", got.Input[1])
+	}
+	if got.Input[1].Output[0].Text != "tool output" ||
+		got.Input[1].Output[1].Type != "input_text" ||
+		got.Input[1].Output[1].Text != descriptionPrefix+"tool description" {
+		t.Fatalf("function output image was not rewritten: %+v", got.Input[1].Output)
 	}
 }
 
@@ -122,7 +143,8 @@ func TestParseResponsesProcessesMessageImagesWithoutNonUserContext(t *testing.T)
 	    },
 	    {
 	      "type": "function_call_output",
-	      "content": [
+	      "call_id": "call-tool",
+	      "output": [
 	        {"type": "input_text", "text": "tool context"},
 	        {"type": "input_image", "image_url": "https://example.test/tool.png"}
 	      ]
@@ -143,11 +165,11 @@ func TestParseResponsesProcessesMessageImagesWithoutNonUserContext(t *testing.T)
 		t.Fatal(err)
 	}
 	images := doc.images()
-	if len(images) != 4 {
-		t.Fatalf("image count=%d, want 4 message images", len(images))
+	if len(images) != 5 {
+		t.Fatalf("image count=%d, want 5", len(images))
 	}
-	wantMessageIndexes := []int{0, 1, 2, 5}
-	wantContexts := []string{"", "", "", "user context"}
+	wantMessageIndexes := []int{0, 1, 2, 3, 5}
+	wantContexts := []string{"", "", "", "", "user context"}
 	for i, image := range images {
 		if image.messageIndex != wantMessageIndexes[i] || image.taskContext != wantContexts[i] {
 			t.Fatalf(
@@ -161,6 +183,7 @@ func TestParseResponsesProcessesMessageImagesWithoutNonUserContext(t *testing.T)
 		"assistant description",
 		"non-string role description",
 		"missing role description",
+		"tool description",
 		"user description",
 	})
 	if err != nil {
@@ -168,11 +191,16 @@ func TestParseResponsesProcessesMessageImagesWithoutNonUserContext(t *testing.T)
 	}
 	var got struct {
 		Input []struct {
+			CallID  string `json:"call_id"`
 			Content []struct {
 				Type   string `json:"type"`
 				Text   string `json:"text"`
 				FileID string `json:"file_id"`
 			} `json:"content"`
+			Output []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"output"`
 		} `json:"input"`
 	}
 	if err := json.Unmarshal(rewritten, &got); err != nil {
@@ -193,20 +221,11 @@ func TestParseResponsesProcessesMessageImagesWithoutNonUserContext(t *testing.T)
 		got.Input[2].Content[1].Text != descriptionPrefix+"missing role description" {
 		t.Fatalf("missing role image was not generically rewritten: %+v", got.Input[2].Content)
 	}
-	var originalDocument, rewrittenDocument struct {
-		Input []any `json:"input"`
-	}
-	if err := json.Unmarshal(body, &originalDocument); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(rewritten, &rewrittenDocument); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(rewrittenDocument.Input[3], originalDocument.Input[3]) {
-		t.Fatalf(
-			"function_call_output changed:\n got: %#v\nwant: %#v",
-			rewrittenDocument.Input[3], originalDocument.Input[3],
-		)
+	if got.Input[3].CallID != "call-tool" ||
+		got.Input[3].Output[0].Text != "tool context" ||
+		got.Input[3].Output[1].Type != "input_text" ||
+		got.Input[3].Output[1].Text != descriptionPrefix+"tool description" {
+		t.Fatalf("function output image was not rewritten: %+v", got.Input[3])
 	}
 	if got.Input[5].Content[1].Type != "input_text" || got.Input[5].Content[1].Text != evidencePrefix+"user description" {
 		t.Fatalf("user image was not rewritten with evidence prefix: %+v", got.Input[5].Content[1])
@@ -262,11 +281,12 @@ func TestParseResponsesRejectsInvalidInputImageSource(t *testing.T) {
 	}
 }
 
-func TestParseResponsesRejectsInvalidInputImageSourceInNonUserMessages(t *testing.T) {
+func TestParseResponsesRejectsInvalidInputImageSourceInSupportedContainers(t *testing.T) {
 	items := []string{
 		`{"type":"message","role":"assistant","content":[{"type":"input_image"}]}`,
 		`{"type":"message","role":42,"content":[{"type":"input_image"}]}`,
 		`{"type":"message","content":[{"type":"input_image"}]}`,
+		`{"type":"function_call_output","call_id":"call-1","output":[{"type":"input_image"}]}`,
 	}
 	for _, item := range items {
 		t.Run(item, func(t *testing.T) {
@@ -321,7 +341,19 @@ func TestOpenAIPreprocessorRewritesResponsesRequest(t *testing.T) {
 		fake,
 		newResultCache(32, time.Minute),
 	)
-	body := []byte(`{"model":"main","stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","file_id":"file-123"}]}]}`)
+	body := []byte(`{
+		"model":"main",
+		"stream":true,
+		"input":[
+			{"role":"user","content":[
+				{"type":"input_text","text":"inspect"},
+				{"type":"input_image","file_id":"file-123"}
+			]},
+			{"type":"function_call_output","call_id":"call-1","output":[
+				{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="}
+			]}
+		]
+	}`)
 
 	got, err := p.Process(context.Background(), nil, body)
 	if err != nil {
@@ -334,6 +366,10 @@ func TestOpenAIPreprocessorRewritesResponsesRequest(t *testing.T) {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
+			Output []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"output"`
 		} `json:"input"`
 	}
 	if err := json.Unmarshal(got, &request); err != nil {
@@ -345,6 +381,10 @@ func TestOpenAIPreprocessorRewritesResponsesRequest(t *testing.T) {
 	if request.Input[0].Content[1].Type != "input_text" ||
 		request.Input[0].Content[1].Text != evidencePrefix+"a diagram" {
 		t.Fatalf("rewritten content=%+v", request.Input[0].Content[1])
+	}
+	if request.Input[1].Output[0].Type != "input_text" ||
+		request.Input[1].Output[0].Text != descriptionPrefix+"a diagram" {
+		t.Fatalf("rewritten function output=%+v", request.Input[1].Output[0])
 	}
 }
 

@@ -7,10 +7,10 @@ import (
 )
 
 type responsesItemNode struct {
-	raw          json.RawMessage
-	fields       map[string]json.RawMessage
-	content      []json.RawMessage
-	arrayContent bool
+	raw        json.RawMessage
+	fields     map[string]json.RawMessage
+	blocks     []json.RawMessage
+	blockField string
 }
 
 type responsesDocument struct {
@@ -48,29 +48,35 @@ func parseResponsesRoot(root map[string]json.RawMessage) (*responsesDocument, er
 		if err := json.Unmarshal(rawItem, &node.fields); err != nil {
 			return nil, fmt.Errorf("parse input item %d: %w", itemIndex, err)
 		}
-		if !isResponsesMessage(node.fields) {
+		blockField := responsesImageBlockField(node.fields)
+		if blockField == "" {
 			doc.items = append(doc.items, node)
 			continue
 		}
-		contentRaw, ok := node.fields["content"]
-		if !ok || !isJSONType(contentRaw, '[') {
+		blocksRaw, ok := node.fields[blockField]
+		if !ok || !isJSONType(blocksRaw, '[') {
 			doc.items = append(doc.items, node)
 			continue
 		}
-		if err := json.Unmarshal(contentRaw, &node.content); err != nil {
-			return nil, fmt.Errorf("parse input item %d content: %w", itemIndex, err)
+		if err := json.Unmarshal(blocksRaw, &node.blocks); err != nil {
+			return nil, fmt.Errorf("parse input item %d %s: %w", itemIndex, blockField, err)
 		}
-		node.arrayContent = true
+		node.blockField = blockField
 		var role string
 		if rawRole, ok := node.fields["role"]; ok {
 			_ = json.Unmarshal(rawRole, &role)
 		}
 		taskContext := ""
-		if role == "user" {
-			taskContext = collectTaskContext(node.content, "input_text")
+		if blockField == "content" && role == "user" {
+			taskContext = collectTaskContext(node.blocks, "input_text")
 		}
-		for blockIndex, block := range node.content {
-			image, found, err := parseResponsesImageBlock(block, itemIndex, blockIndex)
+		for blockIndex, block := range node.blocks {
+			image, found, err := parseResponsesImageBlock(
+				block,
+				blockField,
+				itemIndex,
+				blockIndex,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -84,18 +90,32 @@ func parseResponsesRoot(root map[string]json.RawMessage) (*responsesDocument, er
 	return doc, nil
 }
 
-func isResponsesMessage(fields map[string]json.RawMessage) bool {
+func responsesImageBlockField(fields map[string]json.RawMessage) string {
 	raw, ok := fields["type"]
 	if !ok {
 		_, hasRole := fields["role"]
-		return hasRole
+		if hasRole {
+			return "content"
+		}
+		return ""
 	}
 	var itemType string
-	return json.Unmarshal(raw, &itemType) == nil && itemType == "message"
+	if json.Unmarshal(raw, &itemType) != nil {
+		return ""
+	}
+	switch itemType {
+	case "message":
+		return "content"
+	case "function_call_output":
+		return "output"
+	default:
+		return ""
+	}
 }
 
 func parseResponsesImageBlock(
 	block json.RawMessage,
+	blockField string,
 	itemIndex, blockIndex int,
 ) (imageRef, bool, error) {
 	if !isJSONType(block, '{') {
@@ -103,7 +123,13 @@ func parseResponsesImageBlock(
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(block, &fields); err != nil {
-		return imageRef{}, false, fmt.Errorf("parse input item %d content block %d: %w", itemIndex, blockIndex, err)
+		return imageRef{}, false, fmt.Errorf(
+			"parse input item %d %s block %d: %w",
+			itemIndex,
+			blockField,
+			blockIndex,
+			err,
+		)
 	}
 	blockType, present, err := requiredString(fields, "type")
 	if err != nil || !present || blockType != "input_image" {
@@ -115,8 +141,8 @@ func parseResponsesImageBlock(
 	if imageURLErr != nil || fileIDErr != nil || hasImageURL == hasFileID ||
 		(hasImageURL && imageURL == "") || (hasFileID && fileID == "") {
 		return imageRef{}, false, fmt.Errorf(
-			"input item %d content block %d input image must contain exactly one non-empty image_url or file_id",
-			itemIndex, blockIndex,
+			"input item %d %s block %d input image must contain exactly one non-empty image_url or file_id",
+			itemIndex, blockField, blockIndex,
 		)
 	}
 
@@ -125,8 +151,8 @@ func parseResponsesImageBlock(
 		if err := json.Unmarshal(raw, &detail); err != nil ||
 			(detail != "auto" && detail != "low" && detail != "high" && detail != "original") {
 			return imageRef{}, false, fmt.Errorf(
-				"input item %d content block %d input image detail must be auto, low, high, or original",
-				itemIndex, blockIndex,
+				"input item %d %s block %d input image detail must be auto, low, high, or original",
+				itemIndex, blockField, blockIndex,
 			)
 		}
 	}
@@ -182,21 +208,26 @@ func (d *responsesDocument) rewrite(descriptions []string) ([]byte, error) {
 			continue
 		}
 		fields := node.fields
-		if node.arrayContent {
-			content := append([]json.RawMessage(nil), node.content...)
+		if node.blockField != "" {
+			blocks := append([]json.RawMessage(nil), node.blocks...)
 			changed := false
-			for blockIndex := range content {
+			for blockIndex := range blocks {
 				if replacement, ok := replacements[[2]int{itemIndex, blockIndex}]; ok {
-					content[blockIndex] = replacement
+					blocks[blockIndex] = replacement
 					changed = true
 				}
 			}
 			if changed {
 				fields = cloneRawFields(node.fields)
 				var err error
-				fields["content"], err = json.Marshal(content)
+				fields[node.blockField], err = json.Marshal(blocks)
 				if err != nil {
-					return nil, fmt.Errorf("marshal input item %d content: %w", itemIndex, err)
+					return nil, fmt.Errorf(
+						"marshal input item %d %s: %w",
+						itemIndex,
+						node.blockField,
+						err,
+					)
 				}
 			}
 		}
