@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
 
-const title = "llm-proxy 智能路由设计";
+const title = "Mesotes · 智能路由设计";
 const description =
-  "从当前 main 基线出发，完整解释 llm-proxy 智能路由、视觉执行方案、动态策略优化与工程落地。";
+  "Mesotes 文档站说明当前 llm-proxy 实现的智能路由、视觉执行方案、动态策略优化与工程落地。";
 
 function firstHeaderValue(value: string | null): string | undefined {
   return value?.split(",")[0]?.trim() || undefined;
@@ -56,12 +56,13 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: {
       default: title,
-      template: "%s · llm-proxy",
+      template: "%s · Mesotes",
     },
     description,
     icons: {
-      icon: "/favicon.svg",
-      shortcut: "/favicon.svg",
+      icon: "/brand/mesotes-mark-256.png",
+      shortcut: "/brand/mesotes-mark-256.png",
+      apple: "/brand/mesotes-mark-256.png",
     },
     openGraph: {
       title,

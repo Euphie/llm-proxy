@@ -181,7 +181,7 @@ export function DocsShell({ chapters }: DocsShellProps) {
           </button>
           <div className="titlebar-path">
             <PanelLeft aria-hidden="true" />
-            <span>llm-proxy</span>
+            <span>Mesotes</span>
             <i>/</i>
             <strong>{activeChapter.shortTitle}</strong>
           </div>

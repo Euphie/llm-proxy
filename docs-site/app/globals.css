@@ -297,16 +297,21 @@ button {
 }
 
 .brand-mark {
-  display: grid;
+  display: block;
+  flex: none;
+  overflow: hidden;
   width: 38px;
   height: 38px;
-  place-items: center;
   border-radius: 11px;
-  background: linear-gradient(145deg, #2f9bf4, #096ed4);
-  color: white;
-  box-shadow: 0 8px 18px rgba(8, 124, 240, 0.24);
-  font: 700 13px/1 var(--font-mono);
-  letter-spacing: -0.04em;
+  border: 1px solid color-mix(in srgb, var(--stroke) 78%, transparent);
+  box-shadow: 0 8px 18px rgba(8, 124, 240, 0.2);
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .sidebar-brand > div:nth-child(2) {

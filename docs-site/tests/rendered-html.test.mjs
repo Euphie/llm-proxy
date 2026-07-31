@@ -37,7 +37,9 @@ test("server-renders the intelligent-routing documentation shell", async () => {
 
   const html = await response.text();
   assert.match(html, /<html[^>]*lang="zh-CN"/i);
-  assert.match(html, /<title>llm-proxy 智能路由设计<\/title>/i);
+  assert.match(html, /<title>Mesotes · 智能路由设计<\/title>/i);
+  assert.match(html, /MESOTES/);
+  assert.match(html, /\/brand\/mesotes-mark-256\.png/);
   assert.match(html, /llm-proxy/);
   assert.match(html, /智能路由设计/);
   assert.match(html, /产品目标与设计原则/);
@@ -55,7 +57,7 @@ test("rejects malformed preview hosts without failing the page", async () => {
   assert.equal(response.status, 200);
 
   const html = await response.text();
-  assert.match(html, /<title>llm-proxy 智能路由设计<\/title>/i);
+  assert.match(html, /<title>Mesotes · 智能路由设计<\/title>/i);
   assert.doesNotMatch(html, /og-routing-design\.png/i);
 });
 
@@ -84,6 +86,8 @@ test("ships all chapters and exported architecture diagrams", async () => {
   await Promise.all([
     ...chapterNames.map((name) => access(new URL(`content/${name}`, siteRoot))),
     ...diagramNames.map((name) => access(new URL(`public/diagrams/${name}`, siteRoot))),
+    access(new URL("public/brand/mesotes-mark.png", siteRoot)),
+    access(new URL("public/brand/mesotes-mark-256.png", siteRoot)),
   ]);
 
   const contents = await Promise.all(

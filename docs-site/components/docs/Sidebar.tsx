@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { BookOpen, Command, Search, X } from "lucide-react";
 import type { Chapter } from "@/lib/chapters";
 import { ChapterIcon } from "./ChapterIcon";
@@ -34,11 +35,11 @@ export function Sidebar({
     <aside className={`docs-sidebar ${open ? "is-open" : ""}`} aria-label="文档章节">
       <div className="sidebar-brand">
         <div className="brand-mark" aria-hidden="true">
-          <span>LP</span>
+          <Image src="/brand/mesotes-mark-256.png" alt="" width={38} height={38} />
         </div>
         <div>
-          <strong>llm-proxy</strong>
-          <span>智能路由设计</span>
+          <strong>MESOTES</strong>
+          <span>llm-proxy 智能路由设计</span>
         </div>
         <button className="icon-button sidebar-close" onClick={onClose} aria-label="关闭章节导航">
           <X />
