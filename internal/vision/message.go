@@ -20,6 +20,9 @@ type imageRef struct {
 	sourceType   string
 	cachePayload string
 	taskContext  string
+	imageURL     string
+	fileID       string
+	detail       string
 	messageIndex int
 	blockIndex   int
 }

@@ -485,6 +485,54 @@ func TestRecordResolveAllowsOpenAIVision(t *testing.T) {
 	}
 }
 
+func TestVisionTransportDefaultsAndValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		protocol  Protocol
+		transport VisionTransport
+		want      VisionTransport
+		wantErr   bool
+	}{
+		{name: "anthropic default", protocol: ProtocolAnthropic, want: VisionTransportAnthropicMessages},
+		{name: "openai default", protocol: ProtocolOpenAI, want: VisionTransportOpenAIChatCompletions},
+		{
+			name: "openai responses", protocol: ProtocolOpenAI,
+			transport: VisionTransportOpenAIResponses, want: VisionTransportOpenAIResponses,
+		},
+		{
+			name: "anthropic rejects openai", protocol: ProtocolAnthropic,
+			transport: VisionTransportOpenAIChatCompletions, wantErr: true,
+		},
+		{
+			name: "openai rejects anthropic", protocol: ProtocolOpenAI,
+			transport: VisionTransportAnthropicMessages, wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := Record{
+				Slug: "vision", DisplayName: "Vision", Enabled: true,
+				Config: NewConfig(test.protocol, "https://example.test/v1"),
+			}
+			record.Config.Vision.Transport = test.transport
+			runtime, err := record.Resolve()
+			if test.wantErr {
+				if !errors.Is(err, ErrInvalidConfig) {
+					t.Fatalf("error=%v, want invalid config", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.Vision.Transport != test.want {
+				t.Fatalf("transport=%q, want %q", runtime.Vision.Transport, test.want)
+			}
+		})
+	}
+}
+
 func TestRecordResolveTrimsUpstreamTrailingSlashAndBuildsRetryRules(t *testing.T) {
 	record := Record{
 		Slug: "coding", DisplayName: "Coding", Enabled: true,

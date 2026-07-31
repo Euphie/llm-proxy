@@ -44,12 +44,13 @@ Profile 必须启用，不能直接停用；切换默认项时目标也必须启
 ## 视觉设置
 
 视觉增强适用于 Anthropic `POST /v1/messages` 和 OpenAI
-`POST /v1/responses`。其他路径（包括 Chat Completions）保持原样转发。字段和默认值
-如下：
+`POST /responses` / `POST /v1/responses`。Chat Completions 可作为 OpenAI
+识图接口，但 Chat Completions 主请求仍保持原样转发。字段和默认值如下：
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
 | `enabled` | `false` | 是否在主请求前处理直接图片块 |
+| `transport` | 按协议 | Anthropic 为 `anthropic_messages`；OpenAI 默认为 `openai_chat_completions`，也可选 `openai_responses` |
 | `model` | `sonnet` | 上游实际接受的视觉模型名 |
 | `unlisted_model_policy` | `bypass` | 控制台“默认视为支持视觉，不增强”；改为 `enhance` 时显示“默认视为不支持视觉，使用增强” |
 | `max_tokens` | `2048` | 单张图片描述最大输出 Token |
@@ -59,7 +60,8 @@ Profile 必须启用，不能直接停用；切换默认项时目标也必须启
 | `cache_max_entries` | `512` | LRU 缓存条目上限 |
 | `prompt` | 内置提示词 | 非空时作为基础识图提示词；同消息用户文本仍会用于提取相关视觉证据 |
 
-影子请求沿用 Profile 协议；OpenAI Responses 影子请求固定使用 `store: false`。
+配置版本保持 `1`；旧 Profile 缺少 `transport` 时按协议补默认值，编辑保存一次即可
+写入。OpenAI Responses 影子请求固定使用 `store: false`。
 代理只收集同一条 `user` 消息的直接 Anthropic `text` 或 Responses `input_text` 块；
 非字符串、非直接和空白块会忽略。各块经 trim 后按顺序用换行拼接，最多保留 4096 个
 Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编码嵌入影子提示词。其他消息

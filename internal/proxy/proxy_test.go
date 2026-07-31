@@ -574,6 +574,7 @@ func TestOpenAIVisionRewritesResponsesImageBeforeMainRequest(t *testing.T) {
 		},
 		Vision: profile.VisionRuntime{
 			Enabled:             true,
+			Transport:           profile.VisionTransportOpenAIResponses,
 			Model:               "vision-model",
 			UnlistedModelPolicy: profile.UnlistedModelBypass,
 			MaxTokens:           512,
@@ -617,6 +618,78 @@ func TestOpenAIVisionRewritesResponsesImageBeforeMainRequest(t *testing.T) {
 	if rewritten.Input[0].Content[0].Type != "input_text" ||
 		!strings.Contains(rewritten.Input[0].Content[0].Text, "screen description") {
 		t.Fatalf("rewritten content=%+v", rewritten.Input[0].Content[0])
+	}
+}
+
+func TestOpenAIVisionChatTransportKeepsResponsesMainRequest(t *testing.T) {
+	var chatCalls atomic.Int32
+	var responsesCalls atomic.Int32
+	mainBodies := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			chatCalls.Add(1)
+			if !bytes.Contains(body, []byte(`"type":"image_url"`)) {
+				t.Errorf("chat body=%s", body)
+			}
+			_, _ = io.WriteString(w, `{
+				"choices":[{"message":{"content":"chat description"}}],
+				"usage":{"prompt_tokens":10,"completion_tokens":20}
+			}`)
+		case "/v1/responses":
+			responsesCalls.Add(1)
+			mainBodies <- body
+			_, _ = io.WriteString(w, `{"output":[]}`)
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	runtime := profile.Runtime{
+		Slug:     "test",
+		Protocol: profile.ProtocolOpenAI,
+		Upstream: upstream.URL + "/v1",
+		Models: profile.ModelCatalog{
+			"main-model": {ID: "main-model", SupportsVision: false},
+		},
+		Vision: profile.VisionRuntime{
+			Enabled:             true,
+			Transport:           profile.VisionTransportOpenAIChatCompletions,
+			Model:               "vision-model",
+			UnlistedModelPolicy: profile.UnlistedModelBypass,
+			MaxTokens:           512,
+			Timeout:             2 * time.Second,
+			MaxConcurrency:      4,
+			CacheTTL:            30 * time.Minute,
+			CacheMaxEntries:     512,
+		},
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/responses",
+		strings.NewReader(responsesImageBody),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, upstream.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if chatCalls.Load() != 1 || responsesCalls.Load() != 1 {
+		t.Fatalf("chat=%d responses=%d", chatCalls.Load(), responsesCalls.Load())
+	}
+	mainBody := <-mainBodies
+	if bytes.Contains(mainBody, []byte(`"type":"input_image"`)) ||
+		!bytes.Contains(mainBody, []byte("chat description")) {
+		t.Fatalf("main body=%s", mainBody)
 	}
 }
 
@@ -716,6 +789,7 @@ func TestShouldPreprocessVisionMatchesProtocolEndpoint(t *testing.T) {
 		{name: "anthropic messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages", want: true},
 		{name: "anthropic responses", protocol: profile.ProtocolAnthropic, path: "/v1/responses", want: false},
 		{name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses", want: true},
+		{name: "openai responses without v1", protocol: profile.ProtocolOpenAI, path: "/responses", want: true},
 		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: false},
 		{name: "openai messages", protocol: profile.ProtocolOpenAI, path: "/v1/messages", want: false},
 	}

@@ -57,7 +57,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body.Close()
 
 	if h.vision != nil && shouldPreprocessVision(h.cfg.Protocol, r) {
-		body, err = h.vision.Process(r.Context(), r.Header, body)
+		body, err = h.vision.ProcessTarget(r.Context(), r.Header, body, target)
 		if err != nil {
 			if r.Context().Err() != nil {
 				return
@@ -169,14 +169,20 @@ func targetURL(upstream, requestURI string) string {
 }
 
 func shouldPreprocessVision(protocol profile.Protocol, r *http.Request) bool {
-	path := ""
+	if r.Method != http.MethodPost {
+		return false
+	}
+	path := r.URL.EscapedPath()
 	switch protocol {
 	case profile.ProtocolAnthropic:
-		path = "/v1/messages"
+		if path != "/v1/messages" {
+			return false
+		}
 	case profile.ProtocolOpenAI:
-		path = "/v1/responses"
-	}
-	if r.Method != http.MethodPost || r.URL.EscapedPath() != path {
+		if path != "/responses" && path != "/v1/responses" {
+			return false
+		}
+	default:
 		return false
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

@@ -7,6 +7,7 @@ import { profileIconVisual } from "./visual.js";
 
 const defaultVision = {
   enabled: false,
+  transport: "anthropic_messages",
   model: "sonnet",
   unlisted_model_policy: "bypass",
   max_tokens: 2048,
@@ -16,6 +17,28 @@ const defaultVision = {
   cache_max_entries: 512,
   prompt: "",
 };
+
+const visionTransports = {
+  anthropic: [["anthropic_messages", "Messages"]],
+  openai: [
+    ["openai_chat_completions", "Chat Completions"],
+    ["openai_responses", "Responses"],
+  ],
+};
+
+function defaultVisionTransport(protocol) {
+  return protocol === "openai"
+    ? "openai_chat_completions"
+    : "anthropic_messages";
+}
+
+function normalizedVisionTransport(protocol, transport) {
+  const value = String(transport ?? "");
+  const choices = visionTransports[protocol] || [];
+  return choices.some(([candidate]) => candidate === value)
+    ? value
+    : defaultVisionTransport(protocol);
+}
 
 const defaultRule = {
   status: 429,
@@ -38,7 +61,10 @@ export function defaultProfileDraft(protocol = "anthropic") {
       protocol,
       upstream: "",
       models: [],
-      vision: { ...defaultVision },
+      vision: {
+        ...defaultVision,
+        transport: defaultVisionTransport(protocol),
+      },
       overload_rules: [],
     },
   };
@@ -69,6 +95,7 @@ export function profilePayload(draft) {
       models: modelCapabilitiesPayload(models),
       vision: {
         enabled: Boolean(vision.enabled),
+        transport: normalizedVisionTransport(protocol, vision.transport),
         model: String(vision.model ?? ""),
         unlisted_model_policy: unlistedModelPolicy,
         max_tokens: Number(vision.max_tokens),
@@ -129,7 +156,9 @@ export function moveRetryRule(rules, index, offset) {
 }
 
 export function profileDraft(profile, defaultProfileID = 0) {
-  const draft = defaultProfileDraft(profile?.config?.protocol);
+  const protocol = String(profile?.config?.protocol ?? "anthropic");
+  const draft = defaultProfileDraft(protocol);
+  const configuredVision = profile?.config?.vision || {};
   return {
     ...draft,
     id: Number(profile?.id ?? 0),
@@ -154,7 +183,11 @@ export function profileDraft(profile, defaultProfileID = 0) {
       })),
       vision: {
         ...defaultVision,
-        ...(profile?.config?.vision || {}),
+        ...configuredVision,
+        transport: normalizedVisionTransport(
+          protocol,
+          configuredVision.transport,
+        ),
         unlisted_model_policy:
           profile?.config?.vision?.unlisted_model_policy || "bypass",
       },
@@ -765,6 +798,16 @@ export function renderProfileEditor(root, source, actions = {}) {
   const visionDetails = element("details", "card vision-details");
   const visionSummary = textElement("summary", "视觉参数");
   const visionGrid = element("div", "form-grid details-content");
+  const visionTransport = fieldSelect(
+    visionGrid,
+    "视觉调用接口",
+    "vision_transport",
+    working.config.vision.transport,
+    visionTransports[working.config.protocol] || [],
+    {
+      description: "仅控制识图请求；主请求仍使用当前 Profile 协议。",
+    },
+  );
   const visionModel = fieldInput(
     visionGrid,
     "识图模型",
@@ -1013,6 +1056,10 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.upstream = upstream.value;
     working.config.vision = {
       enabled: visionEnabled.checked,
+      transport: normalizedVisionTransport(
+        protocol.value,
+        visionTransport.value,
+      ),
       model: visionModel.value,
       unlisted_model_policy: visionUnlistedModelPolicy.value || "bypass",
       max_tokens: visionMaxTokens.value,
@@ -1026,11 +1073,19 @@ export function renderProfileEditor(root, source, actions = {}) {
 
   function applyProtocolState() {
     const isAnthropic = protocol.value === "anthropic";
+    const choices = visionTransports[protocol.value] || [];
+    const selected = normalizedVisionTransport(
+      protocol.value,
+      visionTransport.value,
+    );
+    setSelectChoices(visionTransport, choices, selected);
+    visionTransport.disabled = isAnthropic;
+    working.config.vision.transport = selected;
     visionControls.hidden = false;
     visionNote.hidden = false;
     visionNote.textContent = isAnthropic
       ? "Anthropic 协议处理 /v1/messages 中的图片内容块。"
-      : "OpenAI 协议仅处理 /v1/responses 输入消息里的 input_image；其他 OpenAI 路径不处理。";
+      : "OpenAI 主请求处理 Responses input_image；识图接口可选 Responses 或 Chat Completions。";
     visionEnabled.disabled = false;
   }
 
@@ -1428,17 +1483,23 @@ function fieldSelect(
 ) {
   const select = element("select");
   select.name = name;
+  setSelectChoices(select, choices, value);
+  appendField(parent, labelText, select, options.description);
+  return select;
+}
+
+function setSelectChoices(select, choices, value) {
+  const items = [];
   for (const [choiceValue, choiceLabel] of choices) {
     const option = textElement("option", choiceLabel);
     option.value = choiceValue;
     if (String(choiceValue) === String(value)) {
       option.selected = true;
     }
-    select.append(option);
+    items.push(option);
   }
+  select.replaceChildren(...items);
   select.value = String(value ?? "");
-  appendField(parent, labelText, select, options.description);
-  return select;
 }
 
 function checkboxField(parent, labelText, name, options = {}) {

@@ -27,7 +27,12 @@ type fakeDescriber struct {
 	describe  func(imageRef) (string, error)
 }
 
-func (f *fakeDescriber) Describe(_ context.Context, _ http.Header, image imageRef) (string, error) {
+func (f *fakeDescriber) DescribeTarget(
+	_ context.Context,
+	_ http.Header,
+	_ string,
+	image imageRef,
+) (string, error) {
 	f.mu.Lock()
 	f.calls++
 	f.active++
@@ -643,6 +648,7 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 		"level":          true,
 		"msg":            true,
 		"profile":        true,
+		"transport":      true,
 		"image_count":    true,
 		"image_index":    true,
 		"source_type":    true,
@@ -1087,7 +1093,12 @@ func testPreprocessorWithTimeout(maxConcurrency int, timeout time.Duration, d de
 
 type describerFunc func(context.Context, http.Header, imageRef) (string, error)
 
-func (f describerFunc) Describe(ctx context.Context, headers http.Header, image imageRef) (string, error) {
+func (f describerFunc) DescribeTarget(
+	ctx context.Context,
+	headers http.Header,
+	_ string,
+	image imageRef,
+) (string, error) {
 	return f(ctx, headers, image)
 }
 
@@ -1116,7 +1127,8 @@ func testImageKey(p *Preprocessor, payload string) string {
 		cachePayload: payload,
 	}
 	return scopedImageCacheKey(
-		p.cacheKey, nil, p.headers, p.profile, p.model,
+		p.cacheKey, nil, p.headers, p.profile,
+		string(p.transport)+"\x00"+p.model,
 		promptForImage(p.prompt, image), image,
 	)
 }

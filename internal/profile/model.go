@@ -27,8 +27,17 @@ const (
 	ProtocolOpenAI    Protocol = "openai"
 )
 
+type VisionTransport string
+
+const (
+	VisionTransportAnthropicMessages     VisionTransport = "anthropic_messages"
+	VisionTransportOpenAIResponses       VisionTransport = "openai_responses"
+	VisionTransportOpenAIChatCompletions VisionTransport = "openai_chat_completions"
+)
+
 type VisionConfig struct {
 	Enabled             bool                `json:"enabled"`
+	Transport           VisionTransport     `json:"transport,omitempty"`
 	Model               string              `json:"model"`
 	UnlistedModelPolicy UnlistedModelPolicy `json:"unlisted_model_policy"`
 	MaxTokens           int                 `json:"max_tokens"`
@@ -68,6 +77,7 @@ type Record struct {
 
 type VisionRuntime struct {
 	Enabled             bool
+	Transport           VisionTransport
 	Model               string
 	UnlistedModelPolicy UnlistedModelPolicy
 	MaxTokens           int
@@ -97,6 +107,7 @@ func NewConfig(protocol Protocol, upstream string) Config {
 		Upstream: upstream,
 		Vision: VisionConfig{
 			Enabled:         false,
+			Transport:       DefaultVisionTransport(protocol),
 			Model:           "sonnet",
 			MaxTokens:       2048,
 			Timeout:         "2m",
@@ -105,6 +116,13 @@ func NewConfig(protocol Protocol, upstream string) Config {
 			CacheMaxEntries: 512,
 		},
 	}
+}
+
+func DefaultVisionTransport(protocol Protocol) VisionTransport {
+	if protocol == ProtocolOpenAI {
+		return VisionTransportOpenAIChatCompletions
+	}
+	return VisionTransportAnthropicMessages
 }
 
 func (r Record) Resolve() (Runtime, error) {
@@ -122,7 +140,7 @@ func (r Record) Resolve() (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
-	vision, err := resolveVision(r.Config.Vision)
+	vision, err := resolveVision(r.Config.Protocol, r.Config.Vision)
 	if err != nil {
 		return Runtime{}, err
 	}
@@ -160,7 +178,7 @@ func resolveUpstream(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func resolveVision(config VisionConfig) (VisionRuntime, error) {
+func resolveVision(protocol Protocol, config VisionConfig) (VisionRuntime, error) {
 	model := strings.TrimSpace(config.Model)
 	if config.Enabled && model == "" {
 		return VisionRuntime{}, fmt.Errorf(
@@ -174,6 +192,29 @@ func resolveVision(config VisionConfig) (VisionRuntime, error) {
 	}
 	if policy != UnlistedModelBypass && policy != UnlistedModelEnhance {
 		return VisionRuntime{}, fmt.Errorf("%w: unsupported unlisted model policy %q", ErrInvalidConfig, policy)
+	}
+	transport := config.Transport
+	if transport == "" {
+		transport = DefaultVisionTransport(protocol)
+	}
+	switch protocol {
+	case ProtocolAnthropic:
+		if transport != VisionTransportAnthropicMessages {
+			return VisionRuntime{}, fmt.Errorf(
+				"%w: vision transport %q is not supported by anthropic",
+				ErrInvalidConfig,
+				transport,
+			)
+		}
+	case ProtocolOpenAI:
+		if transport != VisionTransportOpenAIResponses &&
+			transport != VisionTransportOpenAIChatCompletions {
+			return VisionRuntime{}, fmt.Errorf(
+				"%w: vision transport %q is not supported by openai",
+				ErrInvalidConfig,
+				transport,
+			)
+		}
 	}
 	timeout, err := time.ParseDuration(config.Timeout)
 	if err != nil {
@@ -190,6 +231,7 @@ func resolveVision(config VisionConfig) (VisionRuntime, error) {
 
 	return VisionRuntime{
 		Enabled:             config.Enabled,
+		Transport:           transport,
 		Model:               model,
 		UnlistedModelPolicy: policy,
 		MaxTokens:           config.MaxTokens,

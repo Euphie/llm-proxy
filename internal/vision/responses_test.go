@@ -312,6 +312,7 @@ func TestOpenAIPreprocessorRewritesResponsesRequest(t *testing.T) {
 		nil,
 		profile.VisionRuntime{
 			Model:               "vision-model",
+			Transport:           profile.VisionTransportOpenAIResponses,
 			UnlistedModelPolicy: profile.UnlistedModelEnhance,
 			Prompt:              "describe",
 			Timeout:             time.Second,
@@ -405,6 +406,7 @@ func TestOpenAICacheScopeIgnoresAnthropicHeaders(t *testing.T) {
 		nil,
 		profile.VisionRuntime{
 			Model:               "vision-model",
+			Transport:           profile.VisionTransportOpenAIResponses,
 			UnlistedModelPolicy: profile.UnlistedModelEnhance,
 			Prompt:              "describe",
 			Timeout:             time.Second,

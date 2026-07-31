@@ -182,7 +182,7 @@ test("payload rejects invalid model rows while keeping exact IDs case-sensitive"
   ]);
 });
 
-test("OpenAI draft preserves the vision switch", () => {
+test("OpenAI draft preserves vision and defaults to Chat Completions", () => {
   const draft = defaultProfileDraft("openai");
   draft.config.vision.enabled = true;
   const payload = profilePayload({
@@ -194,6 +194,7 @@ test("OpenAI draft preserves the vision switch", () => {
   assert.equal(payload.config.protocol, "openai");
   assert.equal(payload.config.upstream, "https://example.test");
   assert.equal(payload.config.vision.enabled, true);
+  assert.equal(payload.config.vision.transport, "openai_chat_completions");
 });
 
 test("payload preserves every configured field with numeric JSON types and retry order", () => {
@@ -243,6 +244,7 @@ test("payload preserves every configured field with numeric JSON types and retry
       models: [],
       vision: {
         enabled: true,
+        transport: "anthropic_messages",
         model: "vision-model",
         unlisted_model_policy: "bypass",
         max_tokens: 4096,
@@ -1321,7 +1323,7 @@ test("default submission cannot contain enabled false even with inconsistent con
   assert.equal(saved.enabled, true);
 });
 
-test("switching the editor to OpenAI preserves vision and explains its Responses boundary", async (t) => {
+test("switching the editor to OpenAI preserves vision and selects Chat Completions", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft("anthropic");
   draft.slug = "openai";
@@ -1343,19 +1345,33 @@ test("switching the editor to OpenAI preserves vision and explains its Responses
   await protocol.dispatch("change");
 
   assert.equal(findClass(root, "vision-controls").hidden, false);
-  assert.equal(
-    findText(
-      root,
-      "OpenAI 协议仅处理 /v1/responses 输入消息里的 input_image；其他 OpenAI 路径不处理。",
-    ).hidden,
-    false,
-  );
   assert.equal(controlByName(root, "vision_enabled").checked, true);
   assert.equal(controlByName(root, "vision_enabled").disabled, false);
+  assert.equal(controlByName(root, "vision_transport").value, "openai_chat_completions");
 
   await findTag(root, "FORM").dispatch("submit");
   assert.equal(saved.config.protocol, "openai");
   assert.equal(saved.config.vision.enabled, true);
+  assert.equal(saved.config.vision.transport, "openai_chat_completions");
+});
+
+test("old OpenAI Profile without transport loads and saves the default", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft("openai");
+  delete draft.config.vision.transport;
+  let saved;
+
+  renderProfileEditor(root, draft, {
+    save: async (payload) => {
+      saved = payload;
+    },
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  assert.equal(controlByName(root, "vision_transport").value, "openai_chat_completions");
+  await findTag(root, "FORM").dispatch("submit");
+  assert.equal(saved.config.vision.transport, "openai_chat_completions");
 });
 
 test("retry editor add remove up and down actions keep visible first-match order", async (t) => {

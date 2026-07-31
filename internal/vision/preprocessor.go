@@ -72,10 +72,12 @@ type requestDocument interface {
 
 type Preprocessor struct {
 	profile             string
+	transport           profile.VisionTransport
 	model               string
 	models              profile.ModelCatalog
 	unlistedModelPolicy profile.UnlistedModelPolicy
 	prompt              string
+	defaultTarget       string
 	parse               func(map[string]json.RawMessage) (requestDocument, error)
 	headers             []string
 	describer           describer
@@ -92,14 +94,17 @@ type processLoader struct {
 }
 
 func New(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *Preprocessor {
-	return newPreprocessorForProtocol(
+	client := newVisionClient(cfg, httpClient, sdb)
+	preprocessor := newPreprocessorForProtocol(
 		cfg.Protocol,
 		cfg.Slug,
 		cfg.Models,
 		cfg.Vision,
-		newVisionClient(cfg, httpClient, sdb),
+		client,
 		newResultCache(cfg.Vision.CacheMaxEntries, cfg.Vision.CacheTTL),
 	)
+	preprocessor.defaultTarget = client.upstream
+	return preprocessor
 }
 
 func newPreprocessor(
@@ -126,6 +131,9 @@ func newPreprocessorForProtocol(
 	d describer,
 	cache *resultCache,
 ) *Preprocessor {
+	if cfg.Transport == "" {
+		cfg.Transport = profile.DefaultVisionTransport(protocol)
+	}
 	parse := func(root map[string]json.RawMessage) (requestDocument, error) {
 		return parseMessagesRoot(root)
 	}
@@ -136,10 +144,12 @@ func newPreprocessorForProtocol(
 	}
 	return &Preprocessor{
 		profile:             profileSlug,
+		transport:           cfg.Transport,
 		model:               cfg.Model,
 		models:              models,
 		unlistedModelPolicy: cfg.UnlistedModelPolicy,
 		prompt:              effectivePrompt(cfg.Prompt),
+		defaultTarget:       "https://vision.invalid/v1/messages",
 		parse:               parse,
 		headers:             forwardedHeadersForProtocol(protocol),
 		describer:           d,
@@ -162,6 +172,15 @@ func (p *Preprocessor) Process(
 	ctx context.Context,
 	headers http.Header,
 	body []byte,
+) ([]byte, error) {
+	return p.ProcessTarget(ctx, headers, body, p.defaultTarget)
+}
+
+func (p *Preprocessor) ProcessTarget(
+	ctx context.Context,
+	headers http.Header,
+	body []byte,
+	mainTarget string,
 ) ([]byte, error) {
 	root, err := parseRequestRoot(body)
 	if err != nil {
@@ -191,9 +210,23 @@ func (p *Preprocessor) Process(
 	if len(images) == 0 {
 		return body, nil
 	}
+	if p.transport == profile.VisionTransportOpenAIChatCompletions {
+		for _, image := range images {
+			if image.sourceType == "file" {
+				return nil, &processError{
+					status: http.StatusBadRequest,
+					err: unsupportedImageSourceError{
+						transport: p.transport,
+						source:    "file_id",
+					},
+				}
+			}
+		}
+	}
 	processStarted := time.Now()
 	slog.Info("vision.images.discovered",
 		"profile", p.profile,
+		"transport", p.transport,
 		"image_count", len(images))
 
 	workCtx, cancel := context.WithCancel(ctx)
@@ -218,7 +251,15 @@ func (p *Preprocessor) Process(
 
 			description, source, err := p.cache.getOrLoad(
 				workCtx,
-				scopedImageCacheKey(p.cacheKey, headers, p.headers, p.profile, p.model, imagePrompt, image),
+				scopedImageCacheKey(
+					p.cacheKey,
+					headers,
+					p.headers,
+					p.profile,
+					string(p.transport)+"\x00"+p.model,
+					imagePrompt,
+					image,
+				),
 				func(loadCtx context.Context) (string, error) {
 					operationCtx, operationCancel := context.WithTimeout(loadCtx, p.timeout)
 					defer operationCancel()
@@ -231,7 +272,12 @@ func (p *Preprocessor) Process(
 					if err := operationCtx.Err(); err != nil {
 						return "", err
 					}
-					description, err := p.describer.Describe(operationCtx, headers, image)
+					description, err := p.describer.DescribeTarget(
+						operationCtx,
+						headers,
+						mainTarget,
+						image,
+					)
 					if err != nil {
 						failures.record(err)
 						cancel()
@@ -243,6 +289,7 @@ func (p *Preprocessor) Process(
 			cacheSource := cacheSourceName(source)
 			slog.Info("vision.image.cache",
 				"profile", p.profile,
+				"transport", p.transport,
 				"image_index", i,
 				"source_type", image.sourceType,
 				"cache_source", cacheSource)
@@ -251,12 +298,14 @@ func (p *Preprocessor) Process(
 				debugDescription, truncated := truncateDebugContent(description)
 				slog.Info("vision.debug.description",
 					"profile", p.profile,
+					"transport", p.transport,
 					"image_index", i,
 					"source_type", image.sourceType,
 					"description", debugDescription,
 					"truncated", truncated)
 				slog.Info("vision.image.completed",
 					"profile", p.profile,
+					"transport", p.transport,
 					"image_index", i,
 					"source_type", image.sourceType,
 					"cache_source", cacheSource,
@@ -267,6 +316,7 @@ func (p *Preprocessor) Process(
 
 			slog.Warn("vision.image.failed",
 				"profile", p.profile,
+				"transport", p.transport,
 				"image_index", i,
 				"source_type", image.sourceType,
 				"cache_source", cacheSource,
@@ -299,6 +349,7 @@ func (p *Preprocessor) Process(
 	}
 	slog.Info("vision.rewrite.completed",
 		"profile", p.profile,
+		"transport", p.transport,
 		"image_count", len(images),
 		"duration_ms", time.Since(processStarted).Milliseconds())
 	return rewritten, nil

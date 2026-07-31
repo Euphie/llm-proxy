@@ -4,7 +4,7 @@
 模型生成描述，再以描述替换图片并发送主请求。该流程支持：
 
 - Anthropic `POST /v1/messages`；
-- OpenAI `POST /v1/responses`。
+- OpenAI `POST /responses` 或 `POST /v1/responses`。
 
 其他路径（包括 OpenAI Chat Completions）不会进入图片预处理。
 
@@ -15,7 +15,7 @@
 1. Profile 已启用视觉预处理；
 2. Profile 的识图模型非空；
 3. 请求是支持协议的 `POST` JSON 路由（Anthropic `/v1/messages` 或 OpenAI
-   `/v1/responses`）；
+   `/responses` 或 `/v1/responses`）；
 4. 主 `model` 的模型能力判定允许增强；
 5. 请求中至少有一个受支持的直接图片块。
 
@@ -35,7 +35,7 @@
 2. 收集 Anthropic `messages[].content[]` 中的直接 `image`，或 Responses
    `input[]` 消息内容中的直接 `input_image`。
 3. 查询缓存，并并发处理未命中图片。
-4. 使用同一协议发送非流式影子请求；Responses 影子请求固定设置
+4. 按 `vision.transport` 发送非流式影子请求；Responses 影子请求固定设置
    `store: false`。
 5. 按原顺序将图片替换为带固定前缀的 `text` 或 `input_text`。
 6. 使用同一 Profile 的重试与流式代理发送主请求。
@@ -63,6 +63,7 @@
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
 | 启用视觉预处理 | 关闭 | 是否处理直接图片块 |
+| 视觉调用接口 | 按协议 | Anthropic 固定为 Messages；OpenAI 默认 Chat Completions，也可选 Responses |
 | 模型 | `sonnet` | 原样发送给 Upstream 的实际模型名 |
 | 最大 Token | `2048` | 单张图片描述的输出上限；按协议转换为对应请求字段 |
 | 超时 | `2m` | 包含并发排队、请求、重试和读取 |
@@ -74,6 +75,16 @@
 模型字段不会读取 Agent 配置中的模型映射；应填写 Upstream 实际接受的视觉模型名。
 影子请求复用当前 Profile 的有序重试规则。`store: false` 只约束 Responses 影子
 请求，不修改原始主请求的 `store` 选择。
+
+Profile 配置版本仍为 `1`。旧 Profile 缺少 `vision.transport` 时使用协议默认值，
+在控制台编辑并保存一次即可显式写入。主请求协议不会随该选项改变：
+
+- `anthropic_messages`：识图请求使用实际 Messages 主请求目标；
+- `openai_responses`：识图请求使用实际 Responses 主请求目标；
+- `openai_chat_completions`：把实际主请求目标末尾的 `/responses` 替换为
+  `/chat/completions`。
+
+目标从最终主请求 URL 推导，不额外拼接 `/v1`。
 
 ## 图片来源与请求头
 
@@ -87,6 +98,9 @@ Responses `input_image` 支持完整 URL、base64 data URL 或 `file_id`，并�
 `auto`、`low`、`high`、`original` detail 的缓存隔离。只处理直接消息内容中的
 图片，不递归处理 Anthropic `tool_result.content` 或 Responses 工具输出中的嵌套
 内容。
+
+`openai_responses` 支持上述全部来源；`openai_chat_completions` 支持 URL 和
+base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前返回 `400`。
 
 影子请求只按协议白名单透传请求头，不透传任意客户端请求头：
 
@@ -105,7 +119,7 @@ Responses `input_image` 支持完整 URL、base64 data URL 或 `file_id`，并�
 
 缓存键隔离以下内容：
 
-- Profile、视觉模型和实际生成的上下文提示词；
+- Profile、视觉调用接口、视觉模型和实际生成的上下文提示词；
 - 图片来源类型和内容；
 - 实际透传的协议相关鉴权/版本请求头。
 

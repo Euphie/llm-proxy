@@ -93,11 +93,12 @@ func TestOpenAIVisionClientUsesResponsesAPI(t *testing.T) {
 
 	cfg := testVisionConfig(server.URL)
 	cfg.Protocol = profile.ProtocolOpenAI
+	cfg.Vision.Transport = profile.VisionTransportOpenAIResponses
 	cfg.Vision.Model = "gpt-5.4-mini"
 	cfg.Vision.MaxTokens = 512
 	client := newVisionClient(cfg, server.Client(), nil)
 	recorded := make(chan []byte, 1)
-	client.recordUsage = func(body []byte) {
+	client.recordUsage = func(_ string, body []byte) {
 		recorded <- append([]byte(nil), body...)
 	}
 	headers := make(http.Header)
@@ -130,6 +131,7 @@ func TestOpenAIVisionClientUsesResponsesAPI(t *testing.T) {
 func TestOpenAIVisionClientRequestBodyUsesContextPrompt(t *testing.T) {
 	cfg := testVisionConfig("https://upstream.example")
 	cfg.Protocol = profile.ProtocolOpenAI
+	cfg.Vision.Transport = profile.VisionTransportOpenAIResponses
 	client := newVisionClient(cfg, nil, nil)
 	image := testResponsesImage()
 	image.taskContext = "能打多少分"
@@ -171,9 +173,10 @@ func TestOpenAIVisionClientRecordsUsageBeforeRejectingMissingDescription(t *test
 
 	cfg := testVisionConfig(server.URL)
 	cfg.Protocol = profile.ProtocolOpenAI
+	cfg.Vision.Transport = profile.VisionTransportOpenAIResponses
 	client := newVisionClient(cfg, server.Client(), nil)
 	recorded := make(chan []byte, 1)
-	client.recordUsage = func(body []byte) {
+	client.recordUsage = func(_ string, body []byte) {
 		recorded <- append([]byte(nil), body...)
 	}
 
@@ -223,6 +226,7 @@ func TestOpenAIVisionClientRecordsResponsesUsageThroughStatsDB(t *testing.T) {
 	cfg := testVisionConfig(server.URL)
 	cfg.Slug = "openai"
 	cfg.Protocol = profile.ProtocolOpenAI
+	cfg.Vision.Transport = profile.VisionTransportOpenAIResponses
 	cfg.Vision.Model = "gpt-5.4-mini"
 	client := newVisionClient(cfg, server.Client(), sdb)
 	if _, err := client.Describe(context.Background(), nil, testResponsesImage()); err != nil {
@@ -262,5 +266,7 @@ func testResponsesImage() imageRef {
 		block:        json.RawMessage(`{"type":"input_image","image_url":"https://private.example/image.png","detail":"high"}`),
 		sourceType:   "url",
 		cachePayload: "high\x00https://private.example/image.png",
+		imageURL:     "https://private.example/image.png",
+		detail:       "high",
 	}
 }

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -41,7 +43,7 @@ func forwardedHeadersForProtocol(protocol profile.Protocol) []string {
 }
 
 type describer interface {
-	Describe(context.Context, http.Header, imageRef) (string, error)
+	DescribeTarget(context.Context, http.Header, string, imageRef) (string, error)
 }
 
 type visionClient struct {
@@ -54,7 +56,7 @@ type visionClient struct {
 	sleep       func(context.Context, time.Duration) error
 	parse       func([]byte) (string, error)
 	headers     []string
-	recordUsage func([]byte)
+	recordUsage func(string, []byte)
 }
 
 func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *visionClient {
@@ -62,6 +64,9 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 		httpClient = http.DefaultClient
 	}
 	httpClient = shadowHTTPClient(httpClient)
+	if cfg.Vision.Transport == "" {
+		cfg.Vision.Transport = profile.DefaultVisionTransport(cfg.Protocol)
+	}
 
 	path := "/v1/messages"
 	parser := stats.NewParser("anthropic")
@@ -70,6 +75,9 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 		path = "/v1/responses"
 		parser = stats.NewParser("openai")
 		parse = parseResponsesDescription
+	}
+	if cfg.Vision.Transport == profile.VisionTransportOpenAIChatCompletions {
+		parse = parseChatCompletionsDescription
 	}
 	client := &visionClient{
 		profileSlug: cfg.Slug,
@@ -81,10 +89,10 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 		sleep:       sleepContext,
 		parse:       parse,
 		headers:     forwardedHeadersForProtocol(cfg.Protocol),
-		recordUsage: func([]byte) {},
+		recordUsage: func(string, []byte) {},
 	}
 	if sdb != nil {
-		client.recordUsage = func(body []byte) {
+		client.recordUsage = func(path string, body []byte) {
 			sdb.RecordAsync(stats.RequestMeta{
 				ProfileID:   cfg.ID,
 				ProfileSlug: cfg.Slug,
@@ -105,11 +113,28 @@ func effectivePrompt(configured string) string {
 }
 
 func (c *visionClient) Describe(ctx context.Context, headers http.Header, image imageRef) (string, error) {
+	return c.DescribeTarget(ctx, headers, c.upstream, image)
+}
+
+func (c *visionClient) DescribeTarget(
+	ctx context.Context,
+	headers http.Header,
+	mainTarget string,
+	image imageRef,
+) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 
+	target, err := shadowTarget(mainTarget, c.cfg.Transport)
+	if err != nil {
+		return "", safeClientError{"derive vision target", err}
+	}
 	body, err := c.requestBody(image)
 	if err != nil {
+		var unsupportedSource unsupportedImageSourceError
+		if errors.As(err, &unsupportedSource) {
+			return "", unsupportedSource
+		}
 		return "", safeClientError{"build vision request", err}
 	}
 
@@ -124,7 +149,7 @@ func (c *visionClient) Describe(ctx context.Context, headers http.Header, image 
 		}
 
 		attemptStarted := time.Now()
-		response, err := c.do(ctx, headers, body)
+		response, err := c.do(ctx, headers, target, body)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				c.logAttempt(image, attempt+1, attemptStarted, visionErrorClass(ctxErr), 0, 0, false)
@@ -154,7 +179,8 @@ func (c *visionClient) Describe(ctx context.Context, headers http.Header, image 
 		}
 
 		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
-			c.recordUsage(responseBody)
+			targetURL, _ := url.Parse(target)
+			c.recordUsage(targetURL.Path, responseBody)
 			description, err := c.parse(responseBody)
 			if err != nil {
 				c.logAttempt(image, attempt+1, attemptStarted, "invalid_response",
@@ -196,6 +222,7 @@ func (c *visionClient) logAttempt(
 ) {
 	slog.Info("vision.shadow.attempt",
 		"profile", c.profileSlug,
+		"transport", c.cfg.Transport,
 		"source_type", image.sourceType,
 		"model", c.cfg.Model,
 		"attempt", attempt,
@@ -215,6 +242,7 @@ func (c *visionClient) logDebugUpstreamResponse(
 	responseBody, truncated := truncateDebugContent(string(body))
 	slog.Info("vision.debug.upstream_response",
 		"profile", c.profileSlug,
+		"transport", c.cfg.Transport,
 		"source_type", image.sourceType,
 		"model", c.cfg.Model,
 		"attempt", attempt,
@@ -232,9 +260,19 @@ func truncateDebugContent(content string) (string, bool) {
 }
 
 func (c *visionClient) requestBody(image imageRef) ([]byte, error) {
-	if c.protocol == profile.ProtocolOpenAI {
+	switch c.cfg.Transport {
+	case profile.VisionTransportAnthropicMessages:
+		return c.anthropicRequestBody(image)
+	case profile.VisionTransportOpenAIResponses:
 		return c.responsesRequestBody(image)
+	case profile.VisionTransportOpenAIChatCompletions:
+		return c.chatCompletionsRequestBody(image)
+	default:
+		return nil, fmt.Errorf("unsupported vision transport %q", c.cfg.Transport)
 	}
+}
+
+func (c *visionClient) anthropicRequestBody(image imageRef) ([]byte, error) {
 	prompt, err := json.Marshal(struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -264,6 +302,61 @@ func (c *visionClient) requestBody(image imageRef) ([]byte, error) {
 		}{{
 			Role:    "user",
 			Content: []json.RawMessage{image.block, prompt},
+		}},
+	}
+	return json.Marshal(request)
+}
+
+func (c *visionClient) chatCompletionsRequestBody(image imageRef) ([]byte, error) {
+	if image.fileID != "" || image.sourceType == "file" {
+		return nil, unsupportedImageSourceError{
+			transport: c.cfg.Transport,
+			source:    "file_id",
+		}
+	}
+	if strings.TrimSpace(image.imageURL) == "" {
+		return nil, fmt.Errorf("image_url is required")
+	}
+
+	type imageURL struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail,omitempty"`
+	}
+	type contentBlock struct {
+		Type     string    `json:"type"`
+		ImageURL *imageURL `json:"image_url,omitempty"`
+		Text     string    `json:"text,omitempty"`
+	}
+	request := struct {
+		Model               string `json:"model"`
+		MaxCompletionTokens int    `json:"max_completion_tokens"`
+		Stream              bool   `json:"stream"`
+		Messages            []struct {
+			Role    string         `json:"role"`
+			Content []contentBlock `json:"content"`
+		} `json:"messages"`
+	}{
+		Model:               c.cfg.Model,
+		MaxCompletionTokens: c.cfg.MaxTokens,
+		Stream:              false,
+		Messages: []struct {
+			Role    string         `json:"role"`
+			Content []contentBlock `json:"content"`
+		}{{
+			Role: "user",
+			Content: []contentBlock{
+				{
+					Type: "image_url",
+					ImageURL: &imageURL{
+						URL:    image.imageURL,
+						Detail: image.detail,
+					},
+				},
+				{
+					Type: "text",
+					Text: promptForImage(c.cfg.Prompt, image),
+				},
+			},
 		}},
 	}
 	return json.Marshal(request)
@@ -309,9 +402,10 @@ func (c *visionClient) responsesRequestBody(image imageRef) ([]byte, error) {
 func (c *visionClient) do(
 	ctx context.Context,
 	headers http.Header,
+	target string,
 	body []byte,
 ) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.upstream, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +416,52 @@ func (c *visionClient) do(
 	}
 	request.Header.Set("Content-Type", "application/json")
 	return c.httpClient.Do(request)
+}
+
+func shadowTarget(mainTarget string, transport profile.VisionTransport) (string, error) {
+	parsed, err := url.Parse(mainTarget)
+	if err != nil {
+		return "", fmt.Errorf("parse main target: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("main target must be an absolute URL")
+	}
+	switch transport {
+	case profile.VisionTransportAnthropicMessages, profile.VisionTransportOpenAIResponses:
+		return parsed.String(), nil
+	case profile.VisionTransportOpenAIChatCompletions:
+		if !strings.HasSuffix(parsed.Path, "/responses") {
+			return "", fmt.Errorf("main target path must end with %q", "/responses")
+		}
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/responses") + "/chat/completions"
+		parsed.RawPath = ""
+		return parsed.String(), nil
+	default:
+		return "", fmt.Errorf("unsupported vision transport %q", transport)
+	}
+}
+
+func parseChatCompletionsDescription(body []byte) (string, error) {
+	var response struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", fmt.Errorf("parse vision response: %w", err)
+	}
+	var texts []string
+	for _, choice := range response.Choices {
+		if strings.TrimSpace(choice.Message.Content) != "" {
+			texts = append(texts, choice.Message.Content)
+		}
+	}
+	if len(texts) == 0 {
+		return "", fmt.Errorf("vision response contains no text")
+	}
+	return strings.Join(texts, "\n"), nil
 }
 
 func sleepContext(ctx context.Context, wait time.Duration) error {
@@ -367,4 +507,13 @@ func (e safeClientError) Error() string {
 
 func (e safeClientError) Unwrap() error {
 	return e.cause
+}
+
+type unsupportedImageSourceError struct {
+	transport profile.VisionTransport
+	source    string
+}
+
+func (e unsupportedImageSourceError) Error() string {
+	return fmt.Sprintf("vision transport %q does not support %s images", e.transport, e.source)
 }

@@ -105,7 +105,7 @@ func TestVisionClientRequestHeadersResponseAndUsage(t *testing.T) {
 
 	client := newVisionClient(testVisionConfig(server.URL), server.Client(), nil)
 	usage := make(chan []byte, 1)
-	client.recordUsage = func(body []byte) { usage <- append([]byte(nil), body...) }
+	client.recordUsage = func(_ string, body []byte) { usage <- append([]byte(nil), body...) }
 	headers := http.Header{
 		"Authorization":       {"Bearer secret"},
 		"X-Api-Key":           {"key"},
@@ -465,7 +465,7 @@ func TestVisionClientDoesNotRetryUnmatchedErrorOrLeakSecrets(t *testing.T) {
 	}}
 	client := newVisionClient(cfg, server.Client(), nil)
 	var usageCalls atomic.Int32
-	client.recordUsage = func([]byte) { usageCalls.Add(1) }
+	client.recordUsage = func(string, []byte) { usageCalls.Add(1) }
 	image := testImage()
 	headers := http.Header{"Authorization": {"Bearer secret-auth"}}
 

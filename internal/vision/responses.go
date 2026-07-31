@@ -133,15 +133,18 @@ func parseResponsesImageBlock(
 
 	image := imageRef{
 		block:        block,
+		detail:       detail,
 		messageIndex: itemIndex,
 		blockIndex:   blockIndex,
 	}
 	if hasFileID {
 		image.sourceType = "file"
+		image.fileID = fileID
 		image.cachePayload = detail + "\x00" + fileID
 		return image, true, nil
 	}
 	image.sourceType = "url"
+	image.imageURL = imageURL
 	if strings.HasPrefix(strings.ToLower(imageURL), "data:") {
 		image.sourceType = "data_url"
 	}
