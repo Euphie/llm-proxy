@@ -16,6 +16,7 @@ import (
 	"github.com/Euphie/llm-proxy/internal/database"
 	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/routing"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
@@ -162,6 +163,36 @@ func TestAutoRoutingAnalyzesUncertainRequestAndRewritesModel(t *testing.T) {
 	}
 	if analyzerCalls.Load() != 1 || answerCalls.Load() != 1 || answerModel != "fast" {
 		t.Fatalf("analyzer=%d answer=%d model=%q", analyzerCalls.Load(), answerCalls.Load(), answerModel)
+	}
+}
+
+func TestAutoRoutingStopsAfterAnalyzerAuthenticationFailure(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"private":"upstream diagnostic"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"must not answer"}]}`)
+	}))
+	defer server.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"比较两种分布式架构的取舍并给出迁移方案"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(autoProxyRuntime(t, server.URL, false), server.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized || calls.Load() != 1 {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls.Load(), response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "upstream diagnostic") {
+		t.Fatalf("response leaked analyzer body: %q", response.Body.String())
 	}
 }
 
@@ -640,6 +671,46 @@ func TestAutoRoutingDoesNotSwitchTargetForNonRetryableResponse(t *testing.T) {
 	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || backupCalls.Load() != 0 {
 		t.Fatalf("status=%d backup=%d body=%q", response.Code, backupCalls.Load(), response.Body.String())
+	}
+}
+
+func TestAutoRoutingIgnoresInvalidHardFailureRetryRule(t *testing.T) {
+	var primaryCalls atomic.Int32
+	var backupCalls atomic.Int32
+	const upstreamBody = `{"error":"invalid credential","private":"do-not-log"}`
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, upstreamBody)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backup.Close()
+
+	runtime := autoProxyRuntime(t, primary.URL, false)
+	runtime.OverloadRules = []provider.Rule{{
+		Status: http.StatusUnauthorized, MaxRetries: 1,
+	}}
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"fast"},
+	})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized || response.Body.String() != upstreamBody ||
+		primaryCalls.Load() != 1 || backupCalls.Load() != 0 {
+		t.Fatalf("status=%d primary=%d backup=%d body=%q",
+			response.Code, primaryCalls.Load(), backupCalls.Load(), response.Body.String())
 	}
 }
 

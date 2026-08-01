@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/provider"
 )
 
 type Engine struct {
@@ -68,6 +69,11 @@ func (e *Engine) RouteWithPreference(
 			return ExecutionPlan{}, Classification{}, ctx.Err()
 		}
 		if errors.Is(err, ErrAttemptBudgetExceeded) {
+			return ExecutionPlan{}, Classification{}, err
+		}
+		if class, ok := provider.FailureClassOf(err); ok &&
+			(class == provider.FailureAuthentication ||
+				class == provider.FailureRequestProtocolCapability) {
 			return ExecutionPlan{}, Classification{}, err
 		}
 	}

@@ -3,6 +3,7 @@ package profile
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -557,6 +558,38 @@ func TestRecordResolveTrimsUpstreamTrailingSlashAndBuildsRetryRules(t *testing.T
 	if rule.Status != 529 || rule.BodyContains != "overloaded" || rule.MaxRetries != 2 ||
 		rule.RetryDelay != time.Second || rule.RetryJitter != 100*time.Millisecond {
 		t.Fatalf("rule=%+v", rule)
+	}
+}
+
+func TestRecordResolveAcceptsOnlyRetryableOverloadStatuses(t *testing.T) {
+	for _, status := range []int{408, 425, 429, 500, 529, 599} {
+		t.Run(fmt.Sprintf("accepts %d", status), func(t *testing.T) {
+			record := Record{
+				Slug: "coding", DisplayName: "Coding", Enabled: true,
+				Config: NewConfig(ProtocolAnthropic, "https://example.test"),
+			}
+			record.Config.OverloadRules = []RetryRule{{
+				Status: status, MaxRetries: 1, Delay: "0s", Jitter: "0s",
+			}}
+			if _, err := record.Resolve(); err != nil {
+				t.Fatalf("Resolve() error=%v", err)
+			}
+		})
+	}
+
+	for _, status := range []int{400, 401, 403, 404, 409, 422, 499, 600} {
+		t.Run(fmt.Sprintf("rejects %d", status), func(t *testing.T) {
+			record := Record{
+				Slug: "coding", DisplayName: "Coding", Enabled: true,
+				Config: NewConfig(ProtocolAnthropic, "https://example.test"),
+			}
+			record.Config.OverloadRules = []RetryRule{{
+				Status: status, MaxRetries: 1, Delay: "0s", Jitter: "0s",
+			}}
+			if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Resolve() error=%v, want ErrInvalidConfig", err)
+			}
+		})
 	}
 }
 

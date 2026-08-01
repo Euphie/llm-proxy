@@ -456,6 +456,23 @@ test("payload preserves every configured field with numeric JSON types and retry
   });
 });
 
+test("payload rejects hard-failure statuses as overload rules", () => {
+  for (const status of [400, 401, 403, 404, 409, 422]) {
+    const draft = defaultProfileDraft("anthropic");
+    draft.config.overload_rules = [{
+      status,
+      body_contains: "",
+      max_retries: 1,
+      delay: "0s",
+      jitter: "0s",
+    }];
+    assert.throws(
+      () => profilePayload(draft),
+      /408.*425.*429.*500.*599/,
+    );
+  }
+});
+
 test("retry helpers add remove and move without implicit sorting", () => {
   const first = {
     status: 503,
@@ -809,6 +826,10 @@ test("editor renders exact accessible labels and sections and submits every conf
   assert.match(
     fieldDescription(root, controlByName(root, "retry-0-delay")),
     /等待时间/,
+  );
+  assert.match(
+    fieldDescription(root, controlByName(root, "retry-0-status")),
+    /408.*425.*429.*500.*599/,
   );
   assert.equal(
     controls(root).some(

@@ -303,6 +303,8 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(quality, /证据不足时使用保守先验[\s\S]*置信下界[\s\S]*强模型基线[\s\S]*否则请求失败/);
   assert.match(quality, /A\/B\/C\/D 等级[\s\S]*只用于展示/);
   assert.match(target, /Upstream 是 primary[\s\S]*按配置顺序切换同模型备用 Target/);
+  assert.match(target, /408[\s\S]*425[\s\S]*429[\s\S]*500[\s\S]*599/);
+  assert.match(target, /401\/403[\s\S]*不能重试[\s\S]*不能切换 Target[\s\S]*不能切换模型/);
   assert.match(runtime, /主模型支持视觉[\s\S]*主模型不支持视觉且当前 Profile 已开启增强[\s\S]*该模型从候选中排除/);
   for (const field of [
     "max_answer_attempts", "max_auxiliary_calls", "max_total_outbound_calls", "max_retries_per_target",
@@ -311,6 +313,7 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(runtime, /ClientCommit 后[\s\S]*不再重试|提交后禁止重试/);
   assert.match(runtime, /Session 绑定只对 `model=auto` 生效[\s\S]*永久不足[\s\S]*升级[\s\S]*临时 429、5xx[\s\S]*不改变 Session 绑定[\s\S]*不自动降级/);
   assert.match(runtime, /任务分析先消耗预算[\s\S]*ExecutionPlan 固定剩余预算[\s\S]*异步评测不占用已结束的在线请求预算/);
+  assert.match(runtime, /任务分析器[\s\S]*401\/403[\s\S]*硬失败[\s\S]*不回退到强模型基线/);
   assert.match(runtime, /视觉缓存键至少包含 Profile[\s\S]*当前问题上下文[\s\S]*鉴权域/);
   assert.match(runtime, /Session 键使用 HMAC[\s\S]*原始 Session ID[\s\S]*Profile[\s\S]*Route[\s\S]*鉴权域[\s\S]*缺少有效 Session ID[\s\S]*不建立跨请求绑定/);
   assert.match(evaluation, /默认关闭/);
@@ -342,6 +345,8 @@ test("keeps the canonical repository design aligned with the documentation site"
   assert.match(design, /context_window[\s\S]*client_context_window/);
   assert.match(design, /未登记或未确认的能力不视为满足对应硬约束[\s\S]*缺少计算完整成本所需的价格字段[\s\S]*不能发布/);
   assert.match(design, /质量证据不足时使用保守先验[\s\S]*置信下界[\s\S]*强模型基线[\s\S]*否则请求失败/);
+  assert.match(design, /408[\s\S]*425[\s\S]*429[\s\S]*500[\s\S]*599/);
+  assert.match(design, /任务分析[^。]*401\/403[^。]*硬失败[^。]*不能[^。]*强模型基线/);
   assert.match(design, /单进程、单副本[\s\S]*不做分布式协调/);
   assert.doesNotMatch(
     design,

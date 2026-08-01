@@ -149,6 +149,52 @@ func TestEngineFallsBackToStrongBaselineOnAnalyzerFailureOrLowConfidence(t *test
 	}
 }
 
+func TestEngineStopsOnHardAnalyzerHTTPFailureWithoutLeakingBody(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "authentication", status: http.StatusUnauthorized},
+		{name: "authorization", status: http.StatusForbidden},
+		{name: "request", status: http.StatusBadRequest},
+		{name: "capability", status: http.StatusUnprocessableEntity},
+		{name: "redirect protocol", status: http.StatusTemporaryRedirect},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const secretBody = "UPSTREAM_PRIVATE_ERROR_BODY"
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, secretBody)
+			}))
+			defer server.Close()
+			config := routingConfig(false)
+			config.Upstream = server.URL
+			engine, err := NewEngine(resolveRoutingRuntime(t, config), server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			budget, ctx, cancel := engine.NewAttemptBudget(context.Background())
+			defer cancel()
+			request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"比较两种分布式架构的取舍并给出迁移方案"}]}`)
+
+			plan, classification, err := engine.Route(ctx, nil, request, budget)
+			if err == nil {
+				t.Fatalf("Route() plan=%+v classification=%+v, want hard failure", plan.Snapshot(), classification)
+			}
+			if strings.Contains(err.Error(), secretBody) {
+				t.Fatalf("Route() leaked upstream body: %v", err)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("analyzer calls=%d, want 1", calls.Load())
+			}
+		})
+	}
+}
+
 func TestAnalyzerPromptContainsFactsButNotCredentials(t *testing.T) {
 	var analyzerBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

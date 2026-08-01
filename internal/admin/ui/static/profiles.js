@@ -161,7 +161,7 @@ export function profilePayload(draft) {
         prompt: String(vision.prompt ?? ""),
       },
       overload_rules: rules.map((rule) => ({
-        status: Number(rule.status),
+        status: retryableStatus(rule.status),
         body_contains: String(rule.body_contains ?? ""),
         max_retries: Number(rule.max_retries),
         delay: String(rule.delay ?? ""),
@@ -169,6 +169,17 @@ export function profilePayload(draft) {
       })),
     },
   };
+}
+
+function retryableStatus(value) {
+  const status = Number(value);
+  if (
+    !Number.isInteger(status) ||
+    !(status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599))
+  ) {
+    throw new Error("重试状态码必须是 408、425、429 或 500–599。");
+  }
+  return status;
 }
 
 export function addModelCapability(models) {
@@ -2059,7 +2070,7 @@ export function renderProfileEditor(root, source, actions = {}) {
           type: "number",
           min: "100",
           max: "599",
-          description: "需要重试的 HTTP 状态码，例如 429 或 529。",
+          description: "只接受可重试的 HTTP 状态码：408、425、429 或 500–599。401/403 等硬失败不能重试。",
         },
       );
       const bodyContains = fieldInput(

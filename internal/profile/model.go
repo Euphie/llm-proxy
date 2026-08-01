@@ -268,6 +268,13 @@ func resolveVision(protocol Protocol, config VisionConfig) (VisionRuntime, error
 func resolveRetryRules(configs []RetryRule) ([]provider.Rule, error) {
 	rules := make([]provider.Rule, len(configs))
 	for i, config := range configs {
+		if !provider.IsRetryableStatus(config.Status) {
+			return nil, fmt.Errorf(
+				"%w: retry rule %d status must be 408, 425, 429, or 500..599",
+				ErrInvalidConfig,
+				i,
+			)
+		}
 		delay, err := time.ParseDuration(config.Delay)
 		if err != nil {
 			return nil, fmt.Errorf("%w: retry rule %d delay: %v", ErrInvalidConfig, i, err)

@@ -388,10 +388,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if requestCtx.Err() != nil {
 				return
 			}
-			if rule == nil && len(h.cfg.OverloadRules) > 0 {
-				rule = &h.cfg.OverloadRules[0]
+			failure := provider.ClassifyTransportFailure(err)
+			failureClass, _ := provider.FailureClassOf(failure)
+			if rule == nil {
+				rule = provider.FirstRetryRule(h.cfg.OverloadRules)
 			}
-			if rule != nil && retries < rule.MaxRetries &&
+			if (failureClass == provider.FailureUnknownTransport ||
+				failureClass == provider.FailureBudgetDeadline) &&
+				rule != nil && retries < rule.MaxRetries &&
 				h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
 				retries++
 				answerAttempts++
@@ -434,10 +438,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if requestCtx.Err() != nil {
 						return
 					}
-					if rule == nil && len(h.cfg.OverloadRules) > 0 {
-						rule = &h.cfg.OverloadRules[0]
+					failure := provider.ClassifyTransportFailure(result.err)
+					failureClass, _ := provider.FailureClassOf(failure)
+					if rule == nil {
+						rule = provider.FirstRetryRule(h.cfg.OverloadRules)
 					}
-					if rule != nil && retries < rule.MaxRetries &&
+					if (failureClass == provider.FailureUnknownTransport ||
+						failureClass == provider.FailureBudgetDeadline) &&
+						rule != nil && retries < rule.MaxRetries &&
 						h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
 						retries++
 						answerAttempts++
@@ -491,7 +499,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		if matched := provider.Match(h.cfg.OverloadRules, resp.StatusCode, errBody); matched != nil {
+		failure := provider.ClassifyHTTPFailure(
+			h.cfg.OverloadRules,
+			resp.StatusCode,
+			errBody,
+			nil,
+		)
+		failureClass, _ := provider.FailureClassOf(failure)
+		if matched := provider.Match(h.cfg.OverloadRules, resp.StatusCode, errBody); matched != nil &&
+			failureClass == provider.FailureOverloadTransient {
 			if rule == nil {
 				rule = matched
 			}
@@ -1047,6 +1063,14 @@ func writeRoutingError(w http.ResponseWriter, err error) {
 		status = http.StatusBadRequest
 	case errors.Is(err, routing.ErrAttemptBudgetExceeded):
 		status = http.StatusTooManyRequests
+	}
+	if class, ok := provider.FailureClassOf(err); ok &&
+		(class == provider.FailureAuthentication ||
+			class == provider.FailureRequestProtocolCapability) {
+		upstreamStatus := provider.FailureStatus(err)
+		if upstreamStatus >= 400 && upstreamStatus <= 499 {
+			status = upstreamStatus
+		}
 	}
 	http.Error(w, err.Error(), status)
 }
