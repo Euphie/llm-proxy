@@ -160,21 +160,21 @@ test("locks baseline and competitor evidence metadata", async () => {
   const problems = [...baselineContract.problems, ...evidenceContract.problems];
   const baseline = requireValue(baselineContract.value?.runtime_baseline, "runtime_baseline", problems);
   if (baseline && typeof baseline === "object") {
-    if (baseline.commit !== "ea13e527647cb701376c152f71086f01e68789ea") {
+    if (baseline.commit !== "07ba77ac0ee2f38b59f6522d3597891bdb717038") {
       problems.push("runtime_baseline.commit must pin the full source SHA.");
     }
-    if (baseline.timestamp !== "2026-07-31T14:25:03+08:00") {
+    if (baseline.timestamp !== "2026-08-02T01:30:07+08:00") {
       problems.push("runtime_baseline.timestamp must pin the source timestamp.");
     }
     if (baseline.repository !== "https://github.com/Euphie/llm-proxy") {
       problems.push("runtime_baseline.repository must identify the runtime source repository.");
     }
     requireText(baseline.drift_state, "runtime_baseline.drift_state", problems);
-    if (baseline.implementation_status !== "已实现") {
-      problems.push("runtime_baseline.implementation_status must distinguish verified behavior as 已实现.");
+    if (baseline.implementation_status !== "Phase 1 已实现") {
+      problems.push("runtime_baseline.implementation_status must identify Phase 1 as implemented.");
     }
-    if (baseline.evidence_level !== "本项目源码验证") {
-      problems.push("runtime_baseline.evidence_level must be 本项目源码验证.");
+    if (baseline.evidence_level !== "本项目源码与测试验证") {
+      problems.push("runtime_baseline.evidence_level must include source and test verification.");
     }
     const facts = baseline.verified_runtime_facts;
     if (!Array.isArray(facts) || facts.length !== 7) {
@@ -184,7 +184,7 @@ test("locks baseline and competitor evidence metadata", async () => {
         requireText(fact?.fact, `verified runtime fact ${index + 1} fact`, problems);
         requireText(fact?.conclusion, `verified runtime fact ${index + 1} conclusion`, problems);
         const permalink = fact && typeof fact === "object" ? fact.permalink : undefined;
-        if (!hasPinnedBlobLink([permalink], "ea13e527647cb701376c152f71086f01e68789ea")) {
+        if (!hasPinnedBlobLink([permalink], "07ba77ac0ee2f38b59f6522d3597891bdb717038")) {
           problems.push(`Verified runtime fact ${index + 1} permalink must be a permanent blob link pinned to the source SHA.`);
         }
       }
@@ -283,7 +283,7 @@ test("locks the approved intelligent-routing contracts", async () => {
     readPage("evaluation-feedback"), readPage("strategy-lifecycle"), readPage("engineering-and-delivery"),
   ]);
 
-  assert.match(overview, /model=auto[\s\S]*参与模型[\s\S]*强模型基线[\s\S]*轻量任务分析器[\s\S]*已发布策略/);
+  assert.match(overview, /model=auto[\s\S]*参与模型[\s\S]*强模型基线[\s\S]*轻量任务分析器[\s\S]*有效策略配置/);
   assert.match(core, /新增模型默认不加入/);
   assert.match(core, /一个 Profile 同时只有一个 active Strategy[\s\S]*多个 Route[\s\S]*默认 Route[\s\S]*统一 Request\/AttemptBudget[\s\S]*Route 映射前创建/);
   assert.match(core, /context_window[\s\S]*client_context_window/);
@@ -327,7 +327,7 @@ test("locks the approved intelligent-routing contracts", async () => {
 test("keeps the canonical repository design aligned with the documentation site", async () => {
   const design = await readFile(path.join(siteRoot, "..", "docs", "intelligent-routing.md"), "utf8");
 
-  assert.match(design, /状态：目标设计/);
+  assert.match(design, /状态：Phase 1 已实现/);
   assert.match(design, /model=auto[\s\S]*一次请求只能使用 URL 选中的 Profile/);
   assert.match(design, /本地规则[\s\S]*轻量任务分析模型[\s\S]*强模型基线满足全部硬约束/);
   assert.match(design, /Anthropic `POST \/v1\/messages`[\s\S]*OpenAI[\s\S]*`POST \/v1\/chat\/completions`[\s\S]*`POST \/v1\/responses`[\s\S]*unsupported operation/);
@@ -338,7 +338,7 @@ test("keeps the canonical repository design aligned with the documentation site"
   assert.match(design, /会话键使用 HMAC[\s\S]*原始 Session ID[\s\S]*Profile[\s\S]*Route[\s\S]*鉴权域[\s\S]*不建立跨请求绑定/);
   assert.match(design, /有界内存队列[\s\S]*不会自动替换线上策略/);
   assert.match(design, /最多在内存保留凭据 10 分钟/);
-  assert.match(design, /YYYYMMDD-NNN[\s\S]*CAS[\s\S]*原子快照热\s*加载/);
+  assert.match(design, /YYYYMMDD-NNN[\s\S]*原子热加载[\s\S]*CAS/);
   assert.match(design, /context_window[\s\S]*client_context_window/);
   assert.match(design, /未登记或未确认的能力不视为满足对应硬约束[\s\S]*缺少计算完整成本所需的价格字段[\s\S]*不能发布/);
   assert.match(design, /质量证据不足时使用保守先验[\s\S]*置信下界[\s\S]*强模型基线[\s\S]*否则请求失败/);

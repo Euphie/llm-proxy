@@ -839,6 +839,13 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.equal(saves[0].config.auto_routing.analyzer_min_confidence_bps, 7250);
   assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_quality_bps, 9125);
   assert.deepEqual(saves[0].config.auto_routing.participants, ["fast", "strong"]);
+
+  controlByName(root, "auto-route-0-min-quality").value = "";
+  await findTag(root, "FORM").dispatch("submit");
+
+  assert.equal(saves.length, 1);
+  assert.equal(findClass(root, "error-banner").hidden, false);
+  assert.match(findClass(root, "error-banner").textContent, /最低质量必须是/);
 });
 
 test("saved model rows retain empty optional limits while still showing catalog provenance", async (t) => {

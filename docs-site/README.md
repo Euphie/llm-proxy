@@ -1,7 +1,7 @@
 # Mesotes 智能路由设计站
 
-这是 [llm-proxy 智能路由设计](../docs/intelligent-routing.md)的可浏览版本。它解释准备实现的
-Profile-local 智能路由，不表示这些能力已经存在于当前 Go 运行时。
+这是 [llm-proxy 智能路由](../docs/intelligent-routing.md)的可浏览版本。它同时说明 Phase 1 已实现
+能力与后续 Profile-local 路线图，页面中的状态标记用于区分两者。
 
 ## 内容
 

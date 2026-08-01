@@ -2180,7 +2180,11 @@ function basisPointsToPercent(value) {
 }
 
 function percentToBasisPoints(value, label) {
-  const parsed = Number(String(value).trim());
+  const normalized = String(value).trim();
+  if (normalized === "") {
+    throw new Error(`${label}必须是 0% 到 100% 之间的数值。`);
+  }
+  const parsed = Number(normalized);
   const basisPoints = parsed * 100;
   if (
     !Number.isFinite(parsed) ||

@@ -54,4 +54,4 @@ Session 键使用 HMAC 生成，输入至少包含原始 Session ID、Profile、
 `context_window` 记录真实容量，`client_context_window` 是推荐给 Agent 的保守窗口。后者应预留最大输出、工具结果、视觉描述和协议开销。百分比只用于后台即时计算建议，不需要保存；代理本身不压缩或截断上下文。
 
 > [!CURRENT]
-> 当前已有视觉预处理和重试基础，但它们尚未统一纳入 ExecutionPlan、AttemptBudget、ClientCommit 和 Session 选模合同。
+> 当前任务分析、视觉、主回答、重试和模型切换已统一纳入 ExecutionPlan、AttemptBudget 与 ClientCommit；每次视觉内部重试也会先占用预算。Session 选模连续性尚未实现。

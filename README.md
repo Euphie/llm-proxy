@@ -9,13 +9,15 @@ Profile URL 选择运行配置，鉴权信息始终由请求透传，llm-proxy �
 
 - 多 Profile：按 URL 选择独立的 Anthropic 或 OpenAI 兼容上游。
 - 原子热更新：控制台保存后立即发布新的运行时快照，无需重启。
-- 模型能力：每个 Profile 保存精确模型 ID、上下文/可选输出上限和视觉支持事实；UI
-  推荐目录不参与运行时路由。
+- 模型能力：每个 Profile 保存精确模型 ID、上下文/输出上限、能力和参考价格；内置目录
+  只辅助填写，运行时只读取管理员保存的事实。
+- 智能路由：客户端发送 `model=auto` 时，以本地规则和轻量分析识别任务，在质量与能力
+  达标的候选中选择预计完整成本最低的模型，并在提交响应前按统一预算容错。
 - 视觉增强：为 Anthropic Messages 或 OpenAI Responses 中不支持图片的主模型
   补充图片描述。
 - 弹性代理：流式转发，并按有序规则处理过载重试。
-- 用量统计：记录 Anthropic、OpenAI Chat Completions 和 Responses 主请求，并
-  单独记录图片识别影子请求 Token。
+- 用量与路由统计：记录 Anthropic、OpenAI Chat Completions 和 Responses 的 Token，并
+  展示最近 Auto 路由、模型切换、预算和费用估算。
 - 本地配置生成：浏览器生成 Claude Code、OpenCode 和 Codex CLI 配置，不接收或
   保存真实密钥。
 
@@ -51,5 +53,5 @@ docker compose up -d --build
 | [管理控制台](docs/admin.md) | 登录、Profile 操作、配置生成、统计和系统管理 |
 | [图片预处理](docs/vision.md) | 图片来源、缓存、并发、失败与日志 |
 | [Token 用量统计](docs/statistics.md) | 控制台筛选、统计口径和协议限制 |
-| [智能路由设计](docs/intelligent-routing.md) | `model=auto`、Profile 隔离、质量/成本选型与分阶段实施范围 |
-| [Mesotes 智能路由设计站](docs-site/README.md) | 智能路由设计的可浏览版本；不代表 Go 运行时已实现 |
+| [智能路由](docs/intelligent-routing.md) | 已上线的 `model=auto`、Profile 隔离、质量/成本选型与后续路线图 |
+| [Mesotes 智能路由设计站](docs-site/README.md) | 智能路由架构、当前实现状态与后续设计的可浏览版本 |

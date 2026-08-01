@@ -3,7 +3,7 @@ import "./globals.css";
 
 const title = "Mesotes · 智能路由设计";
 const description =
-  "Mesotes 智能路由文档：固定源码基线与待验证的目标设计，而非已实现运行时声明。";
+  "Mesotes 智能路由文档：Phase 1 运行时、固定源码证据与后续路线图。";
 const themeBootstrap = `(() => {
   let theme = "light";
   try {

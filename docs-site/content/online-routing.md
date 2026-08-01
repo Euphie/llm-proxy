@@ -23,7 +23,7 @@ v1 的 `model=auto` 只支持 Anthropic `POST /v1/messages`，以及 OpenAI `POS
 
 ## 显式模型与 auto
 
-显式模型请求保留调用方选择，不进入智能选模。`model=auto` 才读取当前 Profile 的参与模型、强模型基线和已发布策略。Profile 未开启智能路由或配置不完整时，`auto` 返回配置错误，不静默猜测模型。
+显式模型请求保留调用方选择，不进入智能选模。`model=auto` 才读取当前 Profile 的参与模型、强模型基线和策略配置。Profile 未开启智能路由或配置不完整时，`auto` 返回配置错误，不静默猜测模型。
 
 ## 本地规则优先
 
@@ -53,7 +53,7 @@ v1 的 `model=auto` 只支持 Anthropic `POST /v1/messages`，以及 OpenAI `POS
 路由轨迹应记录规则结论、分析器是否被调用、候选排除原因、最终模型、预算消耗和 ClientCommit，但默认不保存 prompt、图片、凭据或完整输出。
 
 > [!CURRENT]
-> 当前运行时尚未实现该流水线和 ExecutionPlan；下面的路由轨迹是静态设计示例，不是实时请求数据。
+> 当前运行时已实现该流水线和不可变 ExecutionPlan；管理后台统计页会展示最近的真实结构化路由轨迹。本站交互轨迹仍是用于解释字段的静态示例。
 
 > [!FUTURE]
 > 后续可增加同一 Profile 内的多 Target 调度，但不会改变规则优先、强基线回退和不可变计划这三条合同。
