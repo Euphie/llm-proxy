@@ -1,8 +1,8 @@
 {
   "runtime_baseline": {
     "repository": "https://github.com/Euphie/llm-proxy",
-    "commit": "07ba77ac0ee2f38b59f6522d3597891bdb717038",
-    "timestamp": "2026-08-02T01:30:07+08:00",
+    "commit": "81a2fc457c69323fc3e5bd63f68da9191bc9b587",
+    "timestamp": "2026-08-02T01:53:01+08:00",
     "drift_state": "固定 Phase 1 源码快照；相对当前分支可能漂移",
     "implementation_status": "Phase 1 已实现",
     "evidence_level": "本项目源码与测试验证",
@@ -10,37 +10,37 @@
       {
         "fact": "Auto 配置按 Profile 编译并完整校验",
         "conclusion": "参与模型、角色、价格、Route 与统一预算只引用当前 Profile",
-        "permalink": "https://github.com/Euphie/llm-proxy/blob/07ba77ac0ee2f38b59f6522d3597891bdb717038/internal/profile/auto_routing.go"
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/81a2fc457c69323fc3e5bd63f68da9191bc9b587/internal/profile/auto_routing.go"
       },
       {
         "fact": "受支持协议可解析 model=auto",
         "conclusion": "Anthropic Messages、OpenAI Chat Completions 与 Responses 进入同一请求模型",
-        "permalink": "https://github.com/Euphie/llm-proxy/blob/07ba77ac0ee2f38b59f6522d3597891bdb717038/internal/routing/request.go"
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/81a2fc457c69323fc3e5bd63f68da9191bc9b587/internal/routing/request.go"
       },
       {
         "fact": "本地规则、轻量分析和成本规划已接入",
         "conclusion": "高风险使用强基线，其余候选先过硬约束与质量门槛再比较完整费用",
-        "permalink": "https://github.com/Euphie/llm-proxy/blob/07ba77ac0ee2f38b59f6522d3597891bdb717038/internal/routing/planner.go"
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/81a2fc457c69323fc3e5bd63f68da9191bc9b587/internal/routing/planner.go"
       },
       {
         "fact": "统一 AttemptBudget 覆盖所有在线出站调用",
         "conclusion": "任务分析、视觉内部重试、回答、重试和模型切换都先占用预算",
-        "permalink": "https://github.com/Euphie/llm-proxy/blob/07ba77ac0ee2f38b59f6522d3597891bdb717038/internal/routing/budget.go"
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/81a2fc457c69323fc3e5bd63f68da9191bc9b587/internal/routing/budget.go"
       },
       {
         "fact": "ClientCommit 前可按不可变计划切换模型",
         "conclusion": "提交后停止重试和切换，避免拼接两份流式响应",
-        "permalink": "https://github.com/Euphie/llm-proxy/blob/07ba77ac0ee2f38b59f6522d3597891bdb717038/internal/proxy/proxy.go"
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/81a2fc457c69323fc3e5bd63f68da9191bc9b587/internal/proxy/proxy.go"
       },
       {
         "fact": "SQLite 保存结构化路由轨迹",
         "conclusion": "记录模型路径、预算与费用，不保存 prompt、图片、请求头或完整响应",
-        "permalink": "https://github.com/Euphie/llm-proxy/blob/07ba77ac0ee2f38b59f6522d3597891bdb717038/internal/stats/routing_traces.go"
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/81a2fc457c69323fc3e5bd63f68da9191bc9b587/internal/stats/routing_traces.go"
       },
       {
-        "fact": "管理后台展示最近 Auto 路由",
-        "conclusion": "Profile 和时间筛选可同时用于 Token 统计与路由轨迹",
-        "permalink": "https://github.com/Euphie/llm-proxy/blob/07ba77ac0ee2f38b59f6522d3597891bdb717038/internal/admin/ui/static/stats.js"
+        "fact": "HMAC Session 绑定保持模型连续性",
+        "conclusion": "只保存不可逆键和模型事实，能力不足只升级，临时故障不修改绑定",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/81a2fc457c69323fc3e5bd63f68da9191bc9b587/internal/routing/session_store.go"
       }
     ]
   }

@@ -39,7 +39,7 @@
 - v1 不做多副本协调、强化学习或 Bandit。
 
 > [!CURRENT]
-> 当前运行时已经实现 Profile-local `model=auto`、统一 AttemptBudget、不可变 ExecutionPlan、ClientCommit 前的计划内模型切换和结构化路由轨迹。Session 选模连续性、策略生命周期和动态策略优化尚未实现。
+> 当前运行时已经实现 Profile-local `model=auto`、统一 AttemptBudget、不可变 ExecutionPlan、ClientCommit 前的计划内模型切换、Session 选模连续性和结构化路由轨迹。独立策略生命周期和动态策略优化尚未实现。
 
 > [!FUTURE]
 > 首版稳定后，可在不突破 Profile 边界的前提下增加同供应商多 Target 调度和更丰富的离线策略生成算法。

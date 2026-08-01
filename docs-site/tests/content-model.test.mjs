@@ -96,7 +96,7 @@ test("central evidence files use the pinned data envelopes", async () => {
     readJson("competitor-evidence.json"),
   ]);
 
-  assert.equal(baselines.runtime_baseline.commit, "07ba77ac0ee2f38b59f6522d3597891bdb717038");
+  assert.equal(baselines.runtime_baseline.commit, "81a2fc457c69323fc3e5bd63f68da9191bc9b587");
   assert.equal(baselines.runtime_baseline.verified_runtime_facts.length, 7);
   assert.deepEqual(Object.keys(baselines), ["runtime_baseline"]);
 
@@ -129,7 +129,7 @@ test("expands every evidence marker and rejects unknown contract markers", async
     { sourceBaselines, competitorEvidence },
   );
 
-  assert.match(expanded, /07ba77ac0ee2f38b59f6522d3597891bdb717038/);
+  assert.match(expanded, /81a2fc457c69323fc3e5bd63f68da9191bc9b587/);
   assert.match(expanded, /Auto 配置按 Profile 编译并完整校验/);
   assert.match(expanded, /LiteLLM/);
   assert.doesNotMatch(expanded, /\{\{[A-Z][A-Z0-9_]*\}\}/);

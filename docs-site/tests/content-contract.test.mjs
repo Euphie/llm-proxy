@@ -160,10 +160,10 @@ test("locks baseline and competitor evidence metadata", async () => {
   const problems = [...baselineContract.problems, ...evidenceContract.problems];
   const baseline = requireValue(baselineContract.value?.runtime_baseline, "runtime_baseline", problems);
   if (baseline && typeof baseline === "object") {
-    if (baseline.commit !== "07ba77ac0ee2f38b59f6522d3597891bdb717038") {
+    if (baseline.commit !== "81a2fc457c69323fc3e5bd63f68da9191bc9b587") {
       problems.push("runtime_baseline.commit must pin the full source SHA.");
     }
-    if (baseline.timestamp !== "2026-08-02T01:30:07+08:00") {
+    if (baseline.timestamp !== "2026-08-02T01:53:01+08:00") {
       problems.push("runtime_baseline.timestamp must pin the source timestamp.");
     }
     if (baseline.repository !== "https://github.com/Euphie/llm-proxy") {
@@ -184,7 +184,7 @@ test("locks baseline and competitor evidence metadata", async () => {
         requireText(fact?.fact, `verified runtime fact ${index + 1} fact`, problems);
         requireText(fact?.conclusion, `verified runtime fact ${index + 1} conclusion`, problems);
         const permalink = fact && typeof fact === "object" ? fact.permalink : undefined;
-        if (!hasPinnedBlobLink([permalink], "07ba77ac0ee2f38b59f6522d3597891bdb717038")) {
+        if (!hasPinnedBlobLink([permalink], "81a2fc457c69323fc3e5bd63f68da9191bc9b587")) {
           problems.push(`Verified runtime fact ${index + 1} permalink must be a permanent blob link pinned to the source SHA.`);
         }
       }

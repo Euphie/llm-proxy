@@ -11,15 +11,15 @@
 
 {{SOURCE_FACTS}}
 
-这些事实覆盖当前智能路由执行面；Session、独立策略生命周期、动态质量学习和多 Target 仍未实现。
+这些事实覆盖当前智能路由执行面与 Session 连续性；独立策略生命周期、动态质量学习和多 Target 仍未实现。
 
 ## 从现状到目标
 
 | Phase 1 当前状态 | 后续目标 |
 | --- | --- |
-| Profile-local Auto 配置与候选校验 | 为后续 Session 和异步评测延续同一隔离合同 |
+| Profile-local Auto 配置、候选校验与 HMAC Session 绑定 | 为后续异步评测延续同一隔离合同 |
 | Profile Upstream + 模型 ID 作为隐式单 Target | 增加同 Profile、同供应商的 Target 池和健康调度 |
-| 统一 AttemptBudget 与 ClientCommit | 增加 Session 升级不降级 |
+| 统一 AttemptBudget、ClientCommit 与 Session 升级不降级 | 增加独立策略发布和安全回滚 |
 | 管理员填写 Route 质量事实并按完整费用选型 | 从异步质量证据生成候选策略 |
 | 结构化路由轨迹与费用估算 | 增加质量置信区间和 A/B/C/D 展示 |
 | Profile 保存后原子热更新策略配置 | 增加不可变版本、CAS 发布、灰度和 LKG 回滚 |

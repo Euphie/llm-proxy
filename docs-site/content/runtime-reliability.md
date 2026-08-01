@@ -49,9 +49,11 @@ Session 绑定只对 `model=auto` 生效，不能覆盖调用方显式指定的�
 
 Session 键使用 HMAC 生成，输入至少包含原始 Session ID、Profile、Route、用途和调用方鉴权域；原始 Session ID 与凭据都不落库。请求缺少有效 Session ID 时，不建立跨请求绑定。
 
+当前客户端通过 `X-LLM-Proxy-Session-ID` 提供稳定标识；代理只在存在受支持鉴权头时启用绑定，并在转发前移除内部 Session 头。TTL 默认 24 小时，可在 Profile 中设置 5 分钟到 30 天。
+
 ## Agent 上下文配置
 
 `context_window` 记录真实容量，`client_context_window` 是推荐给 Agent 的保守窗口。后者应预留最大输出、工具结果、视觉描述和协议开销。百分比只用于后台即时计算建议，不需要保存；代理本身不压缩或截断上下文。
 
 > [!CURRENT]
-> 当前任务分析、视觉、主回答、重试和模型切换已统一纳入 ExecutionPlan、AttemptBudget 与 ClientCommit；每次视觉内部重试也会先占用预算。Session 选模连续性尚未实现。
+> 当前任务分析、视觉、主回答、重试和模型切换已统一纳入 ExecutionPlan、AttemptBudget 与 ClientCommit；每次视觉内部重试也会先占用预算。Session 绑定已实现同 Route 沿用、能力不足升级、临时故障不改绑定和自动过期。
