@@ -73,6 +73,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestCtx := r.Context()
 	var budget *routing.AttemptBudget
 	var plan routing.ExecutionPlan
+	var routeRequest routing.Request
+	var modelAttempts []routing.ModelAttemptPlan
+	var currentAttempt routing.ModelAttemptPlan
+	modelAttemptIndex := 0
 	isAuto := false
 	autoStream := false
 	if model, ok := routing.RequestedModel(body); ok && model == routing.AutoModel {
@@ -81,7 +85,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "intelligent routing is not enabled for this Profile", http.StatusBadRequest)
 			return
 		}
-		routeRequest, routeErr := routing.ParseAutoRequest(
+		var routeErr error
+		routeRequest, routeErr = routing.ParseAutoRequest(
 			h.cfg.Protocol,
 			r.Method,
 			r.URL.EscapedPath(),
@@ -105,17 +110,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeRoutingError(w, routeErr)
 			return
 		}
-		body, routeErr = routeRequest.WithModel(plan.Model())
-		if routeErr != nil {
-			writeRoutingError(w, routeErr)
+		modelAttempts = plan.ModelAttempts()
+		if len(modelAttempts) == 0 {
+			writeRoutingError(w, routing.ErrNoCapableModel)
 			return
 		}
+		currentAttempt = modelAttempts[0]
 		slog.Info("routing.plan.created",
 			"profile", label,
 			"strategy", plan.Strategy(),
 			"route", plan.Route(),
 			"model", plan.Model(),
 			"vision_mode", plan.VisionMode(),
+			"planned_model_attempts", len(modelAttempts),
 			"classification_source", classification.Source,
 			"estimated_cost_micro_usd", plan.EstimatedCostMicroUSD(),
 			"worst_case_cost_micro_usd", plan.WorstCaseCostMicroUSD())
@@ -123,15 +130,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	preprocessVision := h.vision != nil && shouldPreprocessVision(h.cfg.Protocol, r)
 	if isAuto {
-		preprocessVision = h.vision != nil && plan.VisionMode() == routing.VisionComposite
-	}
-	if preprocessVision {
-		var reserveVisionCall func(context.Context) error
-		if budget != nil {
-			reserveVisionCall = func(ctx context.Context) error {
-				return budget.ReserveCall(ctx, routing.CallVision, plan.VisionCallCostMicroUSD())
-			}
+		body, err = h.prepareAutoAttempt(
+			requestCtx,
+			r.Header,
+			target,
+			routeRequest,
+			currentAttempt,
+			budget,
+		)
+		if err != nil {
+			writeAutoPreparationError(w, requestCtx, err)
+			return
 		}
+	} else if preprocessVision {
+		var reserveVisionCall func(context.Context) error
 		body, err = h.vision.ProcessTargetWithBudget(
 			requestCtx,
 			r.Header,
@@ -156,10 +168,54 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if budget != nil {
-		if err := budget.ReserveCall(requestCtx, routing.CallAnswer, plan.AnswerCallCostMicroUSD()); err != nil {
+		if err := budget.ReserveCall(requestCtx, routing.CallAnswer, currentAttempt.AnswerCallCostMicroUSD()); err != nil {
 			writeRoutingError(w, err)
 			return
 		}
+	}
+
+	answerAttempts := 1
+	switchModel := func() (bool, error) {
+		if !isAuto || modelAttemptIndex+1 >= len(modelAttempts) {
+			return false, nil
+		}
+		next := modelAttempts[modelAttemptIndex+1]
+		if err := budget.CanReserveModelSwitchCall(
+			requestCtx,
+			next.AnswerCallCostMicroUSD(),
+		); err != nil {
+			return false, nil
+		}
+		nextBody, err := h.prepareAutoAttempt(
+			requestCtx,
+			r.Header,
+			target,
+			routeRequest,
+			next,
+			budget,
+		)
+		if err != nil {
+			return false, err
+		}
+		if err := budget.ReserveModelSwitchCall(
+			requestCtx,
+			next.AnswerCallCostMicroUSD(),
+		); err != nil {
+			return false, err
+		}
+		previous := currentAttempt.Model()
+		modelAttemptIndex++
+		answerAttempts++
+		currentAttempt = next
+		body = nextBody
+		slog.Info("routing.model.switched",
+			"profile", label,
+			"strategy", plan.Strategy(),
+			"route", plan.Route(),
+			"from_model", previous,
+			"to_model", currentAttempt.Model(),
+			"vision_mode", currentAttempt.VisionMode())
+		return true, nil
 	}
 
 	var rule *provider.Rule
@@ -170,26 +226,32 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if requestCtx.Err() != nil {
 				return
 			}
-			if rule == nil {
-				if len(h.cfg.OverloadRules) == 0 {
-					slog.Error("upstream failed without retry rules",
-						"profile", label, "attempts", retries+1, "err", err)
-					http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
-					return
-				}
+			if rule == nil && len(h.cfg.OverloadRules) > 0 {
 				rule = &h.cfg.OverloadRules[0]
 			}
-			if retries >= rule.MaxRetries || !h.reserveRetry(requestCtx, budget, target, plan) {
-				slog.Error("upstream failed without retry rules",
-					"profile", label, "attempts", retries+1, "err", err)
-				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+			if rule != nil && retries < rule.MaxRetries &&
+				h.reserveRetry(requestCtx, budget, target, currentAttempt.AnswerCallCostMicroUSD()) {
+				retries++
+				answerAttempts++
+				if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
+					return
+				}
+				continue
+			}
+			switched, switchErr := switchModel()
+			if switchErr != nil {
+				writeAutoPreparationError(w, requestCtx, switchErr)
 				return
 			}
-			retries++
-			if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
-				return
+			if switched {
+				rule = nil
+				retries = 0
+				continue
 			}
-			continue
+			slog.Error("upstream request failed",
+				"profile", label, "model", currentAttempt.Model(), "err", err)
+			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+			return
 		}
 
 		if resp.StatusCode < 400 {
@@ -202,7 +264,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							"profile", label,
 							"strategy", plan.Strategy(),
 							"route", plan.Route(),
-							"model", plan.Model(),
+							"model", currentAttempt.Model(),
 							"error", result.err)
 						return
 					}
@@ -212,16 +274,27 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if rule == nil && len(h.cfg.OverloadRules) > 0 {
 						rule = &h.cfg.OverloadRules[0]
 					}
-					if rule == nil || retries >= rule.MaxRetries ||
-						!h.reserveRetry(requestCtx, budget, target, plan) {
-						http.Error(w, "upstream stream failed before client commit", http.StatusBadGateway)
+					if rule != nil && retries < rule.MaxRetries &&
+						h.reserveRetry(requestCtx, budget, target, currentAttempt.AnswerCallCostMicroUSD()) {
+						retries++
+						answerAttempts++
+						if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
+							return
+						}
+						continue
+					}
+					switched, switchErr := switchModel()
+					if switchErr != nil {
+						writeAutoPreparationError(w, requestCtx, switchErr)
 						return
 					}
-					retries++
-					if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
-						return
+					if switched {
+						rule = nil
+						retries = 0
+						continue
 					}
-					continue
+					http.Error(w, "upstream stream failed before client commit", http.StatusBadGateway)
+					return
 				}
 				captured = result.captured
 			} else {
@@ -229,7 +302,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			slog.Info("<-",
 				"status", resp.StatusCode, "path", r.URL.Path,
-				"attempts", retries+1, "elapsed", time.Since(start).Round(time.Millisecond))
+				"attempts", answerAttempts, "elapsed", time.Since(start).Round(time.Millisecond))
 			if h.stats != nil {
 				h.stats.RecordAsync(stats.RequestMeta{
 					ProfileID:   h.cfg.ID,
@@ -250,15 +323,27 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if rule == nil {
 				rule = matched
 			}
-			if retries >= rule.MaxRetries || !h.reserveRetry(requestCtx, budget, target, plan) {
-				forward(w, resp, errBody)
+			if retries < rule.MaxRetries &&
+				h.reserveRetry(requestCtx, budget, target, currentAttempt.AnswerCallCostMicroUSD()) {
+				retries++
+				answerAttempts++
+				if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
+					return
+				}
+				continue
+			}
+			switched, switchErr := switchModel()
+			if switchErr != nil {
+				writeAutoPreparationError(w, requestCtx, switchErr)
 				return
 			}
-			retries++
-			if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
-				return
+			if switched {
+				rule = nil
+				retries = 0
+				continue
 			}
-			continue
+			forward(w, resp, errBody)
+			return
 		}
 
 		// Non-overload error: forward as-is
@@ -378,12 +463,63 @@ func (h *handler) reserveRetry(
 	ctx context.Context,
 	budget *routing.AttemptBudget,
 	target string,
-	plan routing.ExecutionPlan,
+	answerCallCostMicroUSD int64,
 ) bool {
 	if budget == nil {
 		return true
 	}
-	return budget.ReserveRetry(ctx, target, plan.AnswerCallCostMicroUSD()) == nil
+	return budget.ReserveRetry(ctx, target, answerCallCostMicroUSD) == nil
+}
+
+func (h *handler) prepareAutoAttempt(
+	ctx context.Context,
+	headers http.Header,
+	target string,
+	request routing.Request,
+	attempt routing.ModelAttemptPlan,
+	budget *routing.AttemptBudget,
+) ([]byte, error) {
+	body, err := request.WithModel(attempt.Model())
+	if err != nil {
+		return nil, err
+	}
+	if attempt.VisionMode() != routing.VisionComposite {
+		return body, nil
+	}
+	if h.vision == nil {
+		return nil, routing.ErrNoCapableModel
+	}
+	return h.vision.ProcessTargetWithBudget(
+		ctx,
+		headers,
+		body,
+		target,
+		func(callCtx context.Context) error {
+			return budget.ReserveCall(
+				callCtx,
+				routing.CallVision,
+				attempt.VisionCallCostMicroUSD(),
+			)
+		},
+	)
+}
+
+func writeAutoPreparationError(
+	w http.ResponseWriter,
+	ctx context.Context,
+	err error,
+) {
+	if ctx.Err() != nil {
+		return
+	}
+	if errors.Is(err, routing.ErrAttemptBudgetExceeded) ||
+		errors.Is(err, routing.ErrInvalidRequest) ||
+		errors.Is(err, routing.ErrNoCapableModel) {
+		writeRoutingError(w, err)
+		return
+	}
+	status := vision.HTTPStatus(err)
+	http.Error(w, http.StatusText(status), status)
 }
 
 func waitForRetry(

@@ -271,6 +271,114 @@ func TestAutoRoutingRetryBudgetPreventsExtraFinalRequest(t *testing.T) {
 	}
 }
 
+func TestAutoRoutingSwitchesToPlannedStrongModelBeforeClientCommit(t *testing.T) {
+	var calls atomic.Int32
+	models := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		models <- request.Model
+		calls.Add(1)
+		if request.Model == "fast" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.OverloadRules[0].MaxRetries = 0
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+
+	close(models)
+	gotModels := make([]string, 0, 2)
+	for model := range models {
+		gotModels = append(gotModels, model)
+	}
+	if response.Code != http.StatusOK || calls.Load() != 2 ||
+		len(gotModels) != 2 || gotModels[0] != "fast" || gotModels[1] != "strong" {
+		t.Fatalf("status=%d calls=%d models=%v body=%q", response.Code, calls.Load(), gotModels, response.Body.String())
+	}
+}
+
+func TestAutoRoutingReplansCompositeVisionForSwitchedModel(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	var visionCalls atomic.Int32
+	var fastCalls atomic.Int32
+	var strongCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		if _, analyzer := root["system"]; analyzer {
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			return
+		}
+		switch model {
+		case "vision":
+			visionCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"界面中按钮发生重叠"}]}`)
+		case "fast":
+			fastCalls.Add(1)
+			if !bytes.Contains(body, []byte(`"type":"image"`)) {
+				t.Errorf("native fast request lost image: %s", body)
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+		case "strong":
+			strongCalls.Add(1)
+			if bytes.Contains(body, []byte(`"type":"image"`)) ||
+				!bytes.Contains(body, []byte("界面中按钮发生重叠")) {
+				t.Errorf("composite strong request=%s", body)
+			}
+			_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"done"}]}`)
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, true)
+	fast := runtime.Models["fast"]
+	fast.SupportsVision = true
+	runtime.Models["fast"] = fast
+	strong := runtime.Models["strong"]
+	strong.SupportsVision = false
+	runtime.Models["strong"] = strong
+	runtime.OverloadRules[0].MaxRetries = 0
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"text","text":"比较界面布局"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || analyzerCalls.Load() != 1 ||
+		visionCalls.Load() != 1 || fastCalls.Load() != 1 || strongCalls.Load() != 1 {
+		t.Fatalf("status=%d analyzer=%d vision=%d fast=%d strong=%d body=%q",
+			response.Code, analyzerCalls.Load(), visionCalls.Load(), fastCalls.Load(), strongCalls.Load(), response.Body.String())
+	}
+}
+
 func TestOpenAIChatAutoRoutingUsesCompositeVisionAfterModelSelection(t *testing.T) {
 	var analyzerCalls atomic.Int32
 	var visionCalls atomic.Int32

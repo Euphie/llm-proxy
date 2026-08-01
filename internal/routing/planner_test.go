@@ -31,6 +31,34 @@ func TestPlannerChoosesLowestCostQualifiedCandidate(t *testing.T) {
 	}
 }
 
+func TestPlannerFreezesPrimaryAndStrongFallbackAttempts(t *testing.T) {
+	runtime := routingRuntime(t, false)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`)
+
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := plan.ModelAttempts()
+	if len(attempts) != 2 || attempts[0].Model() != "fast" || attempts[1].Model() != "strong" {
+		t.Fatalf("attempts=%+v", attempts)
+	}
+	if plan.WorstCaseCostMicroUSD() < attempts[1].AnswerCallCostMicroUSD()*int64(plan.Budget().MaxAnswerAttempts) {
+		t.Fatalf("worst cost=%d does not cover strong fallback attempts", plan.WorstCaseCostMicroUSD())
+	}
+
+	attempts[0] = attempts[1]
+	if got := plan.ModelAttempts()[0].Model(); got != "fast" {
+		t.Fatalf("execution plan followed caller mutation: %q", got)
+	}
+}
+
 func TestPlannerHighRiskAlwaysUsesStrongBaseline(t *testing.T) {
 	runtime := routingRuntime(t, false)
 	planner, err := NewPlanner(runtime)
@@ -47,6 +75,9 @@ func TestPlannerHighRiskAlwaysUsesStrongBaseline(t *testing.T) {
 	}
 	if plan.Model() != "strong" || !plan.UsesStrongBaseline() {
 		t.Fatalf("plan=%+v", plan.Snapshot())
+	}
+	if attempts := plan.ModelAttempts(); len(attempts) != 1 || attempts[0].Model() != "strong" {
+		t.Fatalf("high-risk attempts=%+v", attempts)
 	}
 }
 

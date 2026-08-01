@@ -94,6 +94,41 @@ func (b *AttemptBudget) ReserveModelSwitch() error {
 	return nil
 }
 
+func (b *AttemptBudget) CanReserveModelSwitchCall(
+	ctx context.Context,
+	cost int64,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return b.canReserveModelSwitchCallLocked(cost)
+}
+
+func (b *AttemptBudget) ReserveModelSwitchCall(
+	ctx context.Context,
+	cost int64,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := b.canReserveModelSwitchCallLocked(cost); err != nil {
+		return err
+	}
+	b.used.ModelSwitches++
+	b.applyCallLocked(CallAnswer, cost)
+	return nil
+}
+
 func (b *AttemptBudget) ReserveTargetSwitch() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -147,6 +182,13 @@ func (b *AttemptBudget) canReserveCallLocked(kind CallKind, cost int64) error {
 		return fmt.Errorf("%w: worst-case cost", ErrAttemptBudgetExceeded)
 	}
 	return nil
+}
+
+func (b *AttemptBudget) canReserveModelSwitchCallLocked(cost int64) error {
+	if b.used.ModelSwitches >= b.limits.MaxModelSwitches {
+		return fmt.Errorf("%w: model switches", ErrAttemptBudgetExceeded)
+	}
+	return b.canReserveCallLocked(CallAnswer, cost)
 }
 
 func (b *AttemptBudget) applyCallLocked(kind CallKind, cost int64) {

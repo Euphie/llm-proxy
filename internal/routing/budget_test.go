@@ -90,3 +90,48 @@ func TestAttemptBudgetUsesOneDeadlineAndCancellationSignal(t *testing.T) {
 		t.Fatalf("ReserveCall() error=%v, want context.Canceled", err)
 	}
 }
+
+func TestAttemptBudgetAtomicallyReservesModelSwitchAndAnswer(t *testing.T) {
+	limits := profile.AttemptBudgetRuntime{
+		MaxAnswerAttempts: 2, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 3,
+		MaxModelSwitches: 1, Deadline: time.Minute,
+		MaxWorstCaseCostMicroUSD: 100,
+	}
+	budget, ctx, cancel := NewAttemptBudget(context.Background(), limits)
+	defer cancel()
+
+	if err := budget.ReserveCall(ctx, CallAnswer, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := budget.ReserveModelSwitchCall(ctx, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := budget.ReserveModelSwitchCall(ctx, 30); !errors.Is(err, ErrAttemptBudgetExceeded) {
+		t.Fatalf("second switch error=%v", err)
+	}
+	snapshot := budget.Snapshot()
+	if snapshot.ModelSwitches != 1 || snapshot.AnswerAttempts != 2 ||
+		snapshot.TotalOutboundCalls != 2 || snapshot.WorstCaseCostMicroUSD != 30 {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}
+
+func TestAttemptBudgetFailedModelSwitchDoesNotConsumeSwitchSlot(t *testing.T) {
+	limits := profile.AttemptBudgetRuntime{
+		MaxAnswerAttempts: 1, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 2,
+		MaxModelSwitches: 1, Deadline: time.Minute,
+		MaxWorstCaseCostMicroUSD: 100,
+	}
+	budget, ctx, cancel := NewAttemptBudget(context.Background(), limits)
+	defer cancel()
+
+	if err := budget.ReserveCall(ctx, CallAnswer, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := budget.ReserveModelSwitchCall(ctx, 20); !errors.Is(err, ErrAttemptBudgetExceeded) {
+		t.Fatalf("switch error=%v", err)
+	}
+	if snapshot := budget.Snapshot(); snapshot.ModelSwitches != 0 {
+		t.Fatalf("failed switch consumed budget: %+v", snapshot)
+	}
+}

@@ -63,6 +63,7 @@ type ExecutionPlan struct {
 	visionCallCostMicroUSD int64
 	reason                 string
 	budget                 profile.AttemptBudgetRuntime
+	modelAttempts          []ModelAttemptPlan
 }
 
 type ExecutionPlanSnapshot struct {
@@ -76,6 +77,21 @@ type ExecutionPlanSnapshot struct {
 	AnswerCallCostMicroUSD int64
 	VisionCallCostMicroUSD int64
 	Reason                 string
+	ModelAttempts          []ModelAttemptSnapshot
+}
+
+type ModelAttemptPlan struct {
+	model                  string
+	visionMode             VisionMode
+	answerCallCostMicroUSD int64
+	visionCallCostMicroUSD int64
+}
+
+type ModelAttemptSnapshot struct {
+	Model                  string
+	VisionMode             VisionMode
+	AnswerCallCostMicroUSD int64
+	VisionCallCostMicroUSD int64
 }
 
 func NewPlanner(runtime profile.Runtime) (*Planner, error) {
@@ -106,7 +122,7 @@ func (p *Planner) Plan(request Request, classification Classification) (Executio
 		return candidates[i].Model < candidates[j].Model
 	})
 
-	var selected *candidatePlan
+	ranked := make([]rankedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.QualityScoreBPS < route.MinQualityBPS ||
 			candidate.SevereErrorRateBPS > route.MaxSevereErrorRateBPS {
@@ -116,12 +132,9 @@ func (p *Planner) Plan(request Request, classification Classification) (Executio
 		if !ok {
 			continue
 		}
-		if selected == nil || betterCandidate(planned, *selected, candidate, candidatesForModel(candidates, selected.model)) {
-			copy := planned
-			selected = &copy
-		}
+		ranked = append(ranked, rankedCandidate{plan: planned, metrics: candidate})
 	}
-	if selected == nil {
+	if len(ranked) == 0 {
 		return p.planStrongBaseline(
 			request,
 			routeID,
@@ -129,7 +142,16 @@ func (p *Planner) Plan(request Request, classification Classification) (Executio
 			classification.Source,
 		)
 	}
-	return p.executionPlan(routeID, *selected, selected.model == p.auto.StrongBaselineModel, "lowest complete cost"), nil
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return betterCandidate(ranked[i].plan, ranked[j].plan, ranked[i].metrics, ranked[j].metrics)
+	})
+	attempts := p.plannedAttempts(request, classification.Source, ranked)
+	return p.executionPlan(
+		routeID,
+		attempts,
+		attempts[0].model == p.auto.StrongBaselineModel,
+		"lowest complete cost",
+	), nil
 }
 
 func (p *Planner) planStrongBaseline(
@@ -142,15 +164,33 @@ func (p *Planner) planStrongBaseline(
 	if !ok {
 		return ExecutionPlan{}, fmt.Errorf("%w: strong baseline %q", ErrNoCapableModel, p.auto.StrongBaselineModel)
 	}
-	return p.executionPlan(routeID, candidate, true, reason), nil
+	return p.executionPlan(routeID, []candidatePlan{candidate}, true, reason), nil
 }
 
 func (p *Planner) executionPlan(
 	routeID string,
-	candidate candidatePlan,
+	attempts []candidatePlan,
 	baseline bool,
 	reason string,
 ) ExecutionPlan {
+	candidate := attempts[0]
+	maxAnswerCost := int64(0)
+	maxAuxiliaryCost := int64(0)
+	modelAttempts := make([]ModelAttemptPlan, 0, len(attempts))
+	for _, attempt := range attempts {
+		if attempt.answerCallCost > maxAnswerCost {
+			maxAnswerCost = attempt.answerCallCost
+		}
+		auxiliaryCost := attempt.estimatedCost - attempt.answerCallCost
+		if auxiliaryCost > maxAuxiliaryCost {
+			maxAuxiliaryCost = auxiliaryCost
+		}
+		modelAttempts = append(modelAttempts, modelAttemptPlan(attempt))
+	}
+	worstCaseCost := addCost(
+		multiplyCost(maxAnswerCost, p.strategy.Budget.MaxAnswerAttempts),
+		maxAuxiliaryCost,
+	)
 	return ExecutionPlan{
 		strategyName:           p.strategy.Name,
 		routeID:                routeID,
@@ -158,11 +198,83 @@ func (p *Planner) executionPlan(
 		visionMode:             candidate.visionMode,
 		usesStrongBaseline:     baseline,
 		estimatedCostMicroUSD:  candidate.estimatedCost,
-		worstCaseCostMicroUSD:  candidate.worstCaseCost,
+		worstCaseCostMicroUSD:  worstCaseCost,
 		answerCallCostMicroUSD: candidate.answerCallCost,
 		visionCallCostMicroUSD: candidate.visionCallCost,
 		reason:                 reason,
 		budget:                 p.strategy.Budget,
+		modelAttempts:          modelAttempts,
+	}
+}
+
+type rankedCandidate struct {
+	plan    candidatePlan
+	metrics profile.RouteCandidateRuntime
+}
+
+func (p *Planner) plannedAttempts(
+	request Request,
+	classificationSource ClassificationSource,
+	ranked []rankedCandidate,
+) []candidatePlan {
+	capacity := min(
+		len(ranked)+1,
+		min(p.strategy.Budget.MaxModelSwitches+1, p.strategy.Budget.MaxAnswerAttempts),
+	)
+	attempts := []candidatePlan{ranked[0].plan}
+	if capacity <= 1 {
+		return attempts
+	}
+
+	baseline, baselineOK := p.evaluateCandidate(
+		request,
+		p.auto.StrongBaselineModel,
+		classificationSource,
+	)
+	baselineAdded := baselineOK && baseline.model != attempts[0].model &&
+		p.canAddAttempt(attempts, baseline)
+	if baselineAdded {
+		attempts = append(attempts, baseline)
+	}
+	for _, candidate := range ranked[1:] {
+		if len(attempts) >= capacity {
+			break
+		}
+		if candidate.plan.model == p.auto.StrongBaselineModel ||
+			!p.canAddAttempt(attempts, candidate.plan) {
+			continue
+		}
+		if baselineAdded {
+			attempts = append(attempts, candidatePlan{})
+			attempts[len(attempts)-1] = attempts[len(attempts)-2]
+			attempts[len(attempts)-2] = candidate.plan
+			continue
+		}
+		attempts = append(attempts, candidate.plan)
+	}
+	return attempts
+}
+
+func (p *Planner) canAddAttempt(attempts []candidatePlan, candidate candidatePlan) bool {
+	maxAnswerCost := candidate.answerCallCost
+	maxAuxiliaryCost := candidate.estimatedCost - candidate.answerCallCost
+	for _, attempt := range attempts {
+		maxAnswerCost = max(maxAnswerCost, attempt.answerCallCost)
+		maxAuxiliaryCost = max(maxAuxiliaryCost, attempt.estimatedCost-attempt.answerCallCost)
+	}
+	worst := addCost(
+		multiplyCost(maxAnswerCost, p.strategy.Budget.MaxAnswerAttempts),
+		maxAuxiliaryCost,
+	)
+	return worst <= p.strategy.Budget.MaxWorstCaseCostMicroUSD
+}
+
+func modelAttemptPlan(candidate candidatePlan) ModelAttemptPlan {
+	return ModelAttemptPlan{
+		model:                  candidate.model,
+		visionMode:             candidate.visionMode,
+		answerCallCostMicroUSD: candidate.answerCallCost,
+		visionCallCostMicroUSD: candidate.visionCallCost,
 	}
 }
 
@@ -356,7 +468,29 @@ func (p ExecutionPlan) AnswerCallCostMicroUSD() int64        { return p.answerCa
 func (p ExecutionPlan) VisionCallCostMicroUSD() int64        { return p.visionCallCostMicroUSD }
 func (p ExecutionPlan) Budget() profile.AttemptBudgetRuntime { return p.budget }
 
+func (p ExecutionPlan) ModelAttempts() []ModelAttemptPlan {
+	return append([]ModelAttemptPlan(nil), p.modelAttempts...)
+}
+
+func (p ModelAttemptPlan) Model() string                 { return p.model }
+func (p ModelAttemptPlan) VisionMode() VisionMode        { return p.visionMode }
+func (p ModelAttemptPlan) AnswerCallCostMicroUSD() int64 { return p.answerCallCostMicroUSD }
+func (p ModelAttemptPlan) VisionCallCostMicroUSD() int64 { return p.visionCallCostMicroUSD }
+
+func (p ModelAttemptPlan) Snapshot() ModelAttemptSnapshot {
+	return ModelAttemptSnapshot{
+		Model:                  p.model,
+		VisionMode:             p.visionMode,
+		AnswerCallCostMicroUSD: p.answerCallCostMicroUSD,
+		VisionCallCostMicroUSD: p.visionCallCostMicroUSD,
+	}
+}
+
 func (p ExecutionPlan) Snapshot() ExecutionPlanSnapshot {
+	attempts := make([]ModelAttemptSnapshot, 0, len(p.modelAttempts))
+	for _, attempt := range p.modelAttempts {
+		attempts = append(attempts, attempt.Snapshot())
+	}
 	return ExecutionPlanSnapshot{
 		StrategyName:           p.strategyName,
 		RouteID:                p.routeID,
@@ -368,5 +502,6 @@ func (p ExecutionPlan) Snapshot() ExecutionPlanSnapshot {
 		AnswerCallCostMicroUSD: p.answerCallCostMicroUSD,
 		VisionCallCostMicroUSD: p.visionCallCostMicroUSD,
 		Reason:                 p.reason,
+		ModelAttempts:          attempts,
 	}
 }
