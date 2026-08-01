@@ -826,6 +826,66 @@ func TestAutoRoutingRetryBudgetPreventsExtraFinalRequest(t *testing.T) {
 	}
 }
 
+func TestAutoRoutingDoesNotRecoverHardBudgetDeadlineFailure(t *testing.T) {
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, provider.NewFailure(
+			provider.FailureBudgetDeadline,
+			0,
+			routing.ErrAttemptBudgetExceeded,
+		)
+	})}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(autoProxyRuntime(t, "https://upstream.test", false), client, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadGateway || calls.Load() != 1 {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls.Load(), response.Body.String())
+	}
+}
+
+func TestAutoRoutingRecoversNetworkTimeoutBeforeClientCommit(t *testing.T) {
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"fast","content":[{"type":"text","text":"done"}]}`)),
+			Request:    request,
+		}, nil
+	})}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(autoProxyRuntime(t, "https://upstream.test", false), client, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || calls.Load() != 2 || !strings.Contains(response.Body.String(), "done") {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls.Load(), response.Body.String())
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
 func TestAutoRoutingSwitchesToPlannedStrongModelBeforeClientCommit(t *testing.T) {
 	var calls atomic.Int32
 	models := make(chan string, 2)

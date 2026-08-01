@@ -1,4 +1,4 @@
-// Package provider defines overload detection primitives.
+// Package provider defines upstream failure and overload detection primitives.
 package provider
 
 import (
@@ -16,6 +16,7 @@ const (
 	FailureAuthentication            FailureClass = "authentication"
 	FailureRequestProtocolCapability FailureClass = "request_protocol_capability"
 	FailureOverloadTransient         FailureClass = "overload_transient"
+	FailureOperationTimeout          FailureClass = "operation_timeout"
 	FailureBudgetDeadline            FailureClass = "budget_deadline"
 	FailureUnknownTransport          FailureClass = "unknown_transport"
 	FailureMalformedResponse         FailureClass = "malformed_response"
@@ -74,11 +75,15 @@ func ClassifyHTTPFailure(rules []Rule, statusCode int, body []byte, cause error)
 }
 
 func ClassifyTransportFailure(err error) *Failure {
+	var existing *Failure
+	if errors.As(err, &existing) {
+		return existing
+	}
 	class := FailureUnknownTransport
 	var networkError net.Error
 	if errors.Is(err, context.DeadlineExceeded) ||
 		errors.As(err, &networkError) && networkError.Timeout() {
-		class = FailureBudgetDeadline
+		class = FailureOperationTimeout
 	}
 	return NewFailure(class, 0, err)
 }

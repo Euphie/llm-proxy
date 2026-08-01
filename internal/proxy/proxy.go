@@ -390,11 +390,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			failure := provider.ClassifyTransportFailure(err)
 			failureClass, _ := provider.FailureClassOf(failure)
+			recoverable := recoverableTransportFailure(failureClass)
 			if rule == nil {
 				rule = provider.FirstRetryRule(h.cfg.OverloadRules)
 			}
-			if (failureClass == provider.FailureUnknownTransport ||
-				failureClass == provider.FailureBudgetDeadline) &&
+			if recoverable &&
 				rule != nil && retries < rule.MaxRetries &&
 				h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
 				retries++
@@ -404,15 +404,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			switched, switchErr := switchAfterFailure()
-			if switchErr != nil {
-				writeAutoPreparationError(w, requestCtx, switchErr)
-				return
-			}
-			if switched {
-				rule = nil
-				retries = 0
-				continue
+			if recoverable {
+				switched, switchErr := switchAfterFailure()
+				if switchErr != nil {
+					writeAutoPreparationError(w, requestCtx, switchErr)
+					return
+				}
+				if switched {
+					rule = nil
+					retries = 0
+					continue
+				}
 			}
 			slog.Error("upstream request failed",
 				"profile", label, "model", currentAttempt.Model(),
@@ -440,11 +442,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 					failure := provider.ClassifyTransportFailure(result.err)
 					failureClass, _ := provider.FailureClassOf(failure)
+					recoverable := recoverableTransportFailure(failureClass)
 					if rule == nil {
 						rule = provider.FirstRetryRule(h.cfg.OverloadRules)
 					}
-					if (failureClass == provider.FailureUnknownTransport ||
-						failureClass == provider.FailureBudgetDeadline) &&
+					if recoverable &&
 						rule != nil && retries < rule.MaxRetries &&
 						h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
 						retries++
@@ -454,15 +456,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						}
 						continue
 					}
-					switched, switchErr := switchAfterFailure()
-					if switchErr != nil {
-						writeAutoPreparationError(w, requestCtx, switchErr)
-						return
-					}
-					if switched {
-						rule = nil
-						retries = 0
-						continue
+					if recoverable {
+						switched, switchErr := switchAfterFailure()
+						if switchErr != nil {
+							writeAutoPreparationError(w, requestCtx, switchErr)
+							return
+						}
+						if switched {
+							rule = nil
+							retries = 0
+							continue
+						}
 					}
 					http.Error(w, "upstream stream failed before client commit", http.StatusBadGateway)
 					return
@@ -537,6 +541,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Non-overload error: forward as-is
 		forward(w, resp, errBody)
 		return
+	}
+}
+
+func recoverableTransportFailure(class provider.FailureClass) bool {
+	switch class {
+	case provider.FailureOperationTimeout, provider.FailureUnknownTransport:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -71,9 +71,16 @@ func (e *Engine) RouteWithPreference(
 		if errors.Is(err, ErrAttemptBudgetExceeded) {
 			return ExecutionPlan{}, Classification{}, err
 		}
-		if class, ok := provider.FailureClassOf(err); ok &&
-			(class == provider.FailureAuthentication ||
-				class == provider.FailureRequestProtocolCapability) {
+		class, ok := provider.FailureClassOf(err)
+		if !ok {
+			return ExecutionPlan{}, Classification{}, err
+		}
+		switch class {
+		case provider.FailureOverloadTransient,
+			provider.FailureOperationTimeout,
+			provider.FailureUnknownTransport,
+			provider.FailureMalformedResponse:
+		default:
 			return ExecutionPlan{}, Classification{}, err
 		}
 	}

@@ -90,8 +90,10 @@ func (a *Analyzer) Analyze(
 	if err != nil {
 		failure := provider.ClassifyTransportFailure(err)
 		class := failure.Class
-		if operationCtx.Err() != nil {
+		if ctx.Err() != nil {
 			class = provider.FailureBudgetDeadline
+		} else if operationCtx.Err() != nil {
+			class = provider.FailureOperationTimeout
 		}
 		return Classification{}, provider.NewFailure(
 			class, 0, fmt.Errorf("%w: request failed", ErrAnalyzer),
