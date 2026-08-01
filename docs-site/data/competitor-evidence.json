@@ -82,8 +82,8 @@
     "evidence_level": "竞品源码验证",
     "commit": "0b64fdafe049e596a3f5657c219329f24af24198",
     "native_mechanism": "strong/weak 阈值路由，并按请求分布校准阈值。",
-    "mesotes_mapping": "只在同一 Profile 内作为离线校准或 decision_shadow advisor。",
-    "adopt": ["请求分布校准", "离线或 decision_shadow 建议"],
+    "mesotes_mapping": "只在同一 Profile 内用于离线校准任务复杂度和强弱模型边界。",
+    "adopt": ["请求分布校准", "离线复杂度建议"],
     "reject_or_defer": ["不采用全局固定阈值", "不把论文结果当成默认生产参数"],
     "permalinks": [
       "https://github.com/lm-sys/RouteLLM/blob/0b64fdafe049e596a3f5657c219329f24af24198/routellm/routers/routers.py#L32-L45",

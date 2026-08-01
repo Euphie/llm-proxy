@@ -98,11 +98,7 @@ test("central evidence files use the pinned data envelopes", async () => {
 
   assert.equal(baselines.runtime_baseline.commit, "ea13e527647cb701376c152f71086f01e68789ea");
   assert.equal(baselines.runtime_baseline.verified_runtime_facts.length, 7);
-  assert.equal(
-    baselines.documentation_baseline.commit,
-    "039a060e502eca69f8c9da3b8fc1c0e42b503365",
-  );
-  assert.match(baselines.documentation_baseline.drift_state, /implementation working tree/i);
+  assert.deepEqual(Object.keys(baselines), ["runtime_baseline"]);
 
   assert.equal(competitors.length, 10);
   assert.equal(competitors.filter(({ evidence_type }) => evidence_type === "source").length, 6);
@@ -322,31 +318,31 @@ test("converts Markdown to plain text and computes bounded reading time", () => 
   assert.equal(readingTimeMinutes("路".repeat(1041)), 3);
 });
 
-test("the trace is precomputed, bounded, same-Profile, and contains no secret-bearing fields", async () => {
+test("the trace is a bounded same-Profile design example without secret-bearing fields", async () => {
   const trace = await readJson("route-trace-example.json");
-  assert.equal(trace.example_kind, "precomputed");
-  assert.equal(trace.projection_kind, "sanitized_review_projection");
-  assert.equal(trace.label, "预计算示例");
-  assert.deepEqual(trace.scope, {
-    profile_id: "profile_acme_primary",
-    generation: 42,
-    envelope_sha: "sha256:8bb490e5d6c4",
-  });
+  assert.equal(trace.example_kind, "static_design");
+  assert.equal(trace.projection_kind, "sanitized_example");
+  assert.equal(trace.label, "静态设计示例");
+  assert.deepEqual(trace.scope, { profile_id: "profile_acme_primary" });
+  assert.equal(trace.execution_plan.profile_id, trace.scope.profile_id);
+  assert.equal(trace.task_analysis.local_rule_result, "uncertain");
+  assert.equal(trace.task_analysis.analyzer_called, true);
+  assert.equal(trace.task_analysis.result, "code_change");
+  assert.equal(trace.route.matched_by, "task_type");
+  assert.equal(trace.route.task_type, trace.task_analysis.result);
   assert.ok(trace.hard_filter.excluded.length > 0);
   assert.match(trace.model_selection.selected_model_id, /^model_/);
-  assert.deepEqual(trace.execution_plan.profile_scope, trace.scope);
   assert.deepEqual(Object.keys(trace.execution_plan.snapshot_refs).sort(), [
-    "adapter_sha", "catalog_sha", "deployment_revision", "policy_version_id", "price_sha", "selection_metrics_sha",
+    "catalog_version", "price_version", "strategy_id",
   ]);
-  assert.deepEqual(trace.execution_plan.logical_model_transitions, []);
   assert.deepEqual(trace.execution_plan.auxiliary_attempts, []);
   assert.equal(trace.execution_plan.attempts.length, 2);
   assert.ok(trace.execution_plan.attempts.every((attempt) => (
     /^target_/.test(attempt.target_id) &&
-    typeof attempt.target_config_revision === "string" &&
-    attempt.purpose === "answer" &&
-    attempt.budget_owner === "answer"
+    /^model_/.test(attempt.model_id) &&
+    /^answer/.test(attempt.purpose)
   )));
+  assert.equal(new Set(trace.execution_plan.attempts.map(({ target_id }) => target_id)).size, 1);
   assert.equal(trace.attempts[0].outcome, "retryable_pre_commit_failure");
   assert.equal(trace.attempts[1].outcome, "ClientCommit");
   assert.deepEqual(Object.keys(trace.attempt_budget), [
@@ -356,7 +352,7 @@ test("the trace is precomputed, bounded, same-Profile, and contains no secret-be
     "max_retries_per_target",
     "max_target_switches",
     "max_model_switches",
-    "deadline_ms",
+    "deadline",
     "max_worst_case_cost_micro_usd",
   ]);
 
@@ -364,6 +360,6 @@ test("the trace is precomputed, bounded, same-Profile, and contains no secret-be
   assert.doesNotMatch(json, /endpoint|credential|authorization|header|payload|transport/i);
   const ids = [...json.matchAll(/"(?:[a-z_]+_id)":"([^"]+)"/g)].map((match) => match[1]);
   assert.ok(
-    ids.every((id) => id === "profile_acme_primary" || /^(?:model|target|route|policy)_/.test(id)),
+    ids.every((id) => id === "profile_acme_primary" || /^(?:model|target|route)_/.test(id) || /^\d{8}-\d{3}$/.test(id)),
   );
 });

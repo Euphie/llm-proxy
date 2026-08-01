@@ -2,18 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const chapters = [
-  ["overview", "产品目标与非目标", "两层确定性路由", "以单一 Profile 边界组织模型选择、Target 调度和受控学习。"],
-  ["source-baseline", "源码基线与现状差距", "固定快照", "用固定提交区分当前运行时事实、缺口与本版目标。"],
-  ["competitor-evidence", "竞品源码证据矩阵", "集中证据矩阵", "从固定源码提炼可采用机制，并明确拒绝跨 Profile 编排。"],
-  ["core-model", "核心对象与配置模型", "Profile：唯一边界", "定义全部归属单一 Profile 的路由、策略、计划与证据对象。"],
-  ["profile-isolation", "Profile 隔离与协议边界", "入口协议与身份", "把 Profile 固化为 Provider 实例、信任域和唯一运行时隔离边界。"],
-  ["online-routing", "在线决策流水线", "从请求到选择", "通过本地事实、硬约束、模型选择和 Target 调度生成不可变计划。"],
-  ["quality-and-cost", "质量目标与模型选择", "Route-specific ServiceObjective", "先通过 Route 级质量门禁，再按条件优化成本与延迟。"],
-  ["target-reliability", "Target 调度、容量与健康", "Target 与有效能力", "在同一 Profile、同一逻辑模型内完成准入、健康过滤和负载调度。"],
-  ["runtime-reliability", "尝试预算、流式与会话", "统一 AttemptBudget", "用统一 AttemptBudget 和 ClientCommit 建立有界可靠性。"],
-  ["evaluation-feedback", "评测、反馈与稳定实验", "反馈与数据绑定", "用 Profile-scoped 评测、强类型反馈和稳定分桶积累证据。"],
-  ["strategy-lifecycle", "策略生命周期、观测与重放", "不可变策略与发布对象", "以不可变版本、CAS、灰度、LKG 和授权重放治理发布。"],
-  ["engineering-and-delivery", "API、迁移与交付验收", "目标 API 与存储边界", "明确破坏性迁移、五个子项目和双重验收门。"],
+  ["overview", "智能路由概览", "一句话理解", "用一个简单流程说明 auto 如何在单个 Profile 内选模型、控成本并守住质量。"],
+  ["source-baseline", "当前能力与目标", "固定基线", "区分当前已实现能力与智能路由的待实现目标。"],
+  ["competitor-evidence", "参考方案与取舍", "参考矩阵", "提炼竞品中值得采用的机制，并明确不照搬的复杂设计。"],
+  ["core-model", "Profile 配置与模型角色", "启用 auto 的必要配置", "说明启用 auto 所需配置，以及 ModelCard、Target 和模型角色。"],
+  ["profile-isolation", "Profile 隔离边界", "边界如何工作", "URL 选定 Profile 后，路由、视觉、重试和评测始终留在该边界内。"],
+  ["online-routing", "在线路由", "从请求到执行", "规则先判断，拿不准时调用轻量任务分析器，再生成不可变执行计划。"],
+  ["quality-and-cost", "质量与成本", "Route 质量门槛", "先满足 Route 质量门槛，再选择完整成本更低的模型。"],
+  ["target-reliability", "Target 与容错", "为什么要分开", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。"],
+  ["runtime-reliability", "视觉、重试与 Session", "视觉三态", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。"],
+  ["evaluation-feedback", "异步评测与策略优化", "开启条件", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。"],
+  ["strategy-lifecycle", "策略生命周期", "命名与状态", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。"],
+  ["engineering-and-delivery", "实施范围与交付", "v1 边界", "明确 v1 范围、实施阶段和验收条件。"],
 ];
 
 async function render(pathname, headers = {}) {
@@ -99,7 +99,7 @@ test("serves the full-text search index only from its on-demand endpoint", async
   const entries = await response.json();
   assert.ok(Array.isArray(entries));
   assert.ok(entries.length > chapters.length);
-  assert.ok(entries.some(({ text }) => text.includes("迁移记录以旧")));
+  assert.ok(entries.some(({ text }) => text.includes("轻量任务分析器")));
 
   const versioned = await render(`/api/search-index?v=${version}`);
   assert.equal(versioned.status, 200);

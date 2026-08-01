@@ -14,39 +14,35 @@ config:
     curve: basis
     htmlLabels: true
 ---
-flowchart LR
-  accTitle: Profile 内在线路由流水线
-  accDescr: 已解析的 ProfileScope 依次经过本地事实、不可变配置、编译规则、硬约束、逻辑模型选择，以及同一 ProfileRuntime 提供的请求级只读健康与容量视图，形成不可变执行计划并在该运行时内执行。
+flowchart TB
+  accTitle: 简单且可控的在线路由
+  accDescr: 显式模型保持原模型语义。auto 请求先做入口和请求级预检，再执行低成本本地规则，只有不能确定时才调用轻量任务分析模型；任务类型映射到当前策略的 Route，高风险请求只使用满足硬约束的强模型基线，其他请求在满足候选硬约束和 Route 质量目标的模型中选择预期完整成本最低者，随后规划视觉增强并生成不可变执行计划。分析失败或低置信度时同样只在强模型基线满足硬约束时使用，否则请求失败。
 
-  subgraph PROFILE["当前 Profile（已解析且不再选择）"]
-    direction LR
-    REQUEST["ProfileScope<br/>+ InferenceRequest"]
-    FACTS["Facts · 本地 signals<br/>typed projections"]
-    RULES["编译后的 rules"]
-    ROUTER["Model Router<br/>硬约束 → 逻辑模型"]
-    ELIGIBLE["Target eligibility<br/>同一逻辑模型"]
-    SCHEDULER["Target Scheduler<br/>有界且确定性"]
-    PLAN["不可变 ExecutionPlan<br/>本地 ID / revision + AttemptBudget"]
-    EXECUTOR["Executor"]
-    TRACE["Decision · Attempt · Outcome<br/>同 scope Trace"]
-    SNAPSHOT["ProfileSnapshot · 仅配置<br/>策略 · catalog · adapter · price · envelope"]
-    RUNTIME["ProfileRuntime · 可变状态<br/>health · circuit · cooldown · capacity<br/>reserve / dispatch"]
+  REQUEST["当前 Profile 的请求"] --> MODE{"model"}
+  MODE -->|"显式模型"| EXPLICIT["保留逻辑模型"]
+  MODE -->|"auto"| PRECHECK["入口 / 请求级<br/>硬约束预检"] --> RULES["本地规则判断"] --> CLEAR{"结果明确？"}
+  CLEAR -->|"是"| FACTS["任务类型与风险"]
+  CLEAR -->|"否"| ANALYZER["轻量任务分析模型"] --> CONFIDENT{"成功且高置信？"}
+  CONFIDENT -->|"是"| FACTS
+  CONFIDENT -->|"否"| BASELINE["同 Profile 强模型基线"] --> BASELINE_OK{"满足全部硬约束？"}
+  FACTS --> ROUTE["task_type → Route<br/>无匹配用默认 Route"] --> HIGH_RISK{"高风险？"}
+  HIGH_RISK -->|"是"| BASELINE
+  HIGH_RISK -->|"否"| FILTER["能力 / 上下文 / 视觉<br/>候选硬约束过滤"] --> SELECT["Route 质量达标候选中<br/>选预期完整成本最低者"]
+  EXPLICIT --> VISION["选择视觉处理方式"]
+  SELECT --> VISION
+  BASELINE_OK -->|"是"| VISION
+  BASELINE_OK -->|"否"| FAIL["明确失败"]
+  VISION --> PLAN["不可变 ExecutionPlan"] --> EXECUTE["按统一预算执行"]
 
-    REQUEST --> FACTS --> RULES --> ROUTER --> ELIGIBLE --> SCHEDULER --> PLAN --> EXECUTOR --> TRACE
-    SNAPSHOT -.->|"不可变配置"| RULES
-    SNAPSHOT -.->|"Target 配置"| ELIGIBLE
-    RUNTIME -.->|"请求级只读视图"| ELIGIBLE
-    RUNTIME -->|"reserve / dispatch"| EXECUTOR
-  end
-
-  classDef scope fill:#0067c5,color:#ffffff,stroke:#075daf,stroke-width:2px;
+  classDef entry fill:#0067c5,color:#ffffff,stroke:#075daf,stroke-width:2px;
   classDef primary fill:#f7fbfd,color:#172229,stroke:#526f7e,stroke-width:1.5px;
-  classDef decision fill:#e8f2ff,color:#172229,stroke:#3f75a3,stroke-width:1.5px;
-  classDef runtime fill:#e7f7f6,color:#172229,stroke:#2d7774,stroke-width:1.5px;
-  classDef evidence fill:#eef0ff,color:#172229,stroke:#625eb5,stroke-width:1.5px;
-  class REQUEST scope;
-  class FACTS,RULES,PLAN primary;
-  class ROUTER,ELIGIBLE,SCHEDULER decision;
-  class SNAPSHOT,RUNTIME,EXECUTOR runtime;
-  class TRACE evidence;
-  style PROFILE fill:#edf6fb,stroke:#4a758f,stroke-width:2px,color:#172229
+  classDef decision fill:#fff4e7,color:#172229,stroke:#965b15,stroke-width:1.5px;
+  classDef route fill:#e8f2ff,color:#172229,stroke:#3f75a3,stroke-width:1.5px;
+  classDef fallback fill:#fff0f1,color:#172229,stroke:#a34752,stroke-width:1.5px;
+  classDef result fill:#eaf6ee,color:#172229,stroke:#34794b,stroke-width:2px;
+  class REQUEST entry;
+  class EXPLICIT,PRECHECK,RULES,ANALYZER,FACTS primary;
+  class MODE,CLEAR,CONFIDENT,HIGH_RISK,BASELINE_OK decision;
+  class ROUTE,FILTER,SELECT,VISION route;
+  class BASELINE,FAIL fallback;
+  class PLAN,EXECUTE result;

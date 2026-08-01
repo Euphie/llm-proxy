@@ -14,50 +14,32 @@ config:
     curve: basis
     htmlLabels: true
 ---
-flowchart LR
-  accTitle: 统一 AttemptBudget 与 ClientCommit 边界
-  accDescr: 同一 Profile 的执行计划统一约束主回答和辅助调用；只有实际 dispatch 才增加相应调用计数，提交前可恢复失败可沿计划前进，ClientCommit 后禁止重试或换 Target。
+flowchart TB
+  accTitle: 所有在线外呼共用一份 AttemptBudget
+  accDescr: 请求开始即创建 AttemptBudget。需要任务分析时先消耗辅助调用、总出站、截止时间和成本预算，随后 ExecutionPlan 固定剩余预算；主回答、视觉、重试和模型或 Target 切换继续共用它。预算不足立即结束，ClientCommit 后禁止重试和切换。响应后的异步评测使用独立预算，不在本图内。
 
-  subgraph PROFILE["当前 Profile · 单一 ExecutionPlan"]
-    direction LR
-    PLAN["PlannedAttempt[]<br/>+ PlannedAuxiliaryAttempt[]"]
-    BUDGET["AttemptBudget<br/>回答 · 辅助 · 总出站<br/>retry · Target / 模型切换<br/>deadline · 最坏成本"]
-    NEXT["下一主回答<br/>PlannedAttempt"]
-    GATE{"预算与 deadline<br/>仍可用？"}
-    RESERVE["ProfileRuntime.reserve()"]
-    RESERVED{"预留成功？"}
-    NO_DISPATCH["未 dispatch<br/>不计回答 / 辅助 / 出站 / retry<br/>继续消耗 deadline；变化时计 switch"]
-    COUNT["dispatch 前原子计数<br/>回答 + 总出站"]
-    DISPATCH["dispatch"]
-    EVENT{"首个完整合法<br/>入口协议事件？"}
-    PRECOMMIT{"未 ClientCommit<br/>且可恢复？"}
-    ADVANCE["仅沿计划前进<br/>按变化计 retry / switch"]
-    COMMIT["ClientCommit<br/>一次性提交响应头与首事件"]
-    STREAM["继续响应"]
-    STOP["完成或终止<br/>不再 fallback"]
-
-    PLAN --> NEXT --> GATE
-    BUDGET --> GATE
-    GATE -->|"否"| STOP
-    GATE -->|"是"| RESERVE --> RESERVED
-    RESERVED -->|"否"| NO_DISPATCH --> NEXT
-    RESERVED -->|"是"| COUNT --> DISPATCH --> EVENT
-    EVENT -->|"是"| COMMIT --> STREAM --> STOP
-    EVENT -->|"否"| PRECOMMIT
-    PRECOMMIT -->|"是"| ADVANCE --> NEXT
-    PRECOMMIT -->|"否"| STOP
-  end
+  BUDGET["请求开始创建 AttemptBudget<br/>主回答次数 · 辅助调用次数<br/>总外呼 · 每 Target 重试<br/>Target / 模型切换<br/>deadline · 最坏成本"] --> NEED_ANALYSIS{"需要任务分析器？"}
+  NEED_ANALYSIS -->|"是"| ANALYZER["先占用辅助 / 总外呼<br/>deadline / 成本"] --> PLAN["ExecutionPlan<br/>固定剩余预算"]
+  NEED_ANALYSIS -->|"否"| PLAN
+  PLAN --> CHECK{"发送前检查"}
+  CHECK -->|"超限"| STOP["结束请求"]
+  CHECK -->|"允许"| DISPATCH["记录计数并 dispatch"]
+  DISPATCH --> EVENT{"收到完整合法<br/>协议事件？"}
+  EVENT -->|"是"| COMMIT["ClientCommit"] --> STREAM["继续返回<br/>禁止重试或切换"]
+  EVENT -->|"否，可恢复"| NEXT{"计划内还有<br/>下一次尝试？"}
+  EVENT -->|"否，不可恢复"| STOP
+  NEXT -->|"是"| CHECK
+  NEXT -->|"否"| STOP
 
   classDef primary fill:#f7fbfd,color:#172229,stroke:#526f7e,stroke-width:1.5px;
   classDef budget fill:#e8f2ff,color:#172229,stroke:#3f75a3,stroke-width:1.5px;
-  classDef runtime fill:#e7f7f6,color:#172229,stroke:#2d7774,stroke-width:1.5px;
   classDef decision fill:#fff4e7,color:#172229,stroke:#965b15,stroke-width:1.5px;
+  classDef runtime fill:#e7f7f6,color:#172229,stroke:#2d7774,stroke-width:1.5px;
   classDef commit fill:#eaf6ee,color:#172229,stroke:#34794b,stroke-width:2px;
-  classDef terminal fill:#eef0ff,color:#172229,stroke:#625eb5,stroke-width:1.5px;
-  class PLAN,NEXT primary;
-  class BUDGET,COUNT budget;
-  class RESERVE,DISPATCH,STREAM runtime;
-  class GATE,RESERVED,NO_DISPATCH,EVENT,PRECOMMIT,ADVANCE decision;
-  class COMMIT commit;
+  classDef terminal fill:#fff0f1,color:#172229,stroke:#a34752,stroke-width:1.5px;
+  class PLAN primary;
+  class BUDGET budget;
+  class NEED_ANALYSIS,CHECK,EVENT,NEXT decision;
+  class ANALYZER,DISPATCH runtime;
+  class COMMIT,STREAM commit;
   class STOP terminal;
-  style PROFILE fill:#edf6fb,stroke:#4a758f,stroke-width:2px,color:#172229

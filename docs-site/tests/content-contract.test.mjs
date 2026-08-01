@@ -15,18 +15,18 @@ const expectedSlugs = [
   "strategy-lifecycle", "engineering-and-delivery",
 ];
 const canonicalChapters = [
-  ["overview", "产品目标与非目标", "以单一 Profile 边界组织模型选择、Target 调度和受控学习。", "理解方案", "compass", "blue", "本版目标", "本项目源码验证"],
-  ["source-baseline", "源码基线与现状差距", "用固定提交区分当前运行时事实、缺口与本版目标。", "理解方案", "layers", "cyan", "已实现", "本项目源码验证"],
-  ["competitor-evidence", "竞品源码证据矩阵", "从固定源码提炼可采用机制，并明确拒绝跨 Profile 编排。", "理解方案", "activity", "orange", "本版目标", "竞品源码验证"],
-  ["core-model", "核心对象与配置模型", "定义全部归属单一 Profile 的路由、策略、计划与证据对象。", "理解方案", "sliders", "indigo", "本版目标", "竞品源码验证"],
-  ["profile-isolation", "Profile 隔离与协议边界", "把 Profile 固化为 Provider 实例、信任域和唯一运行时隔离边界。", "运行时", "shield", "red", "本版目标", "本项目源码验证"],
-  ["online-routing", "在线决策流水线", "通过本地事实、硬约束、模型选择和 Target 调度生成不可变计划。", "运行时", "route", "green", "本版目标", "竞品源码验证"],
-  ["quality-and-cost", "质量目标与模型选择", "先通过 Route 级质量门禁，再按条件优化成本与延迟。", "运行时", "scale", "yellow", "本版目标", "竞品源码验证"],
-  ["target-reliability", "Target 调度、容量与健康", "在同一 Profile、同一逻辑模型内完成准入、健康过滤和负载调度。", "运行时", "activity", "teal", "本版目标", "竞品源码验证"],
-  ["runtime-reliability", "尝试预算、流式与会话", "用统一 AttemptBudget 和 ClientCommit 建立有界可靠性。", "运行时", "shield", "slate", "本版目标", "竞品源码验证"],
-  ["evaluation-feedback", "评测、反馈与稳定实验", "用 Profile-scoped 评测、强类型反馈和稳定分桶积累证据。", "控制面", "activity", "orange", "本版目标", "竞品源码验证"],
-  ["strategy-lifecycle", "策略生命周期、观测与重放", "以不可变版本、CAS、灰度、LKG 和授权重放治理发布。", "控制面", "git-branch", "indigo", "本版目标", "竞品源码验证"],
-  ["engineering-and-delivery", "API、迁移与交付验收", "明确破坏性迁移、五个子项目和双重验收门。", "交付", "database", "slate", "本版目标", "本项目源码验证"],
+  ["overview", "智能路由概览", "用一个简单流程说明 auto 如何在单个 Profile 内选模型、控成本并守住质量。", "理解方案", "compass", "blue", "本版目标", "本项目源码验证"],
+  ["source-baseline", "当前能力与目标", "区分当前已实现能力与智能路由的待实现目标。", "理解方案", "layers", "cyan", "本版目标", "本项目源码验证"],
+  ["competitor-evidence", "参考方案与取舍", "提炼竞品中值得采用的机制，并明确不照搬的复杂设计。", "理解方案", "activity", "orange", "本版目标", "竞品源码验证"],
+  ["core-model", "Profile 配置与模型角色", "说明启用 auto 所需配置，以及 ModelCard、Target 和模型角色。", "理解方案", "sliders", "indigo", "本版目标", "竞品源码验证"],
+  ["profile-isolation", "Profile 隔离边界", "URL 选定 Profile 后，路由、视觉、重试和评测始终留在该边界内。", "运行时", "shield", "red", "本版目标", "本项目源码验证"],
+  ["online-routing", "在线路由", "规则先判断，拿不准时调用轻量任务分析器，再生成不可变执行计划。", "运行时", "route", "green", "本版目标", "竞品源码验证"],
+  ["quality-and-cost", "质量与成本", "先满足 Route 质量门槛，再选择完整成本更低的模型。", "运行时", "scale", "yellow", "本版目标", "竞品源码验证"],
+  ["target-reliability", "Target 与容错", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。", "运行时", "activity", "teal", "本版目标", "竞品源码验证"],
+  ["runtime-reliability", "视觉、重试与 Session", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。", "运行时", "shield", "slate", "本版目标", "竞品源码验证"],
+  ["evaluation-feedback", "异步评测与策略优化", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。", "控制面", "activity", "orange", "本版目标", "竞品源码验证"],
+  ["strategy-lifecycle", "策略生命周期", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。", "控制面", "git-branch", "indigo", "本版目标", "竞品源码验证"],
+  ["engineering-and-delivery", "实施范围与交付", "明确 v1 范围、实施阶段和验收条件。", "交付", "database", "slate", "本版目标", "本项目源码验证"],
 ].map(([slug, title, summary, group, icon, accent, implementation_status, evidence_level]) => ({
   slug, title, summary, group, icon, accent, implementation_status, evidence_level,
 }));
@@ -45,7 +45,6 @@ const canonicalDiagrams = [
   ["strategy-lifecycle", "strategy-lifecycle"],
   ["target-reliability", "target-reliability"],
 ];
-const forbiddenDiagramDesign = /provider_kind|provider_id|\bProviders?\b|cross-Profile|跨\s*Profile|grade[_ -]?[a-f]|policy[_ -]?20\d{2}|\b\d+(?:\.\d+)?%|\b(?:max[_ -]?)?(?:attempts?|quality)(?:[_ -]?(?:default|threshold))?\s*[:=]\s*\d+(?:\.\d+)?|\b(?:exactly\s+)?\d+(?:\.\d+)?\s*(?:attempts?|tries|次|轮)|固定\s*\d+(?:\.\d+)?\s*(?:%|次|轮|attempts?)/i;
 
 async function loadJsonContract(name) {
   const filename = path.join(siteRoot, "data", name);
@@ -132,10 +131,6 @@ test("binds cross-Profile prohibitions to the clause that contains the routed ac
     );
   }
   assert.deepEqual(
-    findAffirmativeCrossProfileClaims("ResearchComparison 是唯一允许跨 Profile 的值，但不能携带 ExecutionPlan"),
-    [],
-  );
-  assert.deepEqual(
     findAffirmativeCrossProfileClaims("禁止跨 Profile route but supports cross-Profile deployment"),
     ["禁止跨 Profile route but supports cross-Profile deployment"],
   );
@@ -143,21 +138,6 @@ test("binds cross-Profile prohibitions to the clause that contains the routed ac
     findAffirmativeCrossProfileClaims("禁止跨 Profile route 且拒绝跨 Profile deployment"),
     [],
   );
-});
-
-test("rejects Provider switching and fixed attempt or quality defaults in diagrams", () => {
-  for (const unsafe of [
-    "Provider A --> Provider B",
-    "Providers A/B",
-    "max_attempts=3",
-    "maxAttempts=3",
-    "exactly 3 attempts",
-    "3 attempts",
-    "quality_default=0.95",
-    "固定 95%",
-  ]) {
-    assert.match(unsafe, forbiddenDiagramDesign);
-  }
 });
 
 test("locks the twelve canonical chapter records", async () => {
@@ -213,31 +193,8 @@ test("locks baseline and competitor evidence metadata", async () => {
     problems.push("runtime_baseline must be an object.");
   }
 
-  const documentationBaseline = requireValue(
-    baselineContract.value?.documentation_baseline,
-    "documentation_baseline",
-    problems,
-  );
-  if (documentationBaseline && typeof documentationBaseline === "object") {
-    if (documentationBaseline.repository !== "codex/intelligent-routing-docs-site") {
-      problems.push("documentation_baseline.repository must identify the documentation worktree.");
-    }
-    if (documentationBaseline.commit !== "039a060e502eca69f8c9da3b8fc1c0e42b503365") {
-      problems.push("documentation_baseline.commit must pin the documentation starting SHA.");
-    }
-    if (!/implementation working tree/i.test(documentationBaseline.drift_state ?? "")) {
-      problems.push("documentation_baseline.drift_state must identify an implementation working tree.");
-    }
-    requireText(documentationBaseline.timestamp, "documentation_baseline.timestamp", problems);
-    if (documentationBaseline.implementation_status !== "已实现") {
-      problems.push("documentation_baseline.implementation_status must describe the pinned documentation snapshot.");
-    }
-    if (documentationBaseline.evidence_level !== "本项目源码验证") {
-      problems.push("documentation_baseline.evidence_level must be 本项目源码验证.");
-    }
-    if (documentationBaseline.verified_runtime_facts?.length !== 0) {
-      problems.push("documentation_baseline must not claim runtime behavior.");
-    }
+  if (baselineContract.value && Object.keys(baselineContract.value).join(",") !== "runtime_baseline") {
+    problems.push("source-baselines.json must contain only the runtime source baseline.");
   }
 
   const evidence = requireValue(evidenceContract.value, "competitor_evidence", problems);
@@ -298,17 +255,14 @@ test("locks baseline and competitor evidence metadata", async () => {
   assertContract(problems);
 });
 
-test("forbids unsafe terms and unsupported fixed claims across content and data", async () => {
+test("forbids affirmative cross-Profile execution", async () => {
   const files = [
+    path.join(siteRoot, "..", "docs", "intelligent-routing.md"),
     ...(await textFiles(path.join(siteRoot, "content"), ".md")),
     ...(await textFiles(path.join(siteRoot, "data"), ".json")),
+    ...(await textFiles(path.join(siteRoot, "diagrams"), ".mmd")),
   ];
   const corpus = (await Promise.all(files.map((filename) => readFile(filename, "utf8")))).join("\n");
-  for (const forbidden of [
-    /provider_kind/i, /provider_id/i,
-    /固定\s*(?:98%|95%|20[–-]30%)/, /调用方凭据.*(?:异步|评测)/,
-  ]) assert.doesNotMatch(corpus, forbidden);
-
   assert.match(
     corpus,
     /(?:禁止|拒绝|不可|不允许|不能|不得|不采用|不支持|绝不)[^。！？；;\n]*(?:跨\s*Profile)[^。！？；;\n]*(?:route|routing|fallback|evaluation|deployment|路由|编排|评测|部署)/i,
@@ -321,18 +275,78 @@ test("forbids unsafe terms and unsupported fixed claims across content and data"
   );
 });
 
-test("requires one upstream supplier and trust domain per Profile envelope", async () => {
-  const pages = await Promise.all([
-    readFile(path.join(siteRoot, "content", "core-model.md"), "utf8"),
-    readFile(path.join(siteRoot, "content", "profile-isolation.md"), "utf8"),
+test("locks the approved intelligent-routing contracts", async () => {
+  const readPage = (slug) => readFile(path.join(siteRoot, "content", `${slug}.md`), "utf8");
+  const [overview, core, isolation, routing, quality, target, runtime, evaluation, lifecycle, delivery] = await Promise.all([
+    readPage("overview"), readPage("core-model"), readPage("profile-isolation"), readPage("online-routing"),
+    readPage("quality-and-cost"), readPage("target-reliability"), readPage("runtime-reliability"),
+    readPage("evaluation-feedback"), readPage("strategy-lifecycle"), readPage("engineering-and-delivery"),
   ]);
-  for (const page of pages) {
-    assert.match(page, /同一 Profile[^。\n]*多个[^。\n]*(?:账号|区域|endpoint|端点)[^。\n]*Target/i);
-    assert.match(page, /同一(?:个)?上游(?:服务商|供应商)[^。\n]*同一[^。\n]*trust[- ]domain/i);
-    assert.match(page, /不同上游(?:服务商|供应商)[^。\n]*必须[^。\n]*不同 Profile/i);
-    assert.match(page, /独立[^。\n]*trust[- ]domain[^。\n]*必须[^。\n]*不同 Profile/i);
-  }
-  assert.match(pages[1], /调用方[^。\n]*Profile URL[^。\n]*显式选择/i);
+
+  assert.match(overview, /model=auto[\s\S]*参与模型[\s\S]*强模型基线[\s\S]*轻量任务分析器[\s\S]*已发布策略/);
+  assert.match(core, /新增模型默认不加入/);
+  assert.match(core, /一个 Profile 同时只有一个 active Strategy[\s\S]*多个 Route[\s\S]*默认 Route[\s\S]*统一 Request\/AttemptBudget[\s\S]*Route 映射前创建/);
+  assert.match(core, /context_window[\s\S]*client_context_window/);
+  assert.match(core, /v1 每个逻辑模型只配置一个 Target/);
+  assert.match(core, /未登记或未确认的能力不满足对应硬约束[\s\S]*缺少计算完整成本所需的价格字段[\s\S]*不能发布[\s\S]*价格为零是有效值/);
+  assert.match(isolation, /Profile 是永久路由边界[\s\S]*不能到另一个 Profile 寻找候选/);
+  assert.match(isolation, /逻辑隔离合同[\s\S]*共享无状态代码和 SQLite 是允许的/);
+  assert.match(routing, /本地规则优先[\s\S]*无法稳定判断[\s\S]*轻量任务分析器/);
+  assert.match(routing, /Anthropic `POST \/v1\/messages`[\s\S]*OpenAI `POST \/v1\/chat\/completions`、`POST \/v1\/responses`[\s\S]*unsupported operation/);
+  assert.match(routing, /任务类型按 active 策略映射到 Route[\s\S]*默认 Route/);
+  assert.match(routing, /入口[\s\S]*预检[\s\S]*高风险请求只检查强模型基线[\s\S]*其他请求[\s\S]*候选硬约束过滤/);
+  assert.match(routing, /失败、超时或置信度不足[\s\S]*强模型基线/);
+  assert.match(routing, /高风险[\s\S]*结构信号[\s\S]*场景规则[\s\S]*分析器判断/);
+  assert.match(routing, /不可变 ExecutionPlan/);
+  assert.match(quality, /Route 质量门槛[\s\S]*完整成本/);
+  assert.match(quality, /分层贝叶斯估计[\s\S]*(?:时间|样本权重更高)/);
+  assert.match(quality, /证据不足时使用保守先验[\s\S]*置信下界[\s\S]*强模型基线[\s\S]*否则请求失败/);
+  assert.match(quality, /A\/B\/C\/D 等级[\s\S]*只用于展示/);
+  assert.match(target, /v1 每个模型先使用一个 Target/);
+  assert.match(runtime, /主模型支持视觉[\s\S]*主模型不支持视觉且当前 Profile 已开启增强[\s\S]*该模型从候选中排除/);
+  for (const field of [
+    "max_answer_attempts", "max_auxiliary_calls", "max_total_outbound_calls", "max_retries_per_target",
+    "max_target_switches", "max_model_switches", "deadline", "max_worst_case_cost",
+  ]) assert.match(runtime, new RegExp(field));
+  assert.match(runtime, /ClientCommit 后[\s\S]*不再重试|提交后禁止重试/);
+  assert.match(runtime, /Session 绑定只对 `model=auto` 生效[\s\S]*永久不足[\s\S]*升级[\s\S]*临时 429、5xx[\s\S]*不改变 Session 绑定[\s\S]*不自动降级/);
+  assert.match(runtime, /任务分析先消耗预算[\s\S]*ExecutionPlan 固定剩余预算[\s\S]*异步评测不占用已结束的在线请求预算/);
+  assert.match(runtime, /视觉缓存键至少包含 Profile[\s\S]*当前问题上下文[\s\S]*鉴权域/);
+  assert.match(runtime, /Session 键使用 HMAC[\s\S]*原始 Session ID[\s\S]*Profile[\s\S]*Route[\s\S]*鉴权域[\s\S]*缺少有效 Session ID[\s\S]*不建立跨请求绑定/);
+  assert.match(evaluation, /默认关闭/);
+  assert.match(evaluation, /有界内存队列[\s\S]*队列满时直接丢弃/);
+  assert.match(evaluation, /透传凭据[\s\S]*最长 10 分钟[\s\S]*不得把凭据、prompt、图片或完整输出写入 SQLite/);
+  assert.match(evaluation, /候选策略[\s\S]*不能自动把候选变成 active/);
+  assert.match(evaluation, /视觉描述缓存与评测统计相互独立[\s\S]*完整键一致[\s\S]*跨请求复用/);
+  assert.match(lifecycle, /20260801-001[\s\S]*别名/);
+  assert.match(lifecycle, /CAS[\s\S]*热加载[\s\S]*last-known-good/);
+  assert.match(delivery, /单进程、单副本[\s\S]*SQLite/);
+  assert.match(delivery, /第一阶段[\s\S]*第二阶段[\s\S]*第三阶段/);
+});
+
+test("keeps the canonical repository design aligned with the documentation site", async () => {
+  const design = await readFile(path.join(siteRoot, "..", "docs", "intelligent-routing.md"), "utf8");
+
+  assert.match(design, /状态：目标设计/);
+  assert.match(design, /model=auto[\s\S]*一次请求只能使用 URL 选中的 Profile/);
+  assert.match(design, /本地规则[\s\S]*轻量任务分析模型[\s\S]*强模型基线满足全部硬约束/);
+  assert.match(design, /Anthropic `POST \/v1\/messages`[\s\S]*OpenAI[\s\S]*`POST \/v1\/chat\/completions`[\s\S]*`POST \/v1\/responses`[\s\S]*unsupported operation/);
+  assert.match(design, /任务类型按已发布策略映射到一个 Route[\s\S]*默认 Route/);
+  assert.match(design, /主模型支持视觉[\s\S]*主模型不支持视觉[\s\S]*该主模型不能成为候选/);
+  assert.match(design, /max_answer_attempts[\s\S]*max_worst_case_cost/);
+  assert.match(design, /Session 绑定只对 `model=auto` 生效[\s\S]*不会自动把会话降回较弱模型/);
+  assert.match(design, /会话键使用 HMAC[\s\S]*原始 Session ID[\s\S]*Profile[\s\S]*Route[\s\S]*鉴权域[\s\S]*不建立跨请求绑定/);
+  assert.match(design, /有界内存队列[\s\S]*不会自动替换线上策略/);
+  assert.match(design, /最多在内存保留凭据 10 分钟/);
+  assert.match(design, /YYYYMMDD-NNN[\s\S]*CAS[\s\S]*原子快照热\s*加载/);
+  assert.match(design, /context_window[\s\S]*client_context_window/);
+  assert.match(design, /未登记或未确认的能力不视为满足对应硬约束[\s\S]*缺少计算完整成本所需的价格字段[\s\S]*不能发布/);
+  assert.match(design, /质量证据不足时使用保守先验[\s\S]*置信下界[\s\S]*强模型基线[\s\S]*否则请求失败/);
+  assert.match(design, /单进程、单副本[\s\S]*不做分布式协调/);
+  assert.doesNotMatch(
+    design,
+    /evaluation_credential_ref|credential_ref|envelope_sha|tombstone|ResearchComparison|Payload Replay|decision_shadow|evaluation_shadow/i,
+  );
 });
 
 test("requires chapter Markdown and diagram sources without aborting on missing files", async () => {
@@ -383,7 +397,6 @@ test("requires chapter Markdown and diagram sources without aborting on missing 
     assert.match(svg, /<desc\b[^>]*>[^<]+<\/desc>/);
     assert.match(svg, new RegExp(`data-source-sha256="${sourceHash}"`));
     assert.match(chapter, new RegExp(`!\\[[^\\]]+\\]\\(/diagrams/${name}\\.svg\\)\\n\\n图示等价说明`));
-    assert.doesNotMatch(source, forbiddenDiagramDesign);
   }
   assertContract(problems);
 });
@@ -412,7 +425,7 @@ test("preserves Mesotes marks and binds social assets to the Profile-local desig
   );
   assert.match(ogSource, /MESOTES/);
   assert.match(ogSource, /Profile-local intelligent routing/);
-  assert.match(ogSource, /Resolve Profile[\s\S]*Model Router[\s\S]*Target Scheduler[\s\S]*Same-Profile Targets/);
+  assert.match(ogSource, /Resolve Profile[\s\S]*Rules \+ Analyzer[\s\S]*Quality Gate[\s\S]*Execution Plan/);
   assert.doesNotMatch(ogSource, /llm-proxy|provider_kind|provider_id|cross-Profile/i);
 
   const { default: sharp } = await import("sharp");

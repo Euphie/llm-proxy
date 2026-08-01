@@ -29,7 +29,6 @@ export interface CompetitorEvidence {
 
 export interface SourceBaselines {
   runtime_baseline: SourceBaseline;
-  documentation_baseline: SourceBaseline;
 }
 
 export interface EvidenceMarkerData {
@@ -93,23 +92,20 @@ function link(label: string, href: string): string {
 }
 
 function sourceBaselineTable(baselines: SourceBaselines): string {
-  const rows = [
-    ["运行时", baselines.runtime_baseline],
-    ["文档站", baselines.documentation_baseline],
-  ] as const;
+  const baseline = baselines.runtime_baseline;
 
   return [
     "| 基线 | 仓库 | 固定提交 | 采集时间 | 漂移状态 | 实现状态 | 证据等级 |",
     "| --- | --- | --- | --- | --- | --- | --- |",
-    ...rows.map(([name, baseline]) => [
-      name,
+    [
+      "运行时",
       cell(baseline.repository),
       `\`${cell(baseline.commit)}\``,
       cell(baseline.timestamp),
       cell(baseline.drift_state),
       cell(baseline.implementation_status),
       cell(baseline.evidence_level),
-    ].join(" | ").replace(/^/, "| ").replace(/$/, " |")),
+    ].join(" | ").replace(/^/, "| ").replace(/$/, " |"),
   ].join("\n");
 }
 

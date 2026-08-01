@@ -5,7 +5,7 @@ BIN     := llm-proxy
 CMD     := ./cmd/llm-proxy
 IMAGE   := llm-proxy
 DOCS_SITE_INPUTS := app assets build components content data diagrams lib public scripts tests types worker eslint.config.mjs next.config.ts package-lock.json package.json playwright.config.ts postcss.config.mjs tsconfig.json vite.config.ts
-DOCS_ARCHIVE_INPUTS := Makefile $(addprefix docs-site/,$(DOCS_SITE_INPUTS))
+DOCS_ARCHIVE_INPUTS := Makefile docs/intelligent-routing.md $(addprefix docs-site/,$(DOCS_SITE_INPUTS))
 
 .PHONY: build run test vet test-e2e docker-build docker-up docker-down clean update-model-catalog docs-verify docs-e2e docs-preview
 

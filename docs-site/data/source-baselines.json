@@ -43,14 +43,5 @@
         "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/database/migrations.go"
       }
     ]
-  },
-  "documentation_baseline": {
-    "repository": "codex/intelligent-routing-docs-site",
-    "commit": "039a060e502eca69f8c9da3b8fc1c0e42b503365",
-    "timestamp": "2026-08-01T00:34:01+08:00",
-    "drift_state": "implementation working tree",
-    "implementation_status": "已实现",
-    "evidence_level": "本项目源码验证",
-    "verified_runtime_facts": []
   }
 }

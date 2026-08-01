@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - "docs-site/**"
-      - "docs/superpowers/specs/2026-08-01-intelligent-routing-design.md"
+      - "docs/intelligent-routing.md"
       - "Makefile"
       - ".dockerignore"
       - "README.md"
@@ -12,7 +12,7 @@ on:
   pull_request:
     paths:
       - "docs-site/**"
-      - "docs/superpowers/specs/2026-08-01-intelligent-routing-design.md"
+      - "docs/intelligent-routing.md"
       - "Makefile"
       - ".dockerignore"
       - "README.md"

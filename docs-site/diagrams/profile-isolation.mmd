@@ -15,42 +15,32 @@ config:
     htmlLabels: true
 ---
 flowchart LR
-  accTitle: Profile 隔离与运行时边界
-  accDescr: URL 或默认配置只解析一次 Profile，形成 ProfileScope；入口适配、快照、路由对象、执行、响应和运行时状态始终留在当前 Profile 内。
+  accTitle: Profile 是永久路由边界
+  accDescr: 请求通过 URL 或默认入口选定一个 Profile。之后使用的配置、策略、模型、Target、视觉增强、重试、会话与异步评测全部属于这个 Profile，不能跨 Profile 路由或回退。
 
-  URL["URL slug / default"] --> REG["Registry<br/>仅做入口映射"]
+  ENTRY["URL slug / 默认入口"] --> SELECT["只解析一次<br/>选定 Profile"]
 
-  subgraph PROFILE["当前 Profile（唯一边界）"]
-    direction LR
-    SCOPE["ProfileScope<br/>profile_id + generation + envelope_sha"]
-    INGRESS["Profile-owned<br/>Ingress adapter"]
-    REQUEST["InferenceRequest<br/>可信身份"]
-    ROUTING["Route · Target<br/>不可变 ExecutionPlan"]
-    EXECUTOR["Executor"]
-    RESPONSE["Profile-owned<br/>Response adapter"]
-    SNAPSHOT["不可变 ProfileSnapshot"]
-    RUNTIME["ProfileRuntime<br/>协议 · credential · transport<br/>health · capacity · session"]
-    EVIDENCE["Trace · Evaluation evidence"]
-
-    SCOPE --> INGRESS --> REQUEST --> ROUTING --> EXECUTOR --> RESPONSE
-    SNAPSHOT -.->|"只读输入"| ROUTING
-    RUNTIME -->|"reserve / dispatch"| EXECUTOR
-    EXECUTOR --> EVIDENCE
-    SCOPE -.->|"同一 scope"| SNAPSHOT
-    SCOPE -.->|"同一 scope"| RUNTIME
-    SCOPE -.->|"同一 scope"| EVIDENCE
+  subgraph PROFILE["当前 Profile · 唯一业务边界"]
+    direction TB
+    CONFIG["配置与策略"] --> PLAN["路由与 ExecutionPlan"] --> RUN["主请求执行"]
+    MODELS["ModelCard 与 Target"] --> PLAN
+    VISION["视觉增强"] --> RUN
+    RETRY["重试与 Session"] --> RUN
+    RUN --> EVAL["统计与异步评测"]
   end
 
-  REG -->|"解析一次"| SCOPE
+  SELECT --> CONFIG
+  SELECT --> MODELS
+  OTHER["其他 Profile"] -. "不读取 · 不回退 · 不评测" .-> BLOCK["边界外"]
 
+  classDef entry fill:#fff4e7,color:#172229,stroke:#965b15,stroke-width:1.5px;
   classDef scope fill:#0067c5,color:#ffffff,stroke:#075daf,stroke-width:2px;
   classDef primary fill:#f7fbfd,color:#172229,stroke:#526f7e,stroke-width:1.5px;
   classDef runtime fill:#e7f7f6,color:#172229,stroke:#2d7774,stroke-width:1.5px;
-  classDef evidence fill:#eef0ff,color:#172229,stroke:#625eb5,stroke-width:1.5px;
-  classDef entry fill:#fff4e7,color:#172229,stroke:#965b15,stroke-width:1.5px;
-  class SCOPE scope;
-  class INGRESS,REQUEST,ROUTING,EXECUTOR,RESPONSE,SNAPSHOT primary;
-  class RUNTIME runtime;
-  class EVIDENCE evidence;
-  class URL,REG entry;
+  classDef blocked fill:#fff0f1,color:#172229,stroke:#a34752,stroke-width:1.5px;
+  class ENTRY entry;
+  class SELECT scope;
+  class CONFIG,MODELS,PLAN primary;
+  class VISION,RETRY,RUN,EVAL runtime;
+  class OTHER,BLOCK blocked;
   style PROFILE fill:#edf6fb,stroke:#4a758f,stroke-width:2px,color:#172229

@@ -49,9 +49,9 @@ test("server-renders every canonical chapter in the intelligent-routing document
 
   const html = await response.text();
   assert.ok(Buffer.byteLength(html) < 220_000, "The initial document must not serialize every chapter body.");
-  assert.doesNotMatch(html, /迁移记录以旧/);
+  assert.doesNotMatch(html, /三个实施阶段/);
   assert.match(html, /<html[^>]*lang="zh-CN"/i);
-  assert.match(html, /<title>产品目标与非目标 · Mesotes<\/title>/i);
+  assert.match(html, /<title>智能路由概览 · Mesotes<\/title>/i);
   assert.match(html, /MESOTES/);
   assert.match(html, /<img[^>]+src="\/brand\/mesotes-mark-256\.png"/);
   assert.doesNotMatch(html, /\/_vinext\/image\?url=%2Fbrand/i);
@@ -64,9 +64,9 @@ test("server-renders every canonical chapter in the intelligent-routing document
     access(new URL("public/brand/mesotes-mark-256.png", siteRoot)),
   ]);
   const requiredChapterTitles = [
-    "产品目标与非目标", "源码基线与现状差距", "竞品源码证据矩阵", "核心对象与配置模型",
-    "Profile 隔离与协议边界", "在线决策流水线", "质量目标与模型选择", "Target 调度、容量与健康",
-    "尝试预算、流式与会话", "评测、反馈与稳定实验", "策略生命周期、观测与重放", "API、迁移与交付验收",
+    "智能路由概览", "当前能力与目标", "参考方案与取舍", "Profile 配置与模型角色",
+    "Profile 隔离边界", "在线路由", "质量与成本", "Target 与容错",
+    "视觉、重试与 Session", "异步评测与策略优化", "策略生命周期", "实施范围与交付",
   ];
   const missing = requiredChapterTitles.filter((title) => !html.includes(title));
   assert.deepEqual(missing, [], `Rendered documentation is missing canonical chapters: ${missing.join("、")}`);
@@ -78,7 +78,7 @@ test("ignores malformed request hosts in favor of the configured public origin",
   const response = await render("/docs/overview", "localhost:99999");
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /<title>产品目标与非目标 · Mesotes<\/title>/i);
+  assert.match(html, /<title>智能路由概览 · Mesotes<\/title>/i);
   assert.match(html, /https:\/\/docs\.example\.test\/og-routing-design\.png/i);
 });
 
@@ -102,7 +102,7 @@ test("server-renders language-labelled code and accessible diagram openers", asy
 
   assert.match(html, /class=\"code-language\">text</);
   assert.match(html, /aria-live=\"polite\"/);
-  assert.match(html, /aria-label=\"放大查看：在线决策流水线\"/);
+  assert.match(html, /aria-label=\"放大查看：在线路由流程\"/);
 });
 
 test("server-renders one bounded precomputed route trace without secrets", async () => {
@@ -111,15 +111,15 @@ test("server-renders one bounded precomputed route trace without secrets", async
   const explorer = explorerSubtree(html);
 
   for (const value of [
-    "预计算示例",
+    "静态设计示例",
+    "路由轨迹示例",
     "profile_acme_primary",
-    "generation",
-    "sha256:8bb490e5d6c4",
+    "20260801-001",
+    "代码助手-均衡版",
     "model_economy",
     "缺少所需工具能力",
     "model_balanced",
-    "target_balanced_a",
-    "target_balanced_b",
+    "target_balanced_primary",
     "retryable_pre_commit_failure",
     "ClientCommit",
     "回答尝试",
@@ -130,11 +130,12 @@ test("server-renders one bounded precomputed route trace without secrets", async
     "模型切换",
     "deadline",
     "最坏成本",
-    "ExecutionPlan 版本绑定",
+    "ExecutionPlan 固定信息",
   ]) {
     assert.ok(explorer.includes(value), `Rendered trace is missing ${value}.`);
   }
-  assert.match(explorer, /固定的单一 Profile 范围/);
+  assert.match(explorer, /当前 Profile 与策略/);
+  assert.doesNotMatch(explorer, /sha256:/);
   assertExplorerHasNoSecrets(explorer);
   assert.throws(() => assertExplorerHasNoSecrets('<dt>endpoint</dt><dd>https://internal.example/v1</dd>'));
   assert.throws(() => assertExplorerHasNoSecrets('<dt>authorization</dt><dd>secret</dd>'));

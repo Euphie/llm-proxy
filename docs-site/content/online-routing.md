@@ -1,59 +1,59 @@
-# 在线决策流水线
+# 在线路由
 
 > [!TARGET]
-> 在线路由是 Profile-local 的确定性计算：URL/default 已固定一个 Profile 后，Router 只读该 Profile 的已发布快照和本地运行时状态。任何后续阶段都不得选择、查询或 fallback 到另一个 Profile；发现 scope 不一致即 fail closed。
+> 在线路由只处理当前请求。它不会现场训练策略，也不会在 Profile 之外寻找模型。
 
-## 从请求到选择
-
-入口 adapter 将已验证的请求归一化为携带 ProfileScope 的 `InferenceRequest`，并产生可信身份。编译策略按以下有限链路运行：
+## 从请求到执行
 
 ```text
-facts -> local signals -> typed projections -> compiled rules
-  -> hard constraints -> logical model selector
-  -> Target eligibility + capacity snapshot -> Target scheduler
-  -> immutable ExecutionPlan -> Executor
+Profile -> 入口 / 请求级预检 -> 请求特征 -> 本地规则
+                                      -> 无法确定时调用轻量任务分析器
+         -> task_type 映射 Route -> 高风险则检查强模型基线
+                                  -> 其他请求做候选能力过滤与成本选择
+         -> 视觉计划 -> 不可变 ExecutionPlan -> 执行
 ```
 
-Facts 包含入口 operation、显式模型、token 估算、模态、工具、结构化输出、流式、可信租户、地域和预算。Signals 首版仅是本地确定性信号；projections 是有类型的派生值；rules 支持编译后可检查的 AND/OR/NOT、tier、priority 与稳定名称排序。规则引用、环、死分支、能力语义、adapter 可达性、尝试上界、价格、envelope 与所有 `profile_id` 归属均由编译器校验。
+![在线路由流程](/diagrams/routing-pipeline.svg)
 
-![在线决策流水线](/diagrams/routing-pipeline.svg)
+图示等价说明：请求先在当前 Profile 内完成协议、安全和结构预检，再提取特征并运行本地规则；只有结论不明确时才调用轻量任务分析器。得到的任务类型映射到当前策略的 Route；高风险请求只检查强模型基线，其他请求再按能力、上下文、视觉等候选硬约束过滤并做成本选择。最后确定视觉处理方式，生成不可变 ExecutionPlan，并按剩余请求预算执行。
 
-图示等价说明：单一 ProfileScope 依次流经事实和本地信号、规则、硬过滤、逻辑模型选择、同模型 Target 资格与调度，形成单一不可变计划。Executor 只使用该计划中同 Profile 的 Target ID；决策、尝试和结果事件返回同一 scope 的 Trace，不存在回到 Registry 或另一 Profile 的箭头。
+## 支持的操作
 
-## 请求语义
+v1 的 `model=auto` 只支持 Anthropic `POST /v1/messages`，以及 OpenAI `POST /v1/chat/completions`、`POST /v1/responses`。这些操作必须能被入口适配器完整解析。其他方法或路径使用 `auto` 时返回明确的 unsupported operation 错误；显式模型继续沿用当前透传行为。
 
-### 显式模型
+## 显式模型与 auto
 
-显式模型精确锁定逻辑模型，跳过 Model Selector，`max_model_switches=0`。它仍必须通过能力、安全、地域、价格和容量过滤，并只能在已声明为该逻辑模型的同 Profile Target 之间调度。未知模型返回入口协议的 4xx；不透传名称，也不改用另一 Profile。
+显式模型请求保留调用方选择，不进入智能选模。`model=auto` 才读取当前 Profile 的参与模型、强模型基线和已发布策略。Profile 未开启智能路由或配置不完整时，`auto` 返回配置错误，不静默猜测模型。
 
-### 自动与命名 Route
+## 本地规则优先
 
-`model=auto` 选择当前 Profile 的默认 Route；`model=route:<slug>` 选择其命名 Route。Route 的 transition graph 只允许已声明的逻辑模型转换，且 fallback 仅影响当前请求，不永久改写会话绑定。没有 Route、没有合格候选或预算耗尽时必须 fail closed。
+本地规则负责低成本、可确定的判断，例如：
 
-## 硬过滤、资格与调度
+- 是否包含图片、工具调用或结构化输出；
+- 估算上下文是否接近模型容量；
+- 是否命中管理员定义的高风险场景；
+- 是否明显属于简单改写、摘要或分类任务。
 
-决策顺序不可颠倒：先检查入口协议与身份；再过滤能力、上下文、工具、隐私、地域、ZDR、量化和价格上限；随后执行 Route 质量门禁与显式模型契约；最后读取当前 Profile 的生产健康、credential 状态和容量快照，确定 Target 资格。可靠性偏好先于成本或延迟优化。
+只有规则无法稳定判断复杂度时，才调用轻量任务分析器。分析器返回任务类型、复杂度、风险和置信度，不直接指定任意模型。任务类型按 active 策略映射到 Route；没有匹配时使用必填的默认 Route。分析器失败、超时或置信度不足时，优先选择当前 Profile 的强模型基线；如果强基线也不满足能力、上下文、视觉或安全硬约束，则按入口协议明确失败。
 
-Target Scheduler 只能在当前 Profile、一个逻辑模型内工作，使用无秘密的 ProfileSnapshot。允许的有界策略包括 ordered、weighted_random、p2c_peak_ewma、least_inflight、lowest_cost 与 consistent_hash；随机和 P2C 由 `decision_id` 派生 seed，并记录候选指标快照。Scheduler 不直接持有可变 registry，不隐式换模型，也不以全局分数跨量纲排序。
+## 高风险规则
 
-Executor 在 ProfileRuntime 内对计划中的顺序候选执行 `AdmissionController.reserve()`。预留失败只能前进到同一计划内的下一 Target，并消耗同一 deadline 和切换预算；不得重新评分、重排或查找别的 Profile。
+高风险不是靠单一关键词判断，而是三层组合：
+
+1. **结构信号**：高影响工具、写操作、长链任务、严格格式或大上下文。
+2. **场景规则**：管理员为 Route 配置的领域、权限和失败后果。
+3. **分析器判断**：只接受高置信度结果；拿不准按高风险处理。
+
+高风险请求强制使用满足全部硬约束的强模型基线；强基线不满足时明确失败，成本排序不能覆盖这条规则。
 
 ## 不可变 ExecutionPlan
 
-计划至少保存 `profile_id + runtime_generation + envelope_sha`、Policy/catalog/deployment/adapter/price snapshot SHA、有序 `PlannedAttempt[]`、`PlannedAuxiliaryAttempt[]`、逻辑模型转换、选择时指标快照与完整 `AttemptBudget`。预算共同约束回答尝试、辅助调用、总出站调用、每 Target 重试、Target/模型切换、deadline 与最坏成本。
+一次决策完成后生成不可变 ExecutionPlan，至少固定：Profile、策略版本、主模型、Target、视觉方式、计划内尝试和 AttemptBudget。执行阶段只能沿计划前进，不能重新进入模型选择，也不能在循环外额外发送请求。
 
-每个 PlannedAttempt 只含 Profile-local Target ID、config revision、用途和预算归属；不含 endpoint、credential、payload、已编码请求或 transport handle。所有同步辅助调用同样必须先作为同 Profile 的 PlannedAuxiliaryAttempt 编入计划，不能绕过计划隐式出站。
-
-Executor 接收 `(ProfileScope, InferenceRequest, ProfileRuntime, ExecutionPlan)` 后，先核对 request、plan、runtime、当前 snapshot、Trusted Identity 与响应 adapter context 的 scope 三元组，再解析同 Profile Target revision。任何第二个 `profile_id`、generation/envelope SHA 不匹配、缺失或篡改，都在解密、reserve 或 dispatch 前失败。
-
-## 热路径与 Trace
-
-线上 Router 不访问数据库、远程 analyzer、judge 或模型服务。`decision_shadow` 只在同一 ProfileSnapshot 中运行本地、无出站的 advisor，并只记录候选计划；远程候选推理属于异步、同 Profile 的 `evaluation_shadow`，不能改变当前请求选择。
-
-Trace explanation 是预计算的 Decision/Attempt/Outcome 记录：展示已记录的事实、规则结果、排除原因、选择输入、计划和结果，而不重新执行请求。只有授权 payload、完整输入事实、seed、算法版本和所有快照同时存在时，才可在原 scope 重算 decision replay；否则必须拒绝。
+路由轨迹应记录规则结论、分析器是否被调用、候选排除原因、最终模型、预算消耗和 ClientCommit，但默认不保存 prompt、图片、凭据或完整输出。
 
 > [!CURRENT]
-> 当前源码未证明规则编译、计划、容量预留或 Trace 已实现；本页描述的是可验证的目标流水线。
+> 当前运行时尚未实现该流水线和 ExecutionPlan；下面的路由轨迹是静态设计示例，不是实时请求数据。
 
 > [!FUTURE]
-> 学习系统可离线提出候选，但不得在请求热路径改写规则、候选集合或优先级。任何可影响线上选择的变更需经过同 Profile 评测与发布生命周期。
+> 后续可增加同一 Profile 内的多 Target 调度，但不会改变规则优先、强基线回退和不可变计划这三条合同。
