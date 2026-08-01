@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -161,6 +162,59 @@ func TestAutoRoutingRetryBudgetPreventsExtraFinalRequest(t *testing.T) {
 
 	if response.Code != http.StatusServiceUnavailable || calls.Load() != 2 {
 		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls.Load(), response.Body.String())
+	}
+}
+
+func TestOpenAIChatAutoRoutingUsesCompositeVisionAfterModelSelection(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	var visionCalls atomic.Int32
+	var answerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("path=%q", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var root struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role string `json:"role"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(body, &root)
+		switch {
+		case root.Model == "vision":
+			visionCalls.Add(1)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"按钮与输入框重叠"}}]}`)
+		case len(root.Messages) > 0 && root.Messages[0].Role == "system":
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9000}"}}]}`)
+		default:
+			answerCalls.Add(1)
+			if root.Model != "fast" || bytes.Contains(body, []byte(`"type":"image_url"`)) ||
+				!bytes.Contains(body, []byte("按钮与输入框重叠")) {
+				t.Errorf("main body=%s", body)
+			}
+			_, _ = io.WriteString(w, `{"model":"fast","choices":[{"message":{"content":"done"}}]}`)
+		}
+	}))
+	defer server.Close()
+	runtime := autoProxyRuntime(t, server.URL, true)
+	runtime.Protocol = profile.ProtocolOpenAI
+	runtime.Vision.Transport = profile.VisionTransportOpenAIChatCompletions
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"auto","max_completion_tokens":1000,"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,aW1hZ2U="}},{"type":"text","text":"比较这两个布局方案"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || analyzerCalls.Load() != 1 ||
+		visionCalls.Load() != 1 || answerCalls.Load() != 1 {
+		t.Fatalf("status=%d analyzer=%d vision=%d answer=%d body=%q",
+			response.Code, analyzerCalls.Load(), visionCalls.Load(), answerCalls.Load(), response.Body.String())
 	}
 }
 

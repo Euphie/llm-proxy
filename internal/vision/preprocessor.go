@@ -139,6 +139,9 @@ func newPreprocessorForProtocol(
 	}
 	if protocol == profile.ProtocolOpenAI {
 		parse = func(root map[string]json.RawMessage) (requestDocument, error) {
+			if _, chat := root["messages"]; chat {
+				return parseChatCompletionsRoot(root)
+			}
 			return parseResponsesRoot(root)
 		}
 	}
@@ -181,6 +184,16 @@ func (p *Preprocessor) ProcessTarget(
 	headers http.Header,
 	body []byte,
 	mainTarget string,
+) ([]byte, error) {
+	return p.ProcessTargetWithBudget(ctx, headers, body, mainTarget, nil)
+}
+
+func (p *Preprocessor) ProcessTargetWithBudget(
+	ctx context.Context,
+	headers http.Header,
+	body []byte,
+	mainTarget string,
+	reserveCall func(context.Context) error,
 ) ([]byte, error) {
 	root, err := parseRequestRoot(body)
 	if err != nil {
@@ -271,6 +284,13 @@ func (p *Preprocessor) ProcessTarget(
 					defer func() { <-p.slots }()
 					if err := operationCtx.Err(); err != nil {
 						return "", err
+					}
+					if reserveCall != nil {
+						if err := reserveCall(operationCtx); err != nil {
+							failures.record(err)
+							cancel()
+							return "", err
+						}
 					}
 					description, err := p.describer.DescribeTarget(
 						operationCtx,

@@ -37,6 +37,11 @@ func TestShadowTarget(t *testing.T) {
 			want:      "https://example.test/v1/chat/completions",
 		},
 		{
+			name: "chat main request", main: "https://example.test/v1/chat/completions",
+			transport: profile.VisionTransportOpenAIChatCompletions,
+			want:      "https://example.test/v1/chat/completions",
+		},
+		{
 			name: "chat invalid main", main: "https://example.test/v1/messages",
 			transport: profile.VisionTransportOpenAIChatCompletions,
 			wantErr:   true,

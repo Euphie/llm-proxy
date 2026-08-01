@@ -430,8 +430,11 @@ func shadowTarget(mainTarget string, transport profile.VisionTransport) (string,
 	case profile.VisionTransportAnthropicMessages, profile.VisionTransportOpenAIResponses:
 		return parsed.String(), nil
 	case profile.VisionTransportOpenAIChatCompletions:
+		if strings.HasSuffix(parsed.Path, "/chat/completions") {
+			return parsed.String(), nil
+		}
 		if !strings.HasSuffix(parsed.Path, "/responses") {
-			return "", fmt.Errorf("main target path must end with %q", "/responses")
+			return "", fmt.Errorf("main target path must end with %q or %q", "/responses", "/chat/completions")
 		}
 		parsed.Path = strings.TrimSuffix(parsed.Path, "/responses") + "/chat/completions"
 		parsed.RawPath = ""

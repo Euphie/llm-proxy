@@ -29,12 +29,13 @@ const (
 )
 
 type RequestFacts struct {
-	EstimatedInputTokens     int
-	RequestedOutputTokens    int
-	HasImages                bool
-	HasTools                 bool
-	RequiresStructuredOutput bool
-	Stream                   bool
+	EstimatedInputTokens     int  `json:"estimated_input_tokens"`
+	RequestedOutputTokens    int  `json:"requested_output_tokens"`
+	ImageCount               int  `json:"image_count"`
+	HasImages                bool `json:"has_images"`
+	HasTools                 bool `json:"has_tools"`
+	RequiresStructuredOutput bool `json:"requires_structured_output"`
+	Stream                   bool `json:"stream"`
 }
 
 type Request struct {
@@ -132,9 +133,11 @@ func extractFacts(
 	root map[string]json.RawMessage,
 	body []byte,
 ) RequestFacts {
+	imageCount := countImages(root)
 	facts := RequestFacts{
 		EstimatedInputTokens: (len(body) + 3) / 4,
-		HasImages:            containsImage(root),
+		ImageCount:           imageCount,
+		HasImages:            imageCount > 0,
 		HasTools:             nonEmptyArray(root["tools"]),
 		Stream:               boolValue(root["stream"]),
 	}
@@ -156,35 +159,37 @@ func extractFacts(
 	return facts
 }
 
-func containsImage(value any) bool {
+func countImages(value any) int {
 	switch typed := value.(type) {
 	case map[string]json.RawMessage:
+		count := 0
 		for _, raw := range typed {
 			var decoded any
-			if err := json.Unmarshal(raw, &decoded); err == nil && containsImage(decoded) {
-				return true
+			if err := json.Unmarshal(raw, &decoded); err == nil {
+				count += countImages(decoded)
 			}
 		}
+		return count
 	case map[string]any:
 		if blockType, ok := typed["type"].(string); ok {
 			switch blockType {
 			case "image", "image_url", "input_image":
-				return true
+				return 1
 			}
 		}
+		count := 0
 		for _, child := range typed {
-			if containsImage(child) {
-				return true
-			}
+			count += countImages(child)
 		}
+		return count
 	case []any:
+		count := 0
 		for _, child := range typed {
-			if containsImage(child) {
-				return true
-			}
+			count += countImages(child)
 		}
+		return count
 	}
-	return false
+	return 0
 }
 
 func positiveInt(raw json.RawMessage) int {

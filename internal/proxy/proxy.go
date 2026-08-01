@@ -123,15 +123,25 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		preprocessVision = h.vision != nil && plan.VisionMode() == routing.VisionComposite
 	}
 	if preprocessVision {
+		var reserveVisionCall func(context.Context) error
 		if budget != nil {
-			if err := budget.ReserveCall(requestCtx, routing.CallVision, plan.VisionCallCostMicroUSD()); err != nil {
-				writeRoutingError(w, err)
-				return
+			reserveVisionCall = func(ctx context.Context) error {
+				return budget.ReserveCall(ctx, routing.CallVision, plan.VisionCallCostMicroUSD())
 			}
 		}
-		body, err = h.vision.ProcessTarget(requestCtx, r.Header, body, target)
+		body, err = h.vision.ProcessTargetWithBudget(
+			requestCtx,
+			r.Header,
+			body,
+			target,
+			reserveVisionCall,
+		)
 		if err != nil {
 			if requestCtx.Err() != nil {
+				return
+			}
+			if errors.Is(err, routing.ErrAttemptBudgetExceeded) {
+				writeRoutingError(w, err)
 				return
 			}
 			status := vision.HTTPStatus(err)
@@ -283,7 +293,7 @@ func shouldPreprocessVision(protocol profile.Protocol, r *http.Request) bool {
 			return false
 		}
 	case profile.ProtocolOpenAI:
-		if path != "/responses" && path != "/v1/responses" {
+		if path != "/responses" && path != "/v1/responses" && path != "/v1/chat/completions" {
 			return false
 		}
 	default:

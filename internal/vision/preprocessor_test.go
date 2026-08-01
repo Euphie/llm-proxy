@@ -87,6 +87,56 @@ func TestPreprocessorPassesThroughRequestWithoutImages(t *testing.T) {
 	}
 }
 
+func TestPreprocessorReservesBudgetOnlyForActualVisionCalls(t *testing.T) {
+	fake := &fakeDescriber{describe: func(imageRef) (string, error) {
+		return "description", nil
+	}}
+	p := testPreprocessor(2, fake)
+	var reservations atomic.Int32
+	reserve := func(context.Context) error {
+		reservations.Add(1)
+		return nil
+	}
+	body := imageRequest("cached")
+
+	if _, err := p.ProcessTargetWithBudget(context.Background(), nil, body, "https://example.test/v1/messages", reserve); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ProcessTargetWithBudget(context.Background(), nil, body, "https://example.test/v1/messages", reserve); err != nil {
+		t.Fatal(err)
+	}
+
+	if reservations.Load() != 1 {
+		t.Fatalf("budget reservations=%d, want 1", reservations.Load())
+	}
+	if calls, _, _ := fake.snapshot(); calls != 1 {
+		t.Fatalf("vision calls=%d, want 1", calls)
+	}
+}
+
+func TestPreprocessorStopsBeforeVisionCallWhenBudgetReservationFails(t *testing.T) {
+	fake := &fakeDescriber{describe: func(imageRef) (string, error) {
+		t.Fatal("DescribeTarget called after budget failure")
+		return "", nil
+	}}
+	p := testPreprocessor(1, fake)
+	want := errors.New("budget exhausted")
+
+	_, err := p.ProcessTargetWithBudget(
+		context.Background(),
+		nil,
+		imageRequest("blocked"),
+		"https://example.test/v1/messages",
+		func(context.Context) error { return want },
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("error=%v, want budget error", err)
+	}
+	if calls, _, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("vision calls=%d, want 0", calls)
+	}
+}
+
 func TestPreprocessorRejectsIncompleteRewrite(t *testing.T) {
 	body := imageRequest("unhandled")
 	fake := &fakeDescriber{describe: func(imageRef) (string, error) {

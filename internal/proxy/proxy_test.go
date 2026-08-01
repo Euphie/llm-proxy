@@ -803,7 +803,7 @@ func TestShouldPreprocessVisionMatchesProtocolEndpoint(t *testing.T) {
 		{name: "anthropic responses", protocol: profile.ProtocolAnthropic, path: "/v1/responses", want: false},
 		{name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses", want: true},
 		{name: "openai responses without v1", protocol: profile.ProtocolOpenAI, path: "/responses", want: true},
-		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: false},
+		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: true},
 		{name: "openai messages", protocol: profile.ProtocolOpenAI, path: "/v1/messages", want: false},
 	}
 	for _, test := range tests {

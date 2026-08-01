@@ -43,19 +43,19 @@ func TestParseAutoRequestSupportedOperations(t *testing.T) {
 			name: "anthropic messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
 			body:      `{"model":"auto","max_tokens":2048,"stream":true,"tools":[{"name":"edit"}],"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"aW1hZ2U="}},{"type":"text","text":"change this"}]}]}`,
 			operation: OperationAnthropicMessages,
-			facts:     RequestFacts{RequestedOutputTokens: 2048, HasImages: true, HasTools: true, RequiresStructuredOutput: true, Stream: true},
+			facts:     RequestFacts{RequestedOutputTokens: 2048, ImageCount: 1, HasImages: true, HasTools: true, RequiresStructuredOutput: true, Stream: true},
 		},
 		{
 			name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions",
 			body:      `{"model":"auto","max_completion_tokens":1024,"stream":true,"tools":[{"type":"function"}],"response_format":{"type":"json_schema"},"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,aW1hZ2U="}},{"type":"text","text":"change this"}]}]}`,
 			operation: OperationOpenAIChatCompletions,
-			facts:     RequestFacts{RequestedOutputTokens: 1024, HasImages: true, HasTools: true, RequiresStructuredOutput: true, Stream: true},
+			facts:     RequestFacts{RequestedOutputTokens: 1024, ImageCount: 1, HasImages: true, HasTools: true, RequiresStructuredOutput: true, Stream: true},
 		},
 		{
 			name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
 			body:      `{"model":"auto","max_output_tokens":4096,"stream":false,"tools":[{"type":"web_search"}],"text":{"format":{"type":"json_schema"}},"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="},{"type":"input_text","text":"explain"}]}]}`,
 			operation: OperationOpenAIResponses,
-			facts:     RequestFacts{RequestedOutputTokens: 4096, HasImages: true, HasTools: true, RequiresStructuredOutput: true, Stream: false},
+			facts:     RequestFacts{RequestedOutputTokens: 4096, ImageCount: 1, HasImages: true, HasTools: true, RequiresStructuredOutput: true, Stream: false},
 		},
 	}
 
@@ -75,6 +75,7 @@ func TestParseAutoRequestSupportedOperations(t *testing.T) {
 				t.Fatalf("request=%+v", request)
 			}
 			if request.Facts.RequestedOutputTokens != tt.facts.RequestedOutputTokens ||
+				request.Facts.ImageCount != tt.facts.ImageCount ||
 				request.Facts.HasImages != tt.facts.HasImages ||
 				request.Facts.HasTools != tt.facts.HasTools ||
 				request.Facts.RequiresStructuredOutput != tt.facts.RequiresStructuredOutput ||

@@ -203,6 +203,7 @@ func (p *Planner) evaluateCandidate(
 
 	visionMode := VisionNone
 	visionCost := int64(0)
+	visionCallCost := int64(0)
 	if request.Facts.HasImages {
 		switch {
 		case model.SupportsVision:
@@ -213,7 +214,8 @@ func (p *Planner) evaluateCandidate(
 				return candidatePlan{}, false
 			}
 			visionMode = VisionComposite
-			visionCost = estimateCallCost(4096, p.vision.MaxTokens, visionModel)
+			visionCallCost = estimateCallCost(4096, p.vision.MaxTokens, visionModel)
+			visionCost = multiplyCost(visionCallCost, request.Facts.ImageCount)
 		default:
 			return candidatePlan{}, false
 		}
@@ -242,7 +244,7 @@ func (p *Planner) evaluateCandidate(
 	return candidatePlan{
 		model: modelID, visionMode: visionMode,
 		estimatedCost: estimated, worstCaseCost: worst,
-		answerCallCost: answerCost, visionCallCost: visionCost,
+		answerCallCost: answerCost, visionCallCost: visionCallCost,
 	}, true
 }
 
