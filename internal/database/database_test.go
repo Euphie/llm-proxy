@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ func TestOpenCreatesPrivateDatabaseAndSchema(t *testing.T) {
 
 	for _, table := range []string{
 		"app_settings", "admin_account", "admin_sessions", "profiles", "usage",
+		"routing_traces",
 	} {
 		var name string
 		err := db.QueryRow(
@@ -98,7 +100,7 @@ func TestOpenMigratesOnlyOnce(t *testing.T) {
 			db.Close()
 			t.Fatal(err)
 		}
-		if version != 1 {
+		if version != 2 {
 			db.Close()
 			t.Fatalf("user_version=%d", version)
 		}
@@ -115,5 +117,44 @@ func TestOpenMigratesOnlyOnce(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMigrateUpgradesV1WithoutReplacingExistingData(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "legacy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range schemaV1 {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO app_settings (id, created_at, updated_at) VALUES (1, 'now', 'now');
+		INSERT INTO profiles (
+			id, slug, display_name, enabled, config_json, created_at, updated_at
+		) VALUES (7, 'legacy', 'Legacy', 1, '{}', 'now', 'now');
+		PRAGMA user_version = 1;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var version, profiles, settings int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM profiles WHERE slug = 'legacy'`).Scan(&profiles); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_settings`).Scan(&settings); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 || profiles != 1 || settings != 1 {
+		t.Fatalf("version=%d profiles=%d settings=%d", version, profiles, settings)
 	}
 }

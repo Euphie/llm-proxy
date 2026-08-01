@@ -346,7 +346,7 @@ test("System page renders exact safe values password change and sanitized export
     "数据目录：/app/data",
     "数据库文件：llm-proxy.db",
     "数据库大小：12345 B",
-    "Schema 版本：1",
+    "Schema 版本：2",
     "默认 Profile ID：7",
     "必须修改密码：否",
   ]) {
@@ -574,7 +574,7 @@ function systemFixture() {
     data_dir: "/app/data",
     database_file: "llm-proxy.db",
     database_bytes: 12345,
-    schema_version: 1,
+    schema_version: 2,
     default_profile_id: 7,
     password_must_change: false,
   };

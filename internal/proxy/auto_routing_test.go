@@ -10,8 +10,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/Euphie/llm-proxy/internal/database"
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
 func TestAutoStreamingRetriesOnlyBeforeClientCommit(t *testing.T) {
@@ -376,6 +379,76 @@ func TestAutoRoutingReplansCompositeVisionForSwitchedModel(t *testing.T) {
 		visionCalls.Load() != 1 || fastCalls.Load() != 1 || strongCalls.Load() != 1 {
 		t.Fatalf("status=%d analyzer=%d vision=%d fast=%d strong=%d body=%q",
 			response.Code, analyzerCalls.Load(), visionCalls.Load(), fastCalls.Load(), strongCalls.Load(), response.Body.String())
+	}
+}
+
+func TestAutoRoutingPersistsStructuredRouteTrace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		if request.Model == "fast" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO profiles (
+			id, slug, display_name, enabled, config_json, created_at, updated_at
+		) VALUES (8, 'auto', 'Auto', 1, '{}', ?, ?)
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	store := stats.New(db)
+
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.OverloadRules[0].MaxRetries = 0
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	New(runtime, server.Client(), store).ServeHTTP(response, request)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var strategy, route, source, initialModel, finalModel, visionMode string
+	var statusCode, committed, attempts, switches, totalCalls int
+	if err := db.QueryRow(`
+		SELECT strategy_name, route_id, classification_source,
+		       initial_model, final_model, vision_mode, status_code,
+		       client_committed, answer_attempts, model_switches,
+		       total_outbound_calls
+		FROM routing_traces
+	`).Scan(
+		&strategy, &route, &source, &initialModel, &finalModel,
+		&visionMode, &statusCode, &committed, &attempts, &switches,
+		&totalCalls,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if strategy != "20260802-001" || route != "balanced" || source != "rule" ||
+		initialModel != "fast" || finalModel != "strong" || visionMode != "none" ||
+		statusCode != http.StatusOK || committed != 1 || attempts != 2 ||
+		switches != 1 || totalCalls != 2 {
+		t.Fatalf("trace=%q %q %q %q %q %q %d %d %d %d %d",
+			strategy, route, source, initialModel, finalModel, visionMode,
+			statusCode, committed, attempts, switches, totalCalls)
 	}
 }
 

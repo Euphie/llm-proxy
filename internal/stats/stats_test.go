@@ -98,6 +98,61 @@ func TestRecordAsyncPreservesSlugWhenProfileNoLongerExists(t *testing.T) {
 	}
 }
 
+func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	insertProfiles(t, db, 9)
+
+	store := New(db)
+	done := make(chan struct{}, 1)
+	store.afterWrite = func() { done <- struct{}{} }
+	store.RecordRoutingTraceAsync(RoutingTrace{
+		ProfileID: 9, ProfileSlug: "coding", Protocol: "anthropic",
+		Path: "/v1/messages", Strategy: "20260802-001", Route: "balanced",
+		TaskType: "simple", Risk: "normal", ClassificationSource: "rule",
+		InitialModel: "fast", FinalModel: "strong", VisionMode: "native",
+		StatusCode: 200, ClientCommitted: true, AnswerAttempts: 2,
+		AuxiliaryCalls: 1, TotalOutboundCalls: 3, ModelSwitches: 1,
+		TargetSwitches: 0, PlannedWorstCaseCostMicroUSD: 30126,
+		ReservedCostMicroUSD: 15500, ElapsedMilliseconds: 42,
+	})
+	waitForUsageWrite(t, done)
+
+	var got RoutingTrace
+	var committed int
+	err = db.QueryRow(`
+		SELECT profile_id, profile_slug, protocol, path, strategy_name, route_id,
+		       task_type, risk, classification_source, initial_model, final_model,
+		       vision_mode, status_code, client_committed, answer_attempts,
+		       auxiliary_calls, total_outbound_calls, model_switches,
+		       target_switches, planned_worst_case_cost_micro_usd,
+		       reserved_cost_micro_usd, elapsed_ms
+		FROM routing_traces
+	`).Scan(
+		&got.ProfileID, &got.ProfileSlug, &got.Protocol, &got.Path,
+		&got.Strategy, &got.Route, &got.TaskType, &got.Risk,
+		&got.ClassificationSource, &got.InitialModel, &got.FinalModel,
+		&got.VisionMode, &got.StatusCode, &committed, &got.AnswerAttempts,
+		&got.AuxiliaryCalls, &got.TotalOutboundCalls, &got.ModelSwitches,
+		&got.TargetSwitches, &got.PlannedWorstCaseCostMicroUSD,
+		&got.ReservedCostMicroUSD, &got.ElapsedMilliseconds,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.ClientCommitted = committed == 1
+	if got.ProfileID != 9 || got.Strategy != "20260802-001" ||
+		got.InitialModel != "fast" || got.FinalModel != "strong" ||
+		!got.ClientCommitted || got.TotalOutboundCalls != 3 ||
+		got.PlannedWorstCaseCostMicroUSD != 30126 ||
+		got.ReservedCostMicroUSD != 15500 || got.ElapsedMilliseconds != 42 {
+		t.Fatalf("trace=%+v", got)
+	}
+}
+
 func TestRecordAsyncSkipsUnparseableUsage(t *testing.T) {
 	db, err := database.Open(t.TempDir())
 	if err != nil {

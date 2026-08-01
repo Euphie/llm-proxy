@@ -57,6 +57,8 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	responseState := &responseStateWriter{ResponseWriter: w}
+	w = responseState
 	label := h.cfg.Slug
 	target := targetURL(h.cfg.Upstream, r.RequestURI)
 	start := time.Now()
@@ -73,6 +75,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestCtx := r.Context()
 	var budget *routing.AttemptBudget
 	var plan routing.ExecutionPlan
+	var classification routing.Classification
 	var routeRequest routing.Request
 	var modelAttempts []routing.ModelAttemptPlan
 	var currentAttempt routing.ModelAttemptPlan
@@ -101,7 +104,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var cancel context.CancelFunc
 		budget, requestCtx, cancel = h.routing.NewAttemptBudget(r.Context())
 		defer cancel()
-		var classification routing.Classification
 		plan, classification, routeErr = h.routing.Route(requestCtx, r.Header, routeRequest, budget)
 		if routeErr != nil {
 			if requestCtx.Err() != nil {
@@ -116,6 +118,32 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		currentAttempt = modelAttempts[0]
+		initialModel := currentAttempt.Model()
+		defer func() {
+			if h.stats == nil {
+				return
+			}
+			snapshot := budget.Snapshot()
+			h.stats.RecordRoutingTraceAsync(stats.RoutingTrace{
+				ProfileID: h.cfg.ID, ProfileSlug: label,
+				Protocol: string(h.cfg.Protocol), Path: r.URL.Path,
+				Strategy: plan.Strategy(), Route: plan.Route(),
+				TaskType: classification.TaskType, Risk: string(classification.Risk),
+				ClassificationSource: string(classification.Source),
+				InitialModel:         initialModel, FinalModel: currentAttempt.Model(),
+				VisionMode:                   string(currentAttempt.VisionMode()),
+				StatusCode:                   responseState.statusCode,
+				ClientCommitted:              responseState.committed,
+				AnswerAttempts:               snapshot.AnswerAttempts,
+				AuxiliaryCalls:               snapshot.AuxiliaryCalls,
+				TotalOutboundCalls:           snapshot.TotalOutboundCalls,
+				ModelSwitches:                snapshot.ModelSwitches,
+				TargetSwitches:               snapshot.TargetSwitches,
+				PlannedWorstCaseCostMicroUSD: plan.WorstCaseCostMicroUSD(),
+				ReservedCostMicroUSD:         snapshot.WorstCaseCostMicroUSD,
+				ElapsedMilliseconds:          time.Since(start).Milliseconds(),
+			})
+		}()
 		slog.Info("routing.plan.created",
 			"profile", label,
 			"strategy", plan.Strategy(),
@@ -353,6 +381,41 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 const maxPrecommitStreamBytes = 1 << 20
+
+type responseStateWriter struct {
+	http.ResponseWriter
+	statusCode int
+	committed  bool
+}
+
+func (w *responseStateWriter) WriteHeader(statusCode int) {
+	if w.committed {
+		return
+	}
+	w.statusCode = statusCode
+	w.committed = true
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *responseStateWriter) Write(body []byte) (int, error) {
+	if !w.committed {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func (w *responseStateWriter) Flush() {
+	if !w.committed {
+		w.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *responseStateWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
 
 type relayResult struct {
 	captured  []byte
