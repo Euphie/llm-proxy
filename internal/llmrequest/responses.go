@@ -15,7 +15,7 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 		return document, nil
 	}
 	var direct string
-	if json.Unmarshal(rawInput, &direct) == nil {
+	if isJSONType(rawInput, '"') && json.Unmarshal(rawInput, &direct) == nil {
 		document.texts = append(document.texts, nonEmptyText(direct)...)
 		return document, nil
 	}
@@ -47,10 +47,20 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 			continue
 		}
 		rawBlocks, ok := node.fields[node.blockField]
-		if !ok || !isJSONType(rawBlocks, '[') {
-			if node.blockField == "content" {
-				return nil, fmt.Errorf("input item %d content must be an array", itemIndex)
+		if node.blockField == "content" {
+			var text string
+			if ok && isJSONType(rawBlocks, '"') && json.Unmarshal(rawBlocks, &text) == nil {
+				if isUserRole(node.fields) {
+					document.texts = append(document.texts, nonEmptyText(text)...)
+				}
+				document.nodes = append(document.nodes, node)
+				continue
 			}
+			if !ok || !isJSONType(rawBlocks, '[') {
+				return nil, fmt.Errorf("input item %d content must be a string or array", itemIndex)
+			}
+		}
+		if !ok || !isJSONType(rawBlocks, '[') {
 			document.nodes = append(document.nodes, node)
 			continue
 		}

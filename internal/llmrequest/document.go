@@ -173,6 +173,11 @@ func parseMessageCollection(
 			document.nodes = append(document.nodes, node)
 			continue
 		}
+		if operation == OperationOpenAIChatCompletions &&
+			isJSONNull(content) && isAssistantToolCallMessage(fields) {
+			document.nodes = append(document.nodes, node)
+			continue
+		}
 		if !isJSONType(content, '[') {
 			return nil, fmt.Errorf("message %d content must be a string or array", messageIndex)
 		}
@@ -221,6 +226,15 @@ func imageDetail(fields map[string]json.RawMessage, message string, args ...any)
 func isUserRole(fields map[string]json.RawMessage) bool {
 	var role string
 	return json.Unmarshal(fields["role"], &role) == nil && role == "user"
+}
+
+func isAssistantToolCallMessage(fields map[string]json.RawMessage) bool {
+	var role string
+	if json.Unmarshal(fields["role"], &role) != nil || role != "assistant" {
+		return false
+	}
+	var toolCalls []json.RawMessage
+	return json.Unmarshal(fields["tool_calls"], &toolCalls) == nil && len(toolCalls) > 0
 }
 
 func collectTextBlocks(blocks []json.RawMessage, textType string) string {
@@ -290,4 +304,8 @@ func cloneRawFields(fields map[string]json.RawMessage) map[string]json.RawMessag
 func isJSONType(raw json.RawMessage, first byte) bool {
 	raw = json.RawMessage(strings.TrimSpace(string(raw)))
 	return len(raw) > 0 && raw[0] == first
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
 }

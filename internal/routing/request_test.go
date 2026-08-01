@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -169,8 +170,16 @@ func TestParseAutoRequestRejectsMalformedCanonicalProtocolContent(t *testing.T) 
 			body: `{"model":"auto","messages":[{"role":"user","content":{}}]}`,
 		},
 		{
+			name: "chat null content without tool calls", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions",
+			body: `{"model":"auto","messages":[{"role":"assistant","content":null}]}`,
+		},
+		{
 			name: "responses malformed message content", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
 			body: `{"model":"auto","input":[{"type":"message","role":"user","content":{}}]}`,
+		},
+		{
+			name: "responses null message content", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
+			body: `{"model":"auto","input":[{"type":"message","role":"user","content":null}]}`,
 		},
 	}
 
@@ -252,6 +261,47 @@ func TestRequestWithModelNonStreamingKeepsOriginalImmutable(t *testing.T) {
 	}
 	if !request.Facts.Stream || request.Model != AutoModel {
 		t.Fatalf("original request changed: %+v", request)
+	}
+}
+
+func TestChatAssistantToolCallHistoryWithNullContentRemainsRoutable(t *testing.T) {
+	body := []byte(`{"model":"auto","tools":[{"type":"function","function":{"name":"weather"}}],"messages":[{"role":"user","content":"check weather"},{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"weather","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call-1","content":"sunny"}]}`)
+	request, err := ParseAutoRequest(
+		profile.ProtocolOpenAI,
+		http.MethodPost,
+		"/v1/chat/completions",
+		"application/json",
+		body,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !request.Facts.HasTools || request.EvaluationText() != "check weather" {
+		t.Fatalf("facts=%+v text=%q", request.Facts, request.EvaluationText())
+	}
+	rewritten, err := request.WithModel("fast")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(rewritten, []byte(`"content":null`)) ||
+		!bytes.Contains(rewritten, []byte(`"tool_calls"`)) {
+		t.Fatalf("rewritten request lost tool history: %s", rewritten)
+	}
+}
+
+func TestResponsesEasyInputMessageStringContentRemainsAvailableForTaskAnalysis(t *testing.T) {
+	request, err := ParseAutoRequest(
+		profile.ProtocolOpenAI,
+		http.MethodPost,
+		"/v1/responses",
+		"application/json",
+		[]byte(`{"model":"auto","input":[{"role":"user","content":"first question"},{"type":"message","role":"user","content":"second question"}]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.EvaluationText(); got != "first question\nsecond question" {
+		t.Fatalf("EvaluationText()=%q", got)
 	}
 }
 
