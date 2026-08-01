@@ -60,6 +60,7 @@ type Config struct {
 	Version       int                     `json:"version"`
 	Protocol      Protocol                `json:"protocol"`
 	Upstream      string                  `json:"upstream"`
+	Targets       []TargetConfig          `json:"targets,omitempty"`
 	Models        []ModelCapabilityConfig `json:"models,omitempty"`
 	AutoRouting   AutoRoutingConfig       `json:"auto_routing,omitempty"`
 	Vision        VisionConfig            `json:"vision"`
@@ -96,6 +97,7 @@ type Runtime struct {
 	Enabled       bool
 	Protocol      Protocol
 	Upstream      string
+	Targets       []TargetRuntime
 	Models        ModelCatalog
 	AutoRouting   AutoRoutingRuntime
 	Vision        VisionRuntime
@@ -150,6 +152,10 @@ func (r Record) Resolve() (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
+	targets, err := resolveTargets(upstream, r.Config.Targets, models)
+	if err != nil {
+		return Runtime{}, err
+	}
 	autoRouting, err := resolveAutoRouting(r.Config.AutoRouting, models, vision)
 	if err != nil {
 		return Runtime{}, err
@@ -166,6 +172,7 @@ func (r Record) Resolve() (Runtime, error) {
 		Enabled:       r.Enabled,
 		Protocol:      r.Config.Protocol,
 		Upstream:      upstream,
+		Targets:       targets,
 		Models:        models,
 		AutoRouting:   autoRouting,
 		Vision:        vision,

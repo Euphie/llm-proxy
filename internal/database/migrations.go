@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 var schemaV1 = []string{
 	`CREATE TABLE admin_account (
@@ -193,6 +193,11 @@ var schemaV5 = []string{
         ON routing_quality_evidence(profile_id, route_id, candidate_model)`,
 }
 
+var schemaV6 = []string{
+	`ALTER TABLE routing_traces ADD COLUMN initial_target TEXT NOT NULL DEFAULT 'primary'`,
+	`ALTER TABLE routing_traces ADD COLUMN final_target TEXT NOT NULL DEFAULT 'primary'`,
+}
+
 func Migrate(db *sql.DB) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -261,10 +266,17 @@ func Migrate(db *sql.DB) (err error) {
 			}
 		}
 	}
+	if version < 6 {
+		for _, statement := range schemaV6 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v6: %w", err)
+			}
+		}
+	}
 	if err := ensureRoutingSessionHMACKey(tx); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 5`); err != nil {
+	if _, err := tx.Exec(`PRAGMA user_version = 6`); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

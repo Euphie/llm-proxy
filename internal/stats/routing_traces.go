@@ -29,6 +29,8 @@ type RoutingTraceRow struct {
 	ClassificationSource         string    `json:"classification_source"`
 	InitialModel                 string    `json:"initial_model"`
 	FinalModel                   string    `json:"final_model"`
+	InitialTarget                string    `json:"initial_target"`
+	FinalTarget                  string    `json:"final_target"`
 	VisionMode                   string    `json:"vision_mode"`
 	StatusCode                   int       `json:"status_code"`
 	ClientCommitted              bool      `json:"client_committed"`
@@ -76,7 +78,8 @@ func (s *DB) QueryRoutingTraces(
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, created_at, profile_id, profile_slug, protocol, path,
 		       strategy_name, route_id, task_type, risk, classification_source,
-		       initial_model, final_model, vision_mode, status_code,
+		       initial_model, final_model, initial_target, final_target,
+		       vision_mode, status_code,
 		       client_committed, answer_attempts, auxiliary_calls,
 		       total_outbound_calls, model_switches, target_switches,
 		       planned_worst_case_cost_micro_usd, reserved_cost_micro_usd,
@@ -99,6 +102,7 @@ func (s *DB) QueryRoutingTraces(
 			&row.ID, &createdAt, &profileID, &row.ProfileSlug, &row.Protocol,
 			&row.Path, &row.Strategy, &row.Route, &row.TaskType, &row.Risk,
 			&row.ClassificationSource, &row.InitialModel, &row.FinalModel,
+			&row.InitialTarget, &row.FinalTarget,
 			&row.VisionMode, &row.StatusCode, &committed, &row.AnswerAttempts,
 			&row.AuxiliaryCalls, &row.TotalOutboundCalls, &row.ModelSwitches,
 			&row.TargetSwitches, &row.PlannedWorstCaseCostMicroUSD,

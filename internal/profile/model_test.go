@@ -559,3 +559,79 @@ func TestRecordResolveTrimsUpstreamTrailingSlashAndBuildsRetryRules(t *testing.T
 		t.Fatalf("rule=%+v", rule)
 	}
 }
+
+func TestRecordResolveBuildsOrderedModelTargets(t *testing.T) {
+	supportsVision := true
+	record := Record{
+		Slug: "coding", DisplayName: "Coding", Enabled: true,
+		Config: NewConfig(ProtocolAnthropic, "https://primary.example/v1/"),
+	}
+	record.Config.Models = []ModelCapabilityConfig{
+		{ID: "fast", SupportsVision: &supportsVision},
+		{ID: "strong", SupportsVision: &supportsVision},
+	}
+	record.Config.Targets = []TargetConfig{
+		{ID: "region_b", Upstream: "https://region-b.example/v1/", Models: []string{"fast", "strong"}},
+		{ID: "strong_backup", Upstream: "https://strong.example/v1", Models: []string{"strong"}},
+	}
+
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fast := runtime.RoutingTargets("fast")
+	if len(fast) != 2 || fast[0].ID != PrimaryTargetID ||
+		fast[0].Upstream != "https://primary.example/v1" || fast[1].ID != "region_b" ||
+		fast[1].Upstream != "https://region-b.example/v1" {
+		t.Fatalf("fast targets=%+v", fast)
+	}
+	strong := runtime.RoutingTargets("strong")
+	if len(strong) != 3 || strong[0].ID != PrimaryTargetID ||
+		strong[1].ID != "region_b" || strong[2].ID != "strong_backup" {
+		t.Fatalf("strong targets=%+v", strong)
+	}
+	fast[0] = TargetRuntime{}
+	if got := runtime.RoutingTargets("fast")[0].ID; got != PrimaryTargetID {
+		t.Fatalf("runtime target list followed caller mutation: %q", got)
+	}
+}
+
+func TestRecordResolveRejectsInvalidTargets(t *testing.T) {
+	supportsVision := true
+	base := Record{
+		Slug: "coding", DisplayName: "Coding", Enabled: true,
+		Config: NewConfig(ProtocolAnthropic, "https://primary.example/v1"),
+	}
+	base.Config.Models = []ModelCapabilityConfig{{ID: "fast", SupportsVision: &supportsVision}}
+	tests := []struct {
+		name    string
+		targets []TargetConfig
+	}{
+		{name: "reserved ID", targets: []TargetConfig{{ID: PrimaryTargetID, Upstream: "https://b.example", Models: []string{"fast"}}}},
+		{name: "invalid ID", targets: []TargetConfig{{ID: "Region B", Upstream: "https://b.example", Models: []string{"fast"}}}},
+		{name: "duplicate ID", targets: []TargetConfig{
+			{ID: "b", Upstream: "https://b.example", Models: []string{"fast"}},
+			{ID: "b", Upstream: "https://c.example", Models: []string{"fast"}},
+		}},
+		{name: "primary URL", targets: []TargetConfig{{ID: "b", Upstream: "https://primary.example/v1/", Models: []string{"fast"}}}},
+		{name: "duplicate URL", targets: []TargetConfig{
+			{ID: "b", Upstream: "https://b.example", Models: []string{"fast"}},
+			{ID: "c", Upstream: "https://b.example/", Models: []string{"fast"}},
+		}},
+		{name: "unsafe URL", targets: []TargetConfig{{ID: "b", Upstream: "https://user:secret@b.example", Models: []string{"fast"}}}},
+		{name: "no models", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example"}}},
+		{name: "unknown model", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example", Models: []string{"other"}}}},
+		{name: "duplicate model", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example", Models: []string{"fast", "fast"}}}},
+		{name: "model whitespace", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example", Models: []string{" fast"}}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := base
+			record.Config.Targets = tt.targets
+			if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Resolve() error=%v, want invalid config", err)
+			}
+		})
+	}
+}

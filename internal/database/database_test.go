@@ -102,7 +102,7 @@ func TestOpenMigratesOnlyOnce(t *testing.T) {
 			db.Close()
 			t.Fatal(err)
 		}
-		if version != 5 {
+		if version != 6 {
 			db.Close()
 			t.Fatalf("user_version=%d", version)
 		}
@@ -165,7 +165,55 @@ func TestMigrateUpgradesV1WithoutReplacingExistingData(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_settings`).Scan(&settings); err != nil {
 		t.Fatal(err)
 	}
-	if version != 5 || profiles != 1 || settings != 1 {
+	if version != 6 || profiles != 1 || settings != 1 {
 		t.Fatalf("version=%d profiles=%d settings=%d", version, profiles, settings)
+	}
+}
+
+func TestMigrateV6DefaultsExistingRoutingTraceTargetsToPrimary(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "v5.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for version, statements := range [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5} {
+		for _, statement := range statements {
+			if _, err := db.Exec(statement); err != nil {
+				t.Fatalf("apply schema v%d: %v", version+1, err)
+			}
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO app_settings (id, created_at, updated_at) VALUES (1, 'now', 'now');
+		INSERT INTO routing_traces (
+			created_at, profile_slug, protocol, path, strategy_name, route_id,
+			task_type, risk, classification_source, initial_model, final_model,
+			vision_mode, status_code, client_committed, answer_attempts,
+			auxiliary_calls, total_outbound_calls, model_switches, target_switches,
+			planned_worst_case_cost_micro_usd, reserved_cost_micro_usd, elapsed_ms
+		) VALUES (
+			'now', 'legacy', 'anthropic', '/v1/messages', 'legacy', 'route',
+			'chat', 'low', 'rule', 'fast', 'fast', 'none', 200, 1, 1,
+			0, 1, 0, 0, 10, 10, 5
+		);
+		PRAGMA user_version = 5;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	var initialTarget, finalTarget string
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT initial_target, final_target FROM routing_traces`).Scan(&initialTarget, &finalTarget); err != nil {
+		t.Fatal(err)
+	}
+	if version != 6 || initialTarget != "primary" || finalTarget != "primary" {
+		t.Fatalf("version=%d initial_target=%q final_target=%q", version, initialTarget, finalTarget)
 	}
 }

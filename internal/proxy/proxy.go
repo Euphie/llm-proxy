@@ -90,7 +90,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	responseState := &responseStateWriter{ResponseWriter: w}
 	w = responseState
 	label := h.cfg.Slug
-	target := targetURL(h.cfg.Upstream, r.RequestURI)
+	requestURI := r.RequestURI
+	target := targetURL(h.cfg.Upstream, requestURI)
+	currentTargetID := profile.PrimaryTargetID
 	start := time.Now()
 
 	slog.Info("->", "method", r.Method, "path", r.URL.Path)
@@ -111,6 +113,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var routeRequest routing.Request
 	var modelAttempts []routing.ModelAttemptPlan
 	var currentAttempt routing.ModelAttemptPlan
+	var currentTargets []routing.TargetPlan
+	currentTargetIndex := 0
 	modelAttemptIndex := 0
 	isAuto := false
 	autoStream := false
@@ -187,7 +191,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		currentAttempt = modelAttempts[0]
+		currentTargets = currentAttempt.Targets()
+		if len(currentTargets) == 0 {
+			writeRoutingError(w, routing.ErrNoCapableModel)
+			return
+		}
+		currentTargetID = currentTargets[0].ID()
+		target = targetURL(currentTargets[0].Upstream(), requestURI)
 		initialModel := currentAttempt.Model()
+		initialTargetID := currentTargetID
 		defer func() {
 			if h.stats == nil {
 				return
@@ -200,6 +212,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				TaskType: classification.TaskType, Risk: string(classification.Risk),
 				ClassificationSource: string(classification.Source),
 				InitialModel:         initialModel, FinalModel: currentAttempt.Model(),
+				InitialTarget: initialTargetID, FinalTarget: currentTargetID,
 				VisionMode:                   string(currentAttempt.VisionMode()),
 				StatusCode:                   responseState.statusCode,
 				ClientCommitted:              responseState.committed,
@@ -218,6 +231,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"strategy", plan.Strategy(),
 			"route", plan.Route(),
 			"model", plan.Model(),
+			"target", currentTargetID,
 			"vision_mode", plan.VisionMode(),
 			"planned_model_attempts", len(modelAttempts),
 			"classification_source", classification.Source,
@@ -274,11 +288,48 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	answerAttempts := 1
+	switchTarget := func() (bool, error) {
+		if !isAuto || currentTargetIndex+1 >= len(currentTargets) {
+			return false, nil
+		}
+		next := currentTargets[currentTargetIndex+1]
+		if err := budget.CanReserveTargetSwitchCall(
+			requestCtx,
+			currentAttempt.AnswerCallCostMicroUSD(),
+		); err != nil {
+			return false, nil
+		}
+		if err := budget.ReserveTargetSwitchCall(
+			requestCtx,
+			currentAttempt.AnswerCallCostMicroUSD(),
+		); err != nil {
+			return false, err
+		}
+		previous := currentTargetID
+		currentTargetIndex++
+		answerAttempts++
+		currentTargetID = next.ID()
+		target = targetURL(next.Upstream(), requestURI)
+		slog.Info("routing.target.switched",
+			"profile", label,
+			"strategy", plan.Strategy(),
+			"route", plan.Route(),
+			"model", currentAttempt.Model(),
+			"from_target", previous,
+			"to_target", currentTargetID)
+		return true, nil
+	}
 	switchModel := func() (bool, error) {
 		if !isAuto || modelAttemptIndex+1 >= len(modelAttempts) {
 			return false, nil
 		}
 		next := modelAttempts[modelAttemptIndex+1]
+		nextTargets := next.Targets()
+		if len(nextTargets) == 0 {
+			return false, nil
+		}
+		nextTarget := nextTargets[0]
+		nextTargetURL := targetURL(nextTarget.Upstream(), requestURI)
 		if err := budget.CanReserveModelSwitchCall(
 			requestCtx,
 			next.AnswerCallCostMicroUSD(),
@@ -288,7 +339,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		nextBody, err := h.prepareAutoAttempt(
 			requestCtx,
 			r.Header,
-			target,
+			nextTargetURL,
 			routeRequest,
 			next,
 			budget,
@@ -306,6 +357,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		modelAttemptIndex++
 		answerAttempts++
 		currentAttempt = next
+		currentTargets = nextTargets
+		currentTargetIndex = 0
+		currentTargetID = nextTarget.ID()
+		target = nextTargetURL
 		body = nextBody
 		slog.Info("routing.model.switched",
 			"profile", label,
@@ -313,8 +368,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"route", plan.Route(),
 			"from_model", previous,
 			"to_model", currentAttempt.Model(),
+			"target", currentTargetID,
 			"vision_mode", currentAttempt.VisionMode())
 		return true, nil
+	}
+	switchAfterFailure := func() (bool, error) {
+		if switched, err := switchTarget(); switched || err != nil {
+			return switched, err
+		}
+		return switchModel()
 	}
 
 	var rule *provider.Rule
@@ -329,7 +391,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				rule = &h.cfg.OverloadRules[0]
 			}
 			if rule != nil && retries < rule.MaxRetries &&
-				h.reserveRetry(requestCtx, budget, target, currentAttempt.AnswerCallCostMicroUSD()) {
+				h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
 				retries++
 				answerAttempts++
 				if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
@@ -337,7 +399,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			switched, switchErr := switchModel()
+			switched, switchErr := switchAfterFailure()
 			if switchErr != nil {
 				writeAutoPreparationError(w, requestCtx, switchErr)
 				return
@@ -348,7 +410,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			slog.Error("upstream request failed",
-				"profile", label, "model", currentAttempt.Model(), "err", err)
+				"profile", label, "model", currentAttempt.Model(),
+				"target", currentTargetID, "err", err)
 			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -374,7 +437,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						rule = &h.cfg.OverloadRules[0]
 					}
 					if rule != nil && retries < rule.MaxRetries &&
-						h.reserveRetry(requestCtx, budget, target, currentAttempt.AnswerCallCostMicroUSD()) {
+						h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
 						retries++
 						answerAttempts++
 						if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
@@ -382,7 +445,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						}
 						continue
 					}
-					switched, switchErr := switchModel()
+					switched, switchErr := switchAfterFailure()
 					if switchErr != nil {
 						writeAutoPreparationError(w, requestCtx, switchErr)
 						return
@@ -416,7 +479,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if isAuto {
 				h.submitEvaluation(
-					r.Header, target, routeRequest, classification, plan,
+					r.Header, requestURI, routeRequest, classification, plan,
 					currentAttempt, captured, time.Since(start),
 				)
 			}
@@ -432,7 +495,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				rule = matched
 			}
 			if retries < rule.MaxRetries &&
-				h.reserveRetry(requestCtx, budget, target, currentAttempt.AnswerCallCostMicroUSD()) {
+				h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
 				retries++
 				answerAttempts++
 				if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
@@ -440,7 +503,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			switched, switchErr := switchModel()
+			switched, switchErr := switchAfterFailure()
 			if switchErr != nil {
 				writeAutoPreparationError(w, requestCtx, switchErr)
 				return
@@ -495,7 +558,7 @@ const maxEvaluationContentBytes = 1 << 20
 
 func (h *handler) submitEvaluation(
 	headers http.Header,
-	target string,
+	requestURI string,
 	request routing.Request,
 	classification routing.Classification,
 	plan routing.ExecutionPlan,
@@ -562,6 +625,11 @@ func (h *handler) submitEvaluation(
 		if !found {
 			return evaluation.ModelOutput{}, evaluation.ErrInvalidComparison
 		}
+		targets := attempt.Targets()
+		if len(targets) == 0 {
+			return evaluation.ModelOutput{}, evaluation.ErrInvalidComparison
+		}
+		attemptTarget := targetURL(targets[0].Upstream(), requestURI)
 		started := time.Now()
 		plannedCost := evaluationAttemptCost(attempt, request.Facts.ImageCount)
 		failedOutput := func() evaluation.ModelOutput {
@@ -570,11 +638,11 @@ func (h *handler) submitEvaluation(
 				LatencyMS:    time.Since(started).Milliseconds(),
 			}
 		}
-		body, err := h.prepareEvaluationAttempt(ctx, forwardedHeaders, target, request, attempt)
+		body, err := h.prepareEvaluationAttempt(ctx, forwardedHeaders, attemptTarget, request, attempt)
 		if err != nil {
 			return failedOutput(), err
 		}
-		response, err := h.do(ctx, http.MethodPost, target, forwardedHeaders, body)
+		response, err := h.do(ctx, http.MethodPost, attemptTarget, forwardedHeaders, body)
 		if err != nil {
 			return failedOutput(), err
 		}
@@ -589,12 +657,17 @@ func (h *handler) submitEvaluation(
 		}
 		return output, nil
 	}
+	reviewerTargets := h.cfg.RoutingTargets(config.ReviewerModel)
+	if len(reviewerTargets) == 0 {
+		return
+	}
+	reviewerTarget := targetURL(reviewerTargets[0].Upstream, requestURI)
 	comparison.Review = func(ctx context.Context, input evaluation.ReviewInput) (evaluation.ReviewVerdict, error) {
 		body, err := evaluation.BuildReviewRequest(request.Operation, config.ReviewerModel, input)
 		if err != nil {
 			return evaluation.ReviewVerdict{}, err
 		}
-		response, err := h.do(ctx, http.MethodPost, target, forwardedHeaders, body)
+		response, err := h.do(ctx, http.MethodPost, reviewerTarget, forwardedHeaders, body)
 		if err != nil {
 			return evaluation.ReviewVerdict{ReviewerCostMicroUSD: reviewerCost}, err
 		}

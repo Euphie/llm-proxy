@@ -113,7 +113,8 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		ProfileID: 9, ProfileSlug: "coding", Protocol: "anthropic",
 		Path: "/v1/messages", Strategy: "20260802-001", Route: "balanced",
 		TaskType: "simple", Risk: "normal", ClassificationSource: "rule",
-		InitialModel: "fast", FinalModel: "strong", VisionMode: "native",
+		InitialModel: "fast", FinalModel: "strong",
+		InitialTarget: "primary", FinalTarget: "region_b", VisionMode: "native",
 		StatusCode: 200, ClientCommitted: true, AnswerAttempts: 2,
 		AuxiliaryCalls: 1, TotalOutboundCalls: 3, ModelSwitches: 1,
 		TargetSwitches: 0, PlannedWorstCaseCostMicroUSD: 30126,
@@ -126,6 +127,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 	err = db.QueryRow(`
 		SELECT profile_id, profile_slug, protocol, path, strategy_name, route_id,
 		       task_type, risk, classification_source, initial_model, final_model,
+		       initial_target, final_target,
 		       vision_mode, status_code, client_committed, answer_attempts,
 		       auxiliary_calls, total_outbound_calls, model_switches,
 		       target_switches, planned_worst_case_cost_micro_usd,
@@ -135,6 +137,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		&got.ProfileID, &got.ProfileSlug, &got.Protocol, &got.Path,
 		&got.Strategy, &got.Route, &got.TaskType, &got.Risk,
 		&got.ClassificationSource, &got.InitialModel, &got.FinalModel,
+		&got.InitialTarget, &got.FinalTarget,
 		&got.VisionMode, &got.StatusCode, &committed, &got.AnswerAttempts,
 		&got.AuxiliaryCalls, &got.TotalOutboundCalls, &got.ModelSwitches,
 		&got.TargetSwitches, &got.PlannedWorstCaseCostMicroUSD,
@@ -146,6 +149,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 	got.ClientCommitted = committed == 1
 	if got.ProfileID != 9 || got.Strategy != "20260802-001" ||
 		got.InitialModel != "fast" || got.FinalModel != "strong" ||
+		got.InitialTarget != "primary" || got.FinalTarget != "region_b" ||
 		!got.ClientCommitted || got.TotalOutboundCalls != 3 ||
 		got.PlannedWorstCaseCostMicroUSD != 30126 ||
 		got.ReservedCostMicroUSD != 15500 || got.ElapsedMilliseconds != 42 {
@@ -161,6 +165,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ID <= 0 || rows[0].ProfileSlug != "coding" ||
 		rows[0].Strategy != "20260802-001" || rows[0].FinalModel != "strong" ||
+		rows[0].InitialTarget != "primary" || rows[0].FinalTarget != "region_b" ||
 		rows[0].ReservedCostMicroUSD != 15500 {
 		t.Fatalf("queried traces=%+v", rows)
 	}

@@ -11,15 +11,15 @@
 
 {{SOURCE_FACTS}}
 
-固定源码快照覆盖 Phase 1 执行面与 Session 连续性；当前分支在此基础上还实现了独立策略生命周期
-和异步对比学习。多 Target 仍未实现。
+固定源码快照覆盖 Phase 1 执行面与 Session 连续性；当前分支在此基础上还实现了独立策略生命周期、
+异步对比学习和有序多 Target 容错。
 
 ## 从现状到目标
 
 | Phase 1 当前状态 | 后续目标 |
 | --- | --- |
-| Profile-local Auto 配置、候选校验、HMAC Session 绑定和异步评测 | 为后续多 Target 延续同一隔离合同 |
-| Profile Upstream + 模型 ID 作为隐式单 Target | 增加同 Profile、同供应商的 Target 池和健康调度 |
+| Profile-local Auto 配置、候选校验、HMAC Session 绑定和异步评测 | 多 Target 继续遵守同一隔离合同 |
+| Upstream primary + 有序备用 Target | 后续增加被动健康窗口和容量调度 |
 | 统一 AttemptBudget、ClientCommit、Session 升级不降级与独立策略发布 | 增加自动可靠性回滚 |
 | 管理员填写 Route 质量事实并按完整费用选型 | 已能从异步质量证据生成候选草稿 |
 | 结构化路由轨迹、费用估算与配置 A/B/C/D 展示 | 已展示学习样本的保守质量区间 |

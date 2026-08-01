@@ -98,6 +98,7 @@ export function defaultProfileDraft(protocol = "anthropic") {
       version: 1,
       protocol,
       upstream: "",
+      targets: [],
       models: [],
       auto_routing: newDefaultAutoRouting(),
       vision: {
@@ -114,6 +115,7 @@ export function profilePayload(draft) {
   const protocol = String(draft.protocol ?? config.protocol ?? "anthropic");
   const vision = draft.vision || config.vision || {};
   const models = draft.models || config.models || [];
+  const targets = draft.targets || config.targets || [];
   const autoRouting = draft.auto_routing || config.auto_routing ||
     newDefaultAutoRouting();
   const rules = draft.overload_rules || config.overload_rules || [];
@@ -133,6 +135,7 @@ export function profilePayload(draft) {
       version: Number(draft.version ?? config.version ?? 1),
       protocol,
       upstream: String(draft.upstream ?? config.upstream ?? ""),
+      ...(targets.length > 0 ? { targets: targetsPayload(targets) } : {}),
       models: modelCapabilitiesPayload(models),
       auto_routing: autoRoutingPayload(autoRouting),
       vision: {
@@ -178,6 +181,29 @@ export function removeModelCapability(models, index) {
   return models.filter((_, current) => current !== index);
 }
 
+export function addTarget(targets) {
+  return [...targets, { id: "", upstream: "", models: [] }];
+}
+
+export function removeTarget(targets, index) {
+  return targets.filter((_, current) => current !== index);
+}
+
+export function moveTarget(targets, index, offset) {
+  const destination = index + offset;
+  if (
+    index < 0 ||
+    index >= targets.length ||
+    destination < 0 ||
+    destination >= targets.length
+  ) {
+    return [...targets];
+  }
+  const moved = [...targets];
+  [moved[index], moved[destination]] = [moved[destination], moved[index]];
+  return moved;
+}
+
 export function addRetryRule(rules) {
   return [...rules, { ...defaultRule }];
 }
@@ -219,6 +245,11 @@ export function profileDraft(profile, defaultProfileID = 0) {
         profile?.config?.protocol ?? draft.config.protocol,
       ),
       upstream: String(profile?.config?.upstream ?? ""),
+      targets: (profile?.config?.targets || []).map((target) => ({
+        id: String(target?.id ?? ""),
+        upstream: String(target?.upstream ?? ""),
+        models: (target?.models || []).map((model) => String(model)),
+      })),
       models: (profile?.config?.models || []).map((model) => ({
         ...model,
         id: String(model?.id ?? ""),
@@ -517,6 +548,96 @@ export function renderProfileEditor(root, source, actions = {}) {
       !working.original_slug || slug.value === working.original_slug;
   });
   basic.append(basicGrid, slugWarning);
+
+  const targets = editorSection("Target 容错");
+  const targetHelp = textElement(
+    "p",
+    "Upstream 是主 Target。备用 Target 仅供 model=auto 在可重试故障时按顺序切换；只填写同一供应商、可复用当前请求凭据的端点。",
+  );
+  targetHelp.className = "muted";
+  const targetList = element("div", "stack target-list");
+  let targetRows = [];
+
+  function syncTargets() {
+    working.config.targets = targetRows.map((row) => ({
+      id: row.id.value,
+      upstream: row.upstream.value,
+      models: row.models.value
+        .split(",")
+        .map((model) => model.trim())
+        .filter(Boolean),
+    }));
+  }
+
+  function renderTargets() {
+    targetRows = [];
+    const rows = working.config.targets.map((target, index) => {
+      const row = element("fieldset", "card target-row");
+      const legend = textElement("legend", `备用 Target ${index + 1}`);
+      const fields = element("div", "form-grid");
+      const id = fieldInput(fields, "Target ID", `target-${index}-id`, target.id, {
+        required: true,
+        description: "小写安全标识，例如 region_b；primary 保留给主 Upstream。",
+      });
+      const targetUpstream = fieldInput(
+        fields,
+        "Target Upstream",
+        `target-${index}-upstream`,
+        target.upstream,
+        {
+          required: true,
+          type: "url",
+          description: "备用基础地址，不含密钥和具体接口路径。",
+        },
+      );
+      const targetModels = fieldInput(
+        fields,
+        "可用模型",
+        `target-${index}-models`,
+        (target.models || []).join(", "),
+        {
+          required: true,
+          description: "填写模型能力中已录入的精确 ID，多个模型用英文逗号分隔。",
+        },
+      );
+      targetRows.push({ id, upstream: targetUpstream, models: targetModels });
+
+      const controls = element("div", "cluster target-actions");
+      const up = actionButton("上移 Target", "button-secondary");
+      const down = actionButton("下移 Target", "button-secondary");
+      const remove = actionButton("删除 Target", "button-danger");
+      up.disabled = index === 0;
+      down.disabled = index === working.config.targets.length - 1;
+      up.addEventListener("click", () => {
+        syncTargets();
+        working.config.targets = moveTarget(working.config.targets, index, -1);
+        renderTargets();
+      });
+      down.addEventListener("click", () => {
+        syncTargets();
+        working.config.targets = moveTarget(working.config.targets, index, 1);
+        renderTargets();
+      });
+      remove.addEventListener("click", () => {
+        syncTargets();
+        working.config.targets = removeTarget(working.config.targets, index);
+        renderTargets();
+      });
+      controls.append(up, down, remove);
+      row.append(legend, fields, controls);
+      return row;
+    });
+    targetList.replaceChildren(...rows);
+  }
+
+  renderTargets();
+  const addTargetButton = actionButton("添加备用 Target", "button-secondary");
+  addTargetButton.addEventListener("click", () => {
+    syncTargets();
+    working.config.targets = addTarget(working.config.targets);
+    renderTargets();
+  });
+  targets.append(targetHelp, targetList, addTargetButton);
 
   const models = editorSection("模型能力");
   const modelHelp = textElement(
@@ -1378,7 +1499,7 @@ export function renderProfileEditor(root, source, actions = {}) {
       type: "number", min: "0", description: "同一部署发生可重试错误时允许追加的次数。",
     }),
     max_target_switches: fieldInput(budgetGrid, "Target 切换上限", "auto-budget-target-switches", budget.max_target_switches, {
-      type: "number", min: "0", description: "第一阶段通常填 0；后续同模型多部署时使用。",
+      type: "number", min: "0", description: "同一模型在备用 Target 间最多切换几次；0 表示不切换。",
     }),
     max_model_switches: fieldInput(budgetGrid, "模型切换上限", "auto-budget-model-switches", budget.max_model_switches, {
       type: "number", min: "0", description: "回答尚未提交给客户端前，最多允许切换多少次主模型。",
@@ -1992,6 +2113,7 @@ export function renderProfileEditor(root, source, actions = {}) {
 
   function syncForm() {
     syncModelCapabilities();
+    syncTargets();
     syncRetryRules();
     working.display_name = displayName.value;
     working.slug = slug.value;
@@ -2114,8 +2236,41 @@ export function renderProfileEditor(root, source, actions = {}) {
     }
   });
 
-  form.append(basic, models, autoRouting, vision, retries, generator, alert, footer);
+  form.append(basic, targets, models, autoRouting, vision, retries, generator, alert, footer);
   root.replaceChildren(form);
+}
+
+function targetsPayload(targets) {
+  const ids = new Set();
+  const upstreams = new Set();
+  return targets.map((target, index) => {
+    const label = `备用 Target ${index + 1}`;
+    const id = String(target?.id ?? "");
+    const upstream = String(target?.upstream ?? "");
+    if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(id) || id === "primary") {
+      throw new Error(`${label}：ID 必须是小写字母或数字开头的安全标识，且不能使用 primary。`);
+    }
+    if (ids.has(id)) {
+      throw new Error(`备用 Target ID 不能重复：${id}`);
+    }
+    if (upstream.trim() === "" || upstream.trim() !== upstream) {
+      throw new Error(`${label}：Upstream 不能为空或包含前后空格。`);
+    }
+    const normalizedUpstream = upstream.replace(/\/+$/, "");
+    if (upstreams.has(normalizedUpstream)) {
+      throw new Error(`备用 Target Upstream 不能重复：${normalizedUpstream}`);
+    }
+    const models = (target?.models || []).map((model) => String(model));
+    if (models.length === 0 || models.some((model) => model === "" || model.trim() !== model)) {
+      throw new Error(`${label}：至少填写一个精确模型 ID。`);
+    }
+    if (new Set(models).size !== models.length) {
+      throw new Error(`${label}：模型 ID 不能重复。`);
+    }
+    ids.add(id);
+    upstreams.add(normalizedUpstream);
+    return { id, upstream, models };
+  });
 }
 
 function modelCapabilitiesPayload(models) {

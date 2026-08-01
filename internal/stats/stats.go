@@ -46,6 +46,8 @@ type RoutingTrace struct {
 	ClassificationSource         string
 	InitialModel                 string
 	FinalModel                   string
+	InitialTarget                string
+	FinalTarget                  string
 	VisionMode                   string
 	StatusCode                   int
 	ClientCommitted              bool
@@ -125,14 +127,15 @@ func (s *DB) RecordRoutingTraceAsync(trace RoutingTrace) {
 			`INSERT INTO routing_traces (
 				created_at, profile_id, profile_slug, protocol, path,
 				strategy_name, route_id, task_type, risk, classification_source,
-				initial_model, final_model, vision_mode, status_code,
+				initial_model, final_model, initial_target, final_target,
+				vision_mode, status_code,
 				client_committed, answer_attempts, auxiliary_calls,
 				total_outbound_calls, model_switches, target_switches,
 				planned_worst_case_cost_micro_usd, reserved_cost_micro_usd,
 				elapsed_ms
 			) VALUES (
 				?, (SELECT id FROM profiles WHERE id = ?), ?, ?, ?,
-				?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+				?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 			)`,
 			time.Now().UTC().Format(usageTimeFormat),
 			trace.ProfileID,
@@ -146,6 +149,8 @@ func (s *DB) RecordRoutingTraceAsync(trace RoutingTrace) {
 			trace.ClassificationSource,
 			trace.InitialModel,
 			trace.FinalModel,
+			trace.InitialTarget,
+			trace.FinalTarget,
 			trace.VisionMode,
 			trace.StatusCode,
 			boolInt(trace.ClientCommitted),

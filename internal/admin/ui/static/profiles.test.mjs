@@ -7,12 +7,15 @@ import { MODELS_DEV_SOURCE } from "./model-catalog.js";
 import {
   addModelCapability,
   addRetryRule,
+  addTarget,
   defaultProfileDraft,
   moveRetryRule,
+  moveTarget,
   profileDraft,
   profilePayload,
   removeModelCapability,
   removeRetryRule,
+  removeTarget,
   renderProfileEditor,
   renderProfileList,
 } from "./profiles.js";
@@ -108,6 +111,33 @@ test("model capability helpers append an explicit row and remove without sorting
     },
   ]);
   assert.deepEqual(removeModelCapability([first, second], 0), [second]);
+});
+
+test("Target helpers and payload preserve explicit failover order", () => {
+  const first = {
+    id: "region_b",
+    upstream: "https://region-b.example/v1",
+    models: ["fast", "strong"],
+  };
+  const second = {
+    id: "strong_backup",
+    upstream: "https://strong.example/v1",
+    models: ["strong"],
+  };
+  const added = addTarget([first, second]);
+  assert.deepEqual(added.slice(0, 2), [first, second]);
+  assert.deepEqual(added[2], { id: "", upstream: "", models: [] });
+  assert.deepEqual(removeTarget([first, second], 0), [second]);
+  assert.deepEqual(moveTarget([first, second], 1, -1), [second, first]);
+
+  const draft = defaultProfileDraft();
+  draft.config.targets = [first, second];
+  const payload = profilePayload(draft);
+  assert.deepEqual(payload.config.targets, [first, second]);
+  assert.deepEqual(profileDraft({
+    enabled: true,
+    config: { ...draft.config, targets: [first, second] },
+  }).config.targets, [first, second]);
 });
 
 test("payload preserves optional routing capabilities and integer micro-USD prices", () => {
@@ -689,6 +719,7 @@ test("editor renders exact accessible labels and sections and submits every conf
 
   assert.deepEqual(sectionHeadings(root), [
     "基础配置",
+    "Target 容错",
     "模型能力",
     "智能路由",
     "视觉增强",
@@ -779,6 +810,41 @@ test("editor renders exact accessible labels and sections and submits every conf
 
   await buttonByText(root, "生成配置").dispatch("click");
   assert.deepEqual(generated, ["primary-renamed"]);
+});
+
+test("Target editor preserves visible failover order and exact model IDs", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [
+    { id: "fast", supports_vision: false },
+    { id: "strong", supports_vision: true },
+  ];
+  draft.config.targets = [
+    { id: "region_b", upstream: "https://b.example", models: ["fast", "strong"] },
+    { id: "region_c", upstream: "https://c.example", models: ["strong"] },
+  ];
+  let saved;
+  renderProfileEditor(root, draft, {
+    save: async (payload) => { saved = payload; },
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  assert.match(findText(root, "Upstream 是主 Target").textContent, /仅供 model=auto/);
+  assert.equal(controlByName(root, "target-0-id").value, "region_b");
+  assert.equal(controlByName(root, "target-0-models").value, "fast, strong");
+  assert.match(fieldDescription(root, controlByName(root, "target-0-models")), /精确 ID/);
+
+  await buttonsByText(root, "上移 Target")[1].dispatch("click");
+  assert.equal(controlByName(root, "target-0-id").value, "region_c");
+  await buttonsByText(root, "下移 Target")[0].dispatch("click");
+  assert.equal(controlByName(root, "target-0-id").value, "region_b");
+  await buttonByText(root, "添加备用 Target").dispatch("click");
+  assert.equal(controls(root).filter((control) => /^target-\d+-id$/.test(control.name)).length, 3);
+  await buttonsByText(root, "删除 Target")[2].dispatch("click");
+
+  await findTag(root, "FORM").dispatch("submit");
+  assert.deepEqual(saved.config.targets, draft.config.targets);
 });
 
 test("model editor rows add and remove in Profile order with explicit token and vision controls", async (t) => {

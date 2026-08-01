@@ -51,6 +51,7 @@ const (
 
 type Planner struct {
 	models   profile.ModelCatalog
+	targets  map[string][]TargetPlan
 	vision   profile.VisionRuntime
 	auto     profile.AutoRoutingRuntime
 	strategy profile.RoutingStrategyRuntime
@@ -87,6 +88,7 @@ type ExecutionPlanSnapshot struct {
 
 type ModelAttemptPlan struct {
 	model                  string
+	targets                []TargetPlan
 	visionMode             VisionMode
 	qualityScoreBPS        int
 	answerCallCostMicroUSD int64
@@ -95,6 +97,7 @@ type ModelAttemptPlan struct {
 
 type ModelAttemptSnapshot struct {
 	Model                  string
+	TargetIDs              []string
 	VisionMode             VisionMode
 	QualityScoreBPS        int
 	AnswerCallCostMicroUSD int64
@@ -111,12 +114,18 @@ type EvaluationPairSnapshot struct {
 	Reference ModelAttemptSnapshot
 }
 
+type TargetPlan struct {
+	id       string
+	upstream string
+}
+
 func NewPlanner(runtime profile.Runtime) (*Planner, error) {
 	if !runtime.AutoRouting.Enabled {
 		return nil, ErrRoutingDisabled
 	}
 	return &Planner{
 		models:   cloneModels(runtime.Models),
+		targets:  buildTargetPlans(runtime),
 		vision:   runtime.Vision,
 		auto:     cloneAutoRouting(runtime.AutoRouting),
 		strategy: cloneStrategy(runtime.AutoRouting.Strategy),
@@ -383,6 +392,7 @@ func (p *Planner) canAddAttempt(attempts []candidatePlan, candidate candidatePla
 func modelAttemptPlan(candidate candidatePlan) ModelAttemptPlan {
 	return ModelAttemptPlan{
 		model:                  candidate.model,
+		targets:                cloneTargetPlans(candidate.targets),
 		visionMode:             candidate.visionMode,
 		qualityScoreBPS:        candidate.qualityScoreBPS,
 		answerCallCostMicroUSD: candidate.answerCallCost,
@@ -392,6 +402,7 @@ func modelAttemptPlan(candidate candidatePlan) ModelAttemptPlan {
 
 type candidatePlan struct {
 	model           string
+	targets         []TargetPlan
 	visionMode      VisionMode
 	qualityScoreBPS int
 	estimatedCost   int64
@@ -408,6 +419,10 @@ func (p *Planner) evaluateCandidate(
 	model, ok := p.models[modelID]
 	if !ok || !model.HasContextWindow || !model.HasMaxOutputTokens ||
 		!model.HasInputPrice || !model.HasOutputPrice {
+		return candidatePlan{}, false
+	}
+	targets := p.targets[modelID]
+	if len(targets) == 0 {
 		return candidatePlan{}, false
 	}
 	outputTokens := request.Facts.RequestedOutputTokens
@@ -467,7 +482,7 @@ func (p *Planner) evaluateCandidate(
 		return candidatePlan{}, false
 	}
 	return candidatePlan{
-		model: modelID, visionMode: visionMode,
+		model: modelID, targets: cloneTargetPlans(targets), visionMode: visionMode,
 		estimatedCost: estimated, worstCaseCost: worst,
 		answerCallCost: answerCost, visionCallCost: visionCallCost,
 	}, true
@@ -550,6 +565,22 @@ func cloneModels(models profile.ModelCatalog) profile.ModelCatalog {
 	return cloned
 }
 
+func buildTargetPlans(runtime profile.Runtime) map[string][]TargetPlan {
+	targets := make(map[string][]TargetPlan, len(runtime.Models))
+	for model := range runtime.Models {
+		for _, target := range runtime.RoutingTargets(model) {
+			targets[model] = append(targets[model], TargetPlan{
+				id: target.ID, upstream: target.Upstream,
+			})
+		}
+	}
+	return targets
+}
+
+func cloneTargetPlans(targets []TargetPlan) []TargetPlan {
+	return append([]TargetPlan(nil), targets...)
+}
+
 func cloneAutoRouting(auto profile.AutoRoutingRuntime) profile.AutoRoutingRuntime {
 	auto.Participants = append([]string(nil), auto.Participants...)
 	auto.Strategy = cloneStrategy(auto.Strategy)
@@ -583,24 +614,37 @@ func (p ExecutionPlan) Budget() profile.AttemptBudgetRuntime { return p.budget }
 func (p ExecutionPlan) Reason() string                       { return p.reason }
 
 func (p ExecutionPlan) ModelAttempts() []ModelAttemptPlan {
-	return append([]ModelAttemptPlan(nil), p.modelAttempts...)
+	attempts := append([]ModelAttemptPlan(nil), p.modelAttempts...)
+	for index := range attempts {
+		attempts[index].targets = cloneTargetPlans(attempts[index].targets)
+	}
+	return attempts
 }
 
 func (p ModelAttemptPlan) Model() string                 { return p.model }
+func (p ModelAttemptPlan) Targets() []TargetPlan         { return cloneTargetPlans(p.targets) }
 func (p ModelAttemptPlan) VisionMode() VisionMode        { return p.visionMode }
 func (p ModelAttemptPlan) QualityScoreBPS() int          { return p.qualityScoreBPS }
 func (p ModelAttemptPlan) AnswerCallCostMicroUSD() int64 { return p.answerCallCostMicroUSD }
 func (p ModelAttemptPlan) VisionCallCostMicroUSD() int64 { return p.visionCallCostMicroUSD }
 
 func (p ModelAttemptPlan) Snapshot() ModelAttemptSnapshot {
+	targetIDs := make([]string, 0, len(p.targets))
+	for _, target := range p.targets {
+		targetIDs = append(targetIDs, target.id)
+	}
 	return ModelAttemptSnapshot{
 		Model:                  p.model,
+		TargetIDs:              targetIDs,
 		VisionMode:             p.visionMode,
 		QualityScoreBPS:        p.qualityScoreBPS,
 		AnswerCallCostMicroUSD: p.answerCallCostMicroUSD,
 		VisionCallCostMicroUSD: p.visionCallCostMicroUSD,
 	}
 }
+
+func (p TargetPlan) ID() string       { return p.id }
+func (p TargetPlan) Upstream() string { return p.upstream }
 
 func (p EvaluationPair) Snapshot() EvaluationPairSnapshot {
 	return EvaluationPairSnapshot{

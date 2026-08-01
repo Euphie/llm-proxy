@@ -22,7 +22,7 @@ const canonicalChapters = [
   ["profile-isolation", "Profile 隔离边界", "URL 选定 Profile 后，路由、视觉、重试和评测始终留在该边界内。", "运行时", "shield", "red", "本版目标", "本项目源码验证"],
   ["online-routing", "在线路由", "规则先判断，拿不准时调用轻量任务分析器，再生成不可变执行计划。", "运行时", "route", "green", "本版目标", "竞品源码验证"],
   ["quality-and-cost", "质量与成本", "先满足 Route 质量门槛，再选择完整成本更低的模型。", "运行时", "scale", "yellow", "本版目标", "竞品源码验证"],
-  ["target-reliability", "Target 与容错", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。", "运行时", "activity", "teal", "本版目标", "竞品源码验证"],
+  ["target-reliability", "Target 与容错", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。", "运行时", "activity", "teal", "已实现", "本项目源码与测试验证"],
   ["runtime-reliability", "视觉、重试与 Session", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。", "运行时", "shield", "slate", "本版目标", "竞品源码验证"],
   ["evaluation-feedback", "异步评测与策略优化", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。", "控制面", "activity", "orange", "已实现", "本项目源码与测试验证"],
   ["strategy-lifecycle", "策略生命周期", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。", "控制面", "git-branch", "indigo", "已实现", "本项目源码与测试验证"],
@@ -287,7 +287,7 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(core, /新增模型默认不加入/);
   assert.match(core, /一个 Profile 同时只有一个 active Strategy[\s\S]*多个 Route[\s\S]*默认 Route[\s\S]*统一 Request\/AttemptBudget[\s\S]*Route 映射前创建/);
   assert.match(core, /context_window[\s\S]*client_context_window/);
-  assert.match(core, /v1 每个逻辑模型只配置一个 Target/);
+  assert.match(core, /Upstream 是支持全部目录模型的 primary[\s\S]*备用 Target/);
   assert.match(core, /未登记或未确认的能力不满足对应硬约束[\s\S]*缺少计算完整成本所需的价格字段[\s\S]*不能发布[\s\S]*价格为零是有效值/);
   assert.match(isolation, /Profile 是永久路由边界[\s\S]*不能到另一个 Profile 寻找候选/);
   assert.match(isolation, /逻辑隔离合同[\s\S]*共享无状态代码和 SQLite 是允许的/);
@@ -302,7 +302,7 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(quality, /带时间衰减的保守估计[\s\S]*样本权重更高/);
   assert.match(quality, /证据不足时使用保守先验[\s\S]*置信下界[\s\S]*强模型基线[\s\S]*否则请求失败/);
   assert.match(quality, /A\/B\/C\/D 等级[\s\S]*只用于展示/);
-  assert.match(target, /v1 每个模型先使用一个 Target/);
+  assert.match(target, /Upstream 是 primary[\s\S]*按配置顺序切换同模型备用 Target/);
   assert.match(runtime, /主模型支持视觉[\s\S]*主模型不支持视觉且当前 Profile 已开启增强[\s\S]*该模型从候选中排除/);
   for (const field of [
     "max_answer_attempts", "max_auxiliary_calls", "max_total_outbound_calls", "max_retries_per_target",

@@ -106,6 +106,44 @@ func TestPlannerFreezesPrimaryAndStrongFallbackAttempts(t *testing.T) {
 	}
 }
 
+func TestPlannerFreezesOrderedTargetsForEveryModelAttempt(t *testing.T) {
+	config := routingConfig(false)
+	config.Targets = []profile.TargetConfig{
+		{ID: "region_b", Upstream: "https://region-b.example", Models: []string{"fast", "strong"}},
+		{ID: "strong_backup", Upstream: "https://strong.example", Models: []string{"strong"}},
+	}
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`)
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := plan.ModelAttempts()
+	if len(attempts) != 2 {
+		t.Fatalf("attempts=%+v", plan.Snapshot())
+	}
+	fastTargets := attempts[0].Targets()
+	strongTargets := attempts[1].Targets()
+	if len(fastTargets) != 2 || fastTargets[0].ID() != profile.PrimaryTargetID ||
+		fastTargets[1].ID() != "region_b" || len(strongTargets) != 3 ||
+		strongTargets[1].ID() != "region_b" || strongTargets[2].ID() != "strong_backup" {
+		t.Fatalf("fast=%+v strong=%+v", fastTargets, strongTargets)
+	}
+	fastTargets[0] = TargetPlan{}
+	if got := plan.ModelAttempts()[0].Targets()[0].ID(); got != profile.PrimaryTargetID {
+		t.Fatalf("plan followed caller mutation: %q", got)
+	}
+	snapshot := plan.Snapshot()
+	if len(snapshot.ModelAttempts[0].TargetIDs) != 2 || snapshot.ModelAttempts[0].TargetIDs[1] != "region_b" {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}
+
 func TestPlannerHighRiskAlwaysUsesStrongBaseline(t *testing.T) {
 	runtime := routingRuntime(t, false)
 	planner, err := NewPlanner(runtime)

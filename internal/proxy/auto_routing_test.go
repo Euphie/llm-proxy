@@ -452,6 +452,127 @@ func TestAutoRoutingTransientModelSwitchDoesNotChangeSessionBinding(t *testing.T
 	}
 }
 
+func TestAutoRoutingSwitchesToOrderedBackupTargetBeforeChangingModel(t *testing.T) {
+	var primaryCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+	}))
+	defer primary.Close()
+	var backupCalls atomic.Int32
+	var backupModel string
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls.Add(1)
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		backupModel = body.Model
+		_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"backup answer"}]}`)
+	}))
+	defer backup.Close()
+
+	runtime := autoProxyRuntime(t, primary.URL, false)
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"fast"},
+	})
+	runtime.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	runtime.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	runtime.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 2
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	NewWithEvaluation(runtime, primary.Client(), nil, nil, submitter).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || primaryCalls.Load() != 1 ||
+		backupCalls.Load() != 1 || backupModel != "fast" ||
+		!strings.Contains(response.Body.String(), "backup answer") {
+		t.Fatalf("status=%d primary=%d backup=%d model=%q body=%q",
+			response.Code, primaryCalls.Load(), backupCalls.Load(), backupModel, response.Body.String())
+	}
+	if submitter.calls != 1 {
+		t.Fatalf("submissions=%d", submitter.calls)
+	}
+	if _, err := submitter.job.Run(context.Background()); err == nil {
+		t.Fatal("comparison unexpectedly succeeded through a Target that does not serve its model")
+	}
+	if backupCalls.Load() != 1 {
+		t.Fatalf("comparison sent another model to the fast-only backup: calls=%d", backupCalls.Load())
+	}
+}
+
+func TestExplicitModelDoesNotUseAutoBackupTargets(t *testing.T) {
+	var backupCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backup.Close()
+	runtime := autoProxyRuntime(t, primary.URL, false)
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"fast"},
+	})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"fast","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || backupCalls.Load() != 0 {
+		t.Fatalf("status=%d backup=%d body=%q", response.Code, backupCalls.Load(), response.Body.String())
+	}
+}
+
+func TestAutoRoutingDoesNotSwitchTargetForNonRetryableResponse(t *testing.T) {
+	var backupCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"invalid request"}`)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backup.Close()
+
+	runtime := autoProxyRuntime(t, primary.URL, false)
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"fast"},
+	})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || backupCalls.Load() != 0 {
+		t.Fatalf("status=%d backup=%d body=%q", response.Code, backupCalls.Load(), response.Body.String())
+	}
+}
+
 func TestAutoRoutingExplicitModelNeverCallsRouter(t *testing.T) {
 	var calls atomic.Int32
 	var bodyReceived []byte

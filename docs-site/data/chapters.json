@@ -77,8 +77,8 @@
       "group": "运行时",
       "icon": "activity",
       "accent": "teal",
-      "implementation_status": "本版目标",
-      "evidence_level": "竞品源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     },
     {
       "slug": "runtime-reliability",

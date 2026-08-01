@@ -56,4 +56,4 @@ v1 的 `model=auto` 只支持 Anthropic `POST /v1/messages`，以及 OpenAI `POS
 > 当前运行时已实现该流水线和不可变 ExecutionPlan；管理后台统计页会展示最近的真实结构化路由轨迹。本站交互轨迹仍是用于解释字段的静态示例。
 
 > [!FUTURE]
-> 后续可增加同一 Profile 内的多 Target 调度，但不会改变规则优先、强基线回退和不可变计划这三条合同。
+> 当前已支持同一 Profile 内的有序备用 Target；它不会改变规则优先、强基线回退和不可变计划这三条合同。

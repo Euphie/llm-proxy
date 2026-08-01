@@ -139,6 +139,41 @@ func (b *AttemptBudget) ReserveTargetSwitch() error {
 	return nil
 }
 
+func (b *AttemptBudget) CanReserveTargetSwitchCall(
+	ctx context.Context,
+	cost int64,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return b.canReserveTargetSwitchCallLocked(cost)
+}
+
+func (b *AttemptBudget) ReserveTargetSwitchCall(
+	ctx context.Context,
+	cost int64,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := b.canReserveTargetSwitchCallLocked(cost); err != nil {
+		return err
+	}
+	b.used.TargetSwitches++
+	b.applyCallLocked(CallAnswer, cost)
+	return nil
+}
+
 func (b *AttemptBudget) Snapshot() AttemptBudgetSnapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -187,6 +222,13 @@ func (b *AttemptBudget) canReserveCallLocked(kind CallKind, cost int64) error {
 func (b *AttemptBudget) canReserveModelSwitchCallLocked(cost int64) error {
 	if b.used.ModelSwitches >= b.limits.MaxModelSwitches {
 		return fmt.Errorf("%w: model switches", ErrAttemptBudgetExceeded)
+	}
+	return b.canReserveCallLocked(CallAnswer, cost)
+}
+
+func (b *AttemptBudget) canReserveTargetSwitchCallLocked(cost int64) error {
+	if b.used.TargetSwitches >= b.limits.MaxTargetSwitches {
+		return fmt.Errorf("%w: target switches", ErrAttemptBudgetExceeded)
 	}
 	return b.canReserveCallLocked(CallAnswer, cost)
 }

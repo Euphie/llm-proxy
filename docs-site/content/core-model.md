@@ -37,7 +37,9 @@ ModelCard 描述“这个逻辑模型能做什么、容量多大、价格多少�
 
 ### Target
 
-Target 表示“当前 Profile 中实际要调用的部署”，包括上游模型 ID、endpoint、运行状态和价格覆盖。v1 每个逻辑模型只配置一个 Target；后续可增加同一 Profile、同一逻辑模型、同一供应商下的多 Target 容错，不支持跨 Profile 调度。
+Target 表示“当前 Profile 中实际要调用的端点”。Upstream 是支持全部目录模型的 primary；备用 Target
+按顺序配置 endpoint 和精确模型列表。执行计划只为当前 Profile、同一逻辑模型冻结匹配
+端点，不支持跨 Profile 或跨供应商调度。
 
 ### Route 与 Strategy
 
@@ -58,4 +60,4 @@ Route 是策略中的任务类别，例如“代码修改”或“低延迟问�
 `context_window` 是模型真实上下文容量；`client_context_window` 是给 Agent 配置的保守可用窗口，应扣除输出、工具、视觉描述和协议预留。代理不负责压缩、截断或总结上下文，只提供正确的配置建议。
 
 > [!CURRENT]
-> 当前 Profile 已保存模型能力/参考价格、参与模型、角色、Route、Strategy 和统一预算，并在保存时完整校验。Phase 1 使用 Profile Upstream 加模型 ID 作为隐式单 Target；独立 Target 对象仍待实现。
+> 当前 Profile 已保存并校验模型能力/参考价格、Target、参与模型、角色、Route、Strategy 和统一预算。

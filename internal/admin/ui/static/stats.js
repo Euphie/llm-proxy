@@ -167,7 +167,7 @@ function routingTraceTable(rows) {
     "Profile",
     "策略 / Route",
     "任务判断",
-    "模型路径",
+    "模型 / Target 路径",
     "视觉",
     "结果",
     "调用预算",
@@ -184,15 +184,20 @@ function routingTraceTable(rows) {
     const modelPath = row.initial_model === row.final_model
       ? row.initial_model
       : `${row.initial_model} → ${row.final_model}`;
+    const initialTarget = row.initial_target || "primary";
+    const finalTarget = row.final_target || initialTarget;
+    const targetPath = initialTarget === finalTarget
+      ? initialTarget
+      : `${initialTarget} → ${finalTarget}`;
     for (const value of [
       reliableDate(row.created_at),
       row.profile_slug,
       `${row.strategy} / ${row.route}`,
       `${row.task_type} · ${classificationSourceLabel(row.classification_source)}`,
-      modelPath,
+      `${modelPath} · Target ${targetPath}`,
       visionModeLabel(row.vision_mode),
       `${Number(row.status_code ?? 0)} · ${row.client_committed ? "已提交" : "未提交"}`,
-      `回答 ${Number(row.answer_attempts ?? 0)} / 辅助 ${Number(row.auxiliary_calls ?? 0)} / 模型切换 ${Number(row.model_switches ?? 0)}`,
+      `回答 ${Number(row.answer_attempts ?? 0)} / 辅助 ${Number(row.auxiliary_calls ?? 0)} / 模型切换 ${Number(row.model_switches ?? 0)} / Target 切换 ${Number(row.target_switches ?? 0)}`,
       `计划上限 ${formatMicroUSD(row.planned_worst_case_cost_micro_usd)} / 已预留 ${formatMicroUSD(row.reserved_cost_micro_usd)}`,
       `${Number(row.elapsed_ms ?? 0)} ms`,
     ]) {
