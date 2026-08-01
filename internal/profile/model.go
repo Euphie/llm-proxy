@@ -61,6 +61,7 @@ type Config struct {
 	Protocol      Protocol                `json:"protocol"`
 	Upstream      string                  `json:"upstream"`
 	Models        []ModelCapabilityConfig `json:"models,omitempty"`
+	AutoRouting   AutoRoutingConfig       `json:"auto_routing,omitempty"`
 	Vision        VisionConfig            `json:"vision"`
 	OverloadRules []RetryRule             `json:"overload_rules"`
 }
@@ -96,6 +97,7 @@ type Runtime struct {
 	Protocol      Protocol
 	Upstream      string
 	Models        ModelCatalog
+	AutoRouting   AutoRoutingRuntime
 	Vision        VisionRuntime
 	OverloadRules []provider.Rule
 }
@@ -148,6 +150,10 @@ func (r Record) Resolve() (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
+	autoRouting, err := resolveAutoRouting(r.Config.AutoRouting, models, vision)
+	if err != nil {
+		return Runtime{}, err
+	}
 	rules, err := resolveRetryRules(r.Config.OverloadRules)
 	if err != nil {
 		return Runtime{}, err
@@ -161,6 +167,7 @@ func (r Record) Resolve() (Runtime, error) {
 		Protocol:      r.Config.Protocol,
 		Upstream:      upstream,
 		Models:        models,
+		AutoRouting:   autoRouting,
 		Vision:        vision,
 		OverloadRules: rules,
 	}, nil

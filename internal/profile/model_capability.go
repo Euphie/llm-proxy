@@ -6,19 +6,31 @@ import (
 )
 
 type ModelCapabilityConfig struct {
-	ID              string `json:"id"`
-	ContextWindow   *int   `json:"context_window,omitempty"`
-	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
-	SupportsVision  *bool  `json:"supports_vision"`
+	ID                            string `json:"id"`
+	ContextWindow                 *int   `json:"context_window,omitempty"`
+	MaxOutputTokens               *int   `json:"max_output_tokens,omitempty"`
+	SupportsVision                *bool  `json:"supports_vision"`
+	SupportsTools                 *bool  `json:"supports_tools,omitempty"`
+	SupportsStructuredOutput      *bool  `json:"supports_structured_output,omitempty"`
+	InputPriceMicroUSDPerMillion  *int64 `json:"input_price_micro_usd_per_million,omitempty"`
+	OutputPriceMicroUSDPerMillion *int64 `json:"output_price_micro_usd_per_million,omitempty"`
 }
 
 type ModelCapability struct {
-	ID                 string
-	ContextWindow      int
-	HasContextWindow   bool
-	MaxOutputTokens    int
-	HasMaxOutputTokens bool
-	SupportsVision     bool
+	ID                            string
+	ContextWindow                 int
+	HasContextWindow              bool
+	MaxOutputTokens               int
+	HasMaxOutputTokens            bool
+	SupportsVision                bool
+	SupportsTools                 bool
+	HasSupportsTools              bool
+	SupportsStructuredOutput      bool
+	HasSupportsStructuredOutput   bool
+	InputPriceMicroUSDPerMillion  int64
+	HasInputPrice                 bool
+	OutputPriceMicroUSDPerMillion int64
+	HasOutputPrice                bool
 }
 
 type ModelCatalog map[string]ModelCapability
@@ -59,6 +71,12 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 			*config.MaxOutputTokens >= *config.ContextWindow {
 			return nil, fmt.Errorf("%w: model capability %q max output tokens must be less than context window", ErrInvalidConfig, config.ID)
 		}
+		if err := validatePrice(config.ID, "input", config.InputPriceMicroUSDPerMillion); err != nil {
+			return nil, err
+		}
+		if err := validatePrice(config.ID, "output", config.OutputPriceMicroUSDPerMillion); err != nil {
+			return nil, err
+		}
 
 		capability := ModelCapability{
 			ID:             config.ID,
@@ -72,9 +90,38 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 			capability.MaxOutputTokens = *config.MaxOutputTokens
 			capability.HasMaxOutputTokens = true
 		}
+		if config.SupportsTools != nil {
+			capability.SupportsTools = *config.SupportsTools
+			capability.HasSupportsTools = true
+		}
+		if config.SupportsStructuredOutput != nil {
+			capability.SupportsStructuredOutput = *config.SupportsStructuredOutput
+			capability.HasSupportsStructuredOutput = true
+		}
+		if config.InputPriceMicroUSDPerMillion != nil {
+			capability.InputPriceMicroUSDPerMillion = *config.InputPriceMicroUSDPerMillion
+			capability.HasInputPrice = true
+		}
+		if config.OutputPriceMicroUSDPerMillion != nil {
+			capability.OutputPriceMicroUSDPerMillion = *config.OutputPriceMicroUSDPerMillion
+			capability.HasOutputPrice = true
+		}
 		catalog[config.ID] = capability
 	}
 	return catalog, nil
+}
+
+func validatePrice(modelID, kind string, price *int64) error {
+	if price == nil {
+		return nil
+	}
+	if *price < 0 {
+		return fmt.Errorf("%w: model capability %q %s price must not be negative", ErrInvalidConfig, modelID, kind)
+	}
+	if *price > maxBrowserSafeInteger {
+		return fmt.Errorf("%w: model capability %q %s price exceeds the browser safe integer limit", ErrInvalidConfig, modelID, kind)
+	}
+	return nil
 }
 
 func (c ModelCatalog) Lookup(id string) (ModelCapability, bool) {
