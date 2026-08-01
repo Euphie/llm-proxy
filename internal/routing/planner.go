@@ -217,7 +217,8 @@ func (p *Planner) evaluateCandidate(
 		model,
 	)
 	auxiliaryCost := visionCost
-	if classificationSource == ClassificationSourceAnalyzer {
+	if classificationSource == ClassificationSourceAnalyzer ||
+		classificationSource == ClassificationSourceFallback {
 		analyzer := p.models[p.auto.TaskAnalyzerModel]
 		auxiliaryCost = addCost(auxiliaryCost, estimateCallCost(
 			request.Facts.EstimatedInputTokens,

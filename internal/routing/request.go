@@ -11,6 +11,8 @@ import (
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
+const routingTextRuneLimit = 8192
+
 const AutoModel = "auto"
 
 var (
@@ -228,4 +230,65 @@ func cloneRoot(root map[string]json.RawMessage) map[string]json.RawMessage {
 		cloned[key] = append(json.RawMessage(nil), value...)
 	}
 	return cloned
+}
+
+func (r Request) routingText() string {
+	field := "messages"
+	if r.Operation == OperationOpenAIResponses {
+		field = "input"
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(r.root[field], &items) != nil {
+		return ""
+	}
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		var message map[string]json.RawMessage
+		if json.Unmarshal(item, &message) != nil {
+			continue
+		}
+		var role string
+		_ = json.Unmarshal(message["role"], &role)
+		if role != "user" {
+			continue
+		}
+		texts = append(texts, contentTexts(message["content"])...)
+	}
+	joined := strings.TrimSpace(strings.Join(texts, "\n"))
+	runes := []rune(joined)
+	if len(runes) > routingTextRuneLimit {
+		return string(runes[:routingTextRuneLimit])
+	}
+	return joined
+}
+
+func contentTexts(raw json.RawMessage) []string {
+	var direct string
+	if json.Unmarshal(raw, &direct) == nil {
+		if direct = strings.TrimSpace(direct); direct != "" {
+			return []string{direct}
+		}
+		return nil
+	}
+	var blocks []json.RawMessage
+	if json.Unmarshal(raw, &blocks) != nil {
+		return nil
+	}
+	texts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(block, &fields) != nil {
+			continue
+		}
+		var blockType, text string
+		_ = json.Unmarshal(fields["type"], &blockType)
+		if blockType != "text" && blockType != "input_text" {
+			continue
+		}
+		_ = json.Unmarshal(fields["text"], &text)
+		if text = strings.TrimSpace(text); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return texts
 }
