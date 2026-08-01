@@ -847,20 +847,22 @@ func TestShouldPreprocessVisionMatchesProtocolEndpoint(t *testing.T) {
 		protocol profile.Protocol
 		path     string
 		want     bool
+		wantOp   string
 	}{
-		{name: "anthropic messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages", want: true},
+		{name: "anthropic messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages", want: true, wantOp: "anthropic_messages"},
 		{name: "anthropic responses", protocol: profile.ProtocolAnthropic, path: "/v1/responses", want: false},
-		{name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses", want: true},
-		{name: "openai responses without v1", protocol: profile.ProtocolOpenAI, path: "/responses", want: true},
-		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: true},
+		{name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses", want: true, wantOp: "openai_responses"},
+		{name: "openai responses without v1", protocol: profile.ProtocolOpenAI, path: "/responses", want: true, wantOp: "openai_responses"},
+		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: true, wantOp: "openai_chat_completions"},
 		{name: "openai messages", protocol: profile.ProtocolOpenAI, path: "/v1/messages", want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, test.path, nil)
 			request.Header.Set("Content-Type", "application/json")
-			if got := shouldPreprocessVision(test.protocol, request); got != test.want {
-				t.Fatalf("shouldPreprocessVision()=%v, want %v", got, test.want)
+			operation, got := requestVisionOperation(test.protocol, request)
+			if got != test.want || string(operation) != test.wantOp {
+				t.Fatalf("requestVisionOperation()=(%q,%v), want (%q,%v)", operation, got, test.wantOp, test.want)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package vision
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -156,8 +157,9 @@ func TestParseMessagesRootReusesDecodedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.messages) != 1 {
-		t.Fatalf("messages=%d, want 1", len(doc.messages))
+	rewritten, err := doc.rewrite(nil)
+	if err != nil || !strings.Contains(string(rewritten), `"content":"hello"`) {
+		t.Fatalf("rewritten=%s err=%v", rewritten, err)
 	}
 }
 

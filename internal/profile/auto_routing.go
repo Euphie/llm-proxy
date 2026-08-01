@@ -14,6 +14,8 @@ var (
 
 const defaultRoutingSessionTTL = 24 * time.Hour
 
+const VisionImagePromptReserveTokens = 4096
+
 const maxDynamicOptimizationTaskTimeout = 10 * time.Minute
 
 type AutoRoutingConfig struct {
@@ -172,8 +174,21 @@ func resolveAutoRouting(
 	}
 	requiredModels[analyzer] = struct{}{}
 	if vision.Enabled {
-		if _, ok := models[vision.Model]; !ok {
+		visionModel, ok := models[vision.Model]
+		if !ok {
 			return AutoRoutingRuntime{}, invalidAuto("vision model %q is not in the model catalog", vision.Model)
+		}
+		if !visionModel.SupportsVision {
+			return AutoRoutingRuntime{}, invalidAuto("vision model %q must confirm vision support", vision.Model)
+		}
+		if !visionModel.HasContextWindow || !visionModel.HasMaxOutputTokens {
+			return AutoRoutingRuntime{}, invalidAuto("vision model %q requires a context window and max output", vision.Model)
+		}
+		if vision.MaxTokens > visionModel.MaxOutputTokens {
+			return AutoRoutingRuntime{}, invalidAuto("vision model %q output reserve exceeds its max output", vision.Model)
+		}
+		if VisionImagePromptReserveTokens > visionModel.ContextWindow-vision.MaxTokens {
+			return AutoRoutingRuntime{}, invalidAuto("vision model %q cannot fit one image prompt reserve", vision.Model)
 		}
 		requiredModels[vision.Model] = struct{}{}
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Euphie/llm-proxy/internal/evaluation"
+	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/routing"
@@ -242,25 +243,36 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"worst_case_cost_micro_usd", plan.WorstCaseCostMicroUSD())
 	}
 
-	preprocessVision := h.vision != nil && shouldPreprocessVision(h.cfg.Protocol, r)
+	entranceOperation, preprocessVision := requestVisionOperation(h.cfg.Protocol, r)
+	preprocessVision = h.vision != nil && preprocessVision
 	if isAuto {
-		body, err = h.prepareAutoAttempt(
+		prepared, prepareErr := h.prepareAutoAttemptSequence(
 			requestCtx,
 			r.Header,
-			target,
+			requestURI,
 			routeRequest,
-			currentAttempt,
+			modelAttempts,
+			modelAttemptIndex,
+			currentTargetIndex,
 			budget,
 		)
-		if err != nil {
-			writeAutoPreparationError(w, requestCtx, err)
+		if prepareErr != nil {
+			writeAutoPreparationError(w, requestCtx, prepareErr)
 			return
 		}
+		modelAttemptIndex = prepared.modelIndex
+		currentAttempt = prepared.attempt
+		currentTargets = prepared.targets
+		currentTargetIndex = prepared.targetIndex
+		currentTargetID = prepared.target.ID()
+		target = prepared.targetURL
+		body = prepared.body
 	} else if preprocessVision {
 		var reserveVisionCall func(context.Context) error
-		body, err = h.vision.ProcessTargetWithBudget(
+		body, err = h.vision.ProcessOperationTargetWithBudget(
 			requestCtx,
 			r.Header,
+			entranceOperation,
 			body,
 			target,
 			reserveVisionCall,
@@ -325,44 +337,44 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return false, nil
 		}
 		next := modelAttempts[modelAttemptIndex+1]
-		nextTargets := next.Targets()
-		if len(nextTargets) == 0 {
-			return false, nil
-		}
-		nextTarget := nextTargets[0]
-		nextTargetURL := targetURL(nextTarget.Upstream(), requestURI)
 		if err := budget.CanReserveModelSwitchCall(
 			requestCtx,
 			next.AnswerCallCostMicroUSD(),
 		); err != nil {
 			return false, nil
 		}
-		nextBody, err := h.prepareAutoAttempt(
+		if err := budget.ReserveModelSwitch(); err != nil {
+			return false, err
+		}
+		prepared, err := h.prepareAutoAttemptSequence(
 			requestCtx,
 			r.Header,
-			nextTargetURL,
+			requestURI,
 			routeRequest,
-			next,
+			modelAttempts,
+			modelAttemptIndex+1,
+			0,
 			budget,
 		)
 		if err != nil {
 			return false, err
 		}
-		if err := budget.ReserveModelSwitchCall(
+		if err := budget.ReserveCall(
 			requestCtx,
-			next.AnswerCallCostMicroUSD(),
+			routing.CallAnswer,
+			prepared.attempt.AnswerCallCostMicroUSD(),
 		); err != nil {
 			return false, err
 		}
 		previous := currentAttempt.Model()
-		modelAttemptIndex++
+		modelAttemptIndex = prepared.modelIndex
 		answerAttempts++
-		currentAttempt = next
-		currentTargets = nextTargets
-		currentTargetIndex = 0
-		currentTargetID = nextTarget.ID()
-		target = nextTargetURL
-		body = nextBody
+		currentAttempt = prepared.attempt
+		currentTargets = prepared.targets
+		currentTargetIndex = prepared.targetIndex
+		currentTargetID = prepared.target.ID()
+		target = prepared.targetURL
+		body = prepared.body
 		slog.Info("routing.model.switched",
 			"profile", label,
 			"strategy", plan.Strategy(),
@@ -749,7 +761,14 @@ func (h *handler) prepareEvaluationAttempt(
 	if h.vision == nil {
 		return nil, routing.ErrNoCapableModel
 	}
-	return h.vision.ProcessTargetWithBudget(ctx, headers, body, target, nil)
+	return h.vision.ProcessOperationTargetWithBudget(
+		ctx,
+		headers,
+		request.Operation,
+		body,
+		target,
+		nil,
+	)
 }
 
 func evaluationPairAttempt(
@@ -1013,9 +1032,10 @@ func (h *handler) prepareAutoAttempt(
 	if h.vision == nil {
 		return nil, routing.ErrNoCapableModel
 	}
-	return h.vision.ProcessTargetWithBudget(
+	return h.vision.ProcessOperationTargetWithBudget(
 		ctx,
 		headers,
+		request.Operation,
 		body,
 		target,
 		func(callCtx context.Context) error {
@@ -1026,6 +1046,100 @@ func (h *handler) prepareAutoAttempt(
 			)
 		},
 	)
+}
+
+type preparedAutoAttempt struct {
+	modelIndex  int
+	targetIndex int
+	attempt     routing.ModelAttemptPlan
+	targets     []routing.TargetPlan
+	target      routing.TargetPlan
+	targetURL   string
+	body        []byte
+}
+
+func (h *handler) prepareAutoAttemptSequence(
+	ctx context.Context,
+	headers http.Header,
+	requestURI string,
+	request routing.Request,
+	attempts []routing.ModelAttemptPlan,
+	modelIndex int,
+	targetIndex int,
+	budget *routing.AttemptBudget,
+) (preparedAutoAttempt, error) {
+	for modelIndex < len(attempts) {
+		attempt := attempts[modelIndex]
+		targets := attempt.Targets()
+		if targetIndex >= len(targets) {
+			if modelIndex+1 >= len(attempts) || budget.ReserveModelSwitch() != nil {
+				return preparedAutoAttempt{}, routing.ErrNoCapableModel
+			}
+			modelIndex++
+			targetIndex = 0
+			continue
+		}
+		target := targets[targetIndex]
+		attemptTarget := targetURL(target.Upstream(), requestURI)
+		body, err := h.prepareAutoAttempt(ctx, headers, attemptTarget, request, attempt, budget)
+		if err == nil {
+			return preparedAutoAttempt{
+				modelIndex: modelIndex, targetIndex: targetIndex,
+				attempt: attempt, targets: targets, target: target,
+				targetURL: attemptTarget, body: body,
+			}, nil
+		}
+		if ctx.Err() != nil || !recoverableVisionFailure(err) {
+			return preparedAutoAttempt{}, err
+		}
+		if targetIndex+1 < len(targets) {
+			if switchErr := budget.ReserveTargetSwitch(); switchErr == nil {
+				slog.Info(
+					"routing.vision.target_fallback",
+					"profile", h.cfg.Slug,
+					"model", attempt.Model(),
+					"from_target", target.ID(),
+					"to_target", targets[targetIndex+1].ID(),
+				)
+				targetIndex++
+				continue
+			}
+		}
+		if modelIndex+1 >= len(attempts) {
+			return preparedAutoAttempt{}, err
+		}
+		if switchErr := budget.ReserveModelSwitch(); switchErr != nil {
+			return preparedAutoAttempt{}, err
+		}
+		slog.Info(
+			"routing.vision.model_fallback",
+			"profile", h.cfg.Slug,
+			"from_model", attempt.Model(),
+			"to_model", attempts[modelIndex+1].Model(),
+		)
+		modelIndex++
+		targetIndex = 0
+	}
+	return preparedAutoAttempt{}, routing.ErrNoCapableModel
+}
+
+func recoverableVisionFailure(err error) bool {
+	if errors.Is(err, routing.ErrAttemptBudgetExceeded) {
+		return false
+	}
+	class, ok := provider.FailureClassOf(err)
+	if !ok {
+		return false
+	}
+	switch class {
+	case provider.FailureOverloadTransient,
+		provider.FailureOperationTimeout,
+		provider.FailureUnknownTransport,
+		provider.FailureMalformedResponse:
+		return true
+	default:
+		return false
+	}
 }
 
 func writeAutoPreparationError(
@@ -1092,25 +1206,35 @@ func targetURL(upstream, requestURI string) string {
 	return strings.TrimRight(upstream, "/") + "/" + strings.TrimLeft(requestURI, "/")
 }
 
-func shouldPreprocessVision(protocol profile.Protocol, r *http.Request) bool {
+func requestVisionOperation(
+	protocol profile.Protocol,
+	r *http.Request,
+) (llmrequest.Operation, bool) {
 	if r.Method != http.MethodPost {
-		return false
+		return "", false
 	}
 	path := r.URL.EscapedPath()
+	operation := llmrequest.Operation("")
 	switch protocol {
 	case profile.ProtocolAnthropic:
 		if path != "/v1/messages" {
-			return false
+			return "", false
 		}
+		operation = llmrequest.OperationAnthropicMessages
 	case profile.ProtocolOpenAI:
-		if path != "/responses" && path != "/v1/responses" && path != "/v1/chat/completions" {
-			return false
+		switch path {
+		case "/responses", "/v1/responses":
+			operation = llmrequest.OperationOpenAIResponses
+		case "/v1/chat/completions":
+			operation = llmrequest.OperationOpenAIChatCompletions
+		default:
+			return "", false
 		}
 	default:
-		return false
+		return "", false
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	return err == nil && mediaType == "application/json"
+	return operation, err == nil && mediaType == "application/json"
 }
 
 func (h *handler) do(ctx context.Context, method, url string, headers http.Header, body []byte) (*http.Response, error) {

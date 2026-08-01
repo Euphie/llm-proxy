@@ -4,9 +4,10 @@
 模型生成描述，再以描述替换图片并发送主请求。该流程支持：
 
 - Anthropic `POST /v1/messages`；
+- OpenAI `POST /v1/chat/completions`；
 - OpenAI `POST /responses` 或 `POST /v1/responses`。
 
-其他路径（包括 OpenAI Chat Completions）不会进入图片预处理。
+其他路径不会进入图片预处理。入口路径决定解析操作，正文中的同名字段不能改变协议。
 
 ## 影子请求门控
 
@@ -15,7 +16,7 @@
 1. Profile 已启用视觉预处理；
 2. Profile 的识图模型非空；
 3. 请求是支持协议的 `POST` JSON 路由（Anthropic `/v1/messages` 或 OpenAI
-   `/responses` 或 `/v1/responses`）；
+   `/v1/chat/completions`、`/responses`、`/v1/responses`）；
 4. 主 `model` 的模型能力判定允许增强；
 5. 请求中至少有一个受支持的直接图片块。
 
@@ -32,8 +33,9 @@
 ## 工作流程与失败
 
 1. 接收受支持路径的 JSON 请求。
-2. 收集 Anthropic `messages[].content[]` 中的直接 `image`，或 Responses
-   `input[]` 消息内容中的直接 `input_image`。
+2. 收集 Anthropic `messages[].content[]` 中的直接 `image`、Chat
+   `messages[].content[]` 中的直接 `image_url`，或 Responses `input[]` 消息内容和
+   `function_call_output.output[]` 中的直接 `input_image`。
 3. 查询缓存，并并发处理未命中图片。
 4. 按 `vision.transport` 发送非流式影子请求；Responses 影子请求固定设置
    `store: false`。
@@ -45,8 +47,9 @@
 
 ## 问题感知视觉证据
 
-代理只收集与图片处于同一条 `user` 消息的直接文本块：Anthropic `text` 和 Responses
-`input_text`。非字符串、非直接和仅含空白的块会忽略；每块去除首尾空白后按顺序用换行
+代理只收集与图片处于同一条 `user` 消息的直接文本块：Anthropic/Chat `text` 和 Responses
+`input_text`。Responses 的字符串 `input` 与直接 `input_text` 也会保留给智能路由的任务分析。
+非字符串、非直接和仅含空白的块会忽略；每块去除首尾空白后按顺序用换行
 拼接，最多保留 4096 个 Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编码
 嵌入影子提示词。其他消息中的文本和工具输出不会作为问题上下文发送给视觉 Upstream。
 
@@ -84,7 +87,9 @@ Profile 配置版本仍为 `1`。旧 Profile 缺少 `vision.transport` 时使用
 - `openai_chat_completions`：把实际主请求目标末尾的 `/responses` 替换为
   `/chat/completions`。
 
-目标从最终主请求 URL 推导，不额外拼接 `/v1`。
+目标从最终主请求 URL 推导：保留 Target 基础路径和查询参数，并把已识别的入口操作后缀规范为
+所选传输的 `/v1/messages`、`/v1/responses` 或 `/v1/chat/completions`。影子请求体也按所选
+传输重新构造，不复用入口协议的图片块形状。
 
 ## 图片来源与请求头
 
@@ -94,13 +99,19 @@ Anthropic 图片块支持三种 `source.type`：
 - `url`：由 Upstream 读取的远程图片 URL；
 - `file`：Files API 的 `file_id`。
 
-Responses `input_image` 支持完整 URL、base64 data URL 或 `file_id`，并保留
+Chat `image_url` 支持完整 URL 或 base64 data URL。Responses `input_image` 支持完整 URL、
+base64 data URL 或 `file_id`，并保留
 `auto`、`low`、`high`、`original` detail 的缓存隔离。只处理直接消息内容中的
 图片，不递归处理 Anthropic `tool_result.content` 或 Responses 工具输出中的嵌套
 内容。
 
 `openai_responses` 支持上述全部来源；`openai_chat_completions` 支持 URL 和
 base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前返回 `400`。
+
+智能路由开启视觉增强时还会校验视觉模型已明确支持视觉、具备上下文窗口和最大输出能力，且
+配置的输出与单图提示预留可放入窗口。复合候选只保留回答模型和视觉模型共同支持的 Target。
+主回答前发生连接失败、超时、临时过载或畸形视觉响应时，可在剩余预算内切换兼容 Target 或
+计划内模型；鉴权、请求/能力和不可重试 4xx 错误不会回退。显式模型仍只使用 primary。
 
 影子请求只按协议白名单透传请求头，不透传任意客户端请求头：
 

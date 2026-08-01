@@ -328,6 +328,63 @@ func TestPlannerSelectsVisionModeAfterModel(t *testing.T) {
 	}
 }
 
+func TestPlannerExcludesFileIDCompositeOverChatTransport(t *testing.T) {
+	config := routingConfig(true)
+	config.Protocol = profile.ProtocolOpenAI
+	config.Vision.Transport = profile.VisionTransportOpenAIChatCompletions
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoOpenAIRequest(
+		t,
+		"/v1/responses",
+		`{"model":"auto","max_output_tokens":1000,"input":[{"role":"user","content":[{"type":"input_image","file_id":"file-123"},{"type":"input_text","text":"inspect"}]}]}`,
+	)
+
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Model() != "strong" || plan.VisionMode() != VisionNative {
+		t.Fatalf("plan=%+v, want native strong model", plan.Snapshot())
+	}
+}
+
+func TestPlannerFreezesOnlyTargetsServingAnswerAndVisionModels(t *testing.T) {
+	config := routingConfig(true)
+	config.ProviderID = "acme-ai"
+	config.CredentialScope = "team-a"
+	config.Targets = []profile.TargetConfig{
+		{
+			ID: "answer_only", Upstream: "https://answer-only.example",
+			ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"fast"},
+		},
+		{
+			ID: "composite", Upstream: "https://composite.example",
+			ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"fast", "vision"},
+		},
+	}
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},{"type":"text","text":"inspect"}]}]}`)
+
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := plan.ModelAttempts()[0].Targets()
+	if len(targets) != 2 || targets[0].ID() != profile.PrimaryTargetID || targets[1].ID() != "composite" {
+		t.Fatalf("composite targets=%+v, want primary and composite", targets)
+	}
+}
+
 func TestPlannerFailsWhenStrongBaselineCannotSatisfyHardConstraints(t *testing.T) {
 	config := routingConfig(false)
 	unsupported := false
@@ -377,6 +434,21 @@ func autoAnthropicRequest(t *testing.T, body string) Request {
 		profile.ProtocolAnthropic,
 		http.MethodPost,
 		"/v1/messages",
+		"application/json",
+		[]byte(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func autoOpenAIRequest(t *testing.T, path string, body string) Request {
+	t.Helper()
+	request, err := ParseAutoRequest(
+		profile.ProtocolOpenAI,
+		http.MethodPost,
+		path,
 		"application/json",
 		[]byte(body),
 	)

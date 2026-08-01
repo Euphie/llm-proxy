@@ -41,7 +41,7 @@ func TestParseAutoRequestSupportedOperations(t *testing.T) {
 	}{
 		{
 			name: "anthropic messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
-			body:      `{"model":"auto","max_tokens":2048,"stream":true,"tools":[{"name":"edit"}],"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"aW1hZ2U="}},{"type":"text","text":"change this"}]}]}`,
+			body:      `{"model":"auto","max_tokens":2048,"stream":true,"tools":[{"name":"edit"}],"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"text","text":"change this"}]}]}`,
 			operation: OperationAnthropicMessages,
 			facts:     RequestFacts{RequestedOutputTokens: 2048, ImageCount: 1, HasImages: true, HasTools: true, RequiresStructuredOutput: true, Stream: true},
 		},
@@ -212,12 +212,84 @@ func TestEvaluationTextIncludesOnlyBoundedUserText(t *testing.T) {
 		http.MethodPost,
 		"/v1/messages",
 		"application/json",
-		[]byte(`{"model":"auto","messages":[{"role":"assistant","content":"ignore me"},{"role":"user","content":[{"type":"image","source":{"data":"secret-image"}},{"type":"text","text":"question"}]}]}`),
+		[]byte(`{"model":"auto","messages":[{"role":"assistant","content":"ignore me"},{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"secret-image"}},{"type":"text","text":"question"}]}]}`),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := request.EvaluationText(); got != "question" {
+		t.Fatalf("EvaluationText()=%q", got)
+	}
+}
+
+func TestParseAutoRequestIgnoresImageTypesOutsideProtocolContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol profile.Protocol
+		path     string
+		body     string
+	}{
+		{
+			name: "anthropic tool metadata", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","tools":[{"name":"inspect","input_schema":{"properties":{"attachment":{"type":"image"}}}}],"messages":[{"role":"user","content":"hello"}]}`,
+		},
+		{
+			name: "chat response schema", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions",
+			body: `{"model":"auto","response_format":{"type":"json_schema","json_schema":{"schema":{"properties":{"preview":{"type":"image_url"}}}}},"messages":[{"role":"user","content":"hello"}]}`,
+		},
+		{
+			name: "responses tool metadata", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
+			body: `{"model":"auto","tools":[{"type":"function","parameters":{"properties":{"asset":{"type":"input_image"}}}}],"input":"hello"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := ParseAutoRequest(
+				test.protocol,
+				http.MethodPost,
+				test.path,
+				"application/json",
+				[]byte(test.body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if request.Facts.HasImages || request.Facts.ImageCount != 0 {
+				t.Fatalf("image facts=%+v, want no protocol images", request.Facts)
+			}
+		})
+	}
+}
+
+func TestResponsesStringInputRemainsAvailableForTaskAnalysis(t *testing.T) {
+	request, err := ParseAutoRequest(
+		profile.ProtocolOpenAI,
+		http.MethodPost,
+		"/v1/responses",
+		"application/json",
+		[]byte(`{"model":"auto","input":"compare these deployment options"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.EvaluationText(); got != "compare these deployment options" {
+		t.Fatalf("EvaluationText()=%q", got)
+	}
+}
+
+func TestResponsesDirectAndMessageInputTextRemainAvailableForTaskAnalysis(t *testing.T) {
+	request, err := ParseAutoRequest(
+		profile.ProtocolOpenAI,
+		http.MethodPost,
+		"/v1/responses",
+		"application/json",
+		[]byte(`{"model":"auto","input":[{"type":"input_text","text":"direct question"},{"type":"message","role":"user","content":[{"type":"input_text","text":"message context"}]}]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.EvaluationText(); got != "direct question\nmessage context" {
 		t.Fatalf("EvaluationText()=%q", got)
 	}
 }

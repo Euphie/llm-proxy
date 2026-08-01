@@ -1,6 +1,7 @@
 package vision
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
@@ -259,8 +261,9 @@ func TestParseResponsesRootReusesDecodedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.items) != 1 {
-		t.Fatalf("items=%d, want 1", len(doc.items))
+	rewritten, err := doc.rewrite(nil)
+	if err != nil || !strings.Contains(string(rewritten), `"content":[]`) {
+		t.Fatalf("rewritten=%s err=%v", rewritten, err)
 	}
 }
 
@@ -385,6 +388,50 @@ func TestOpenAIPreprocessorRewritesResponsesRequest(t *testing.T) {
 	if request.Input[1].Output[0].Type != "input_text" ||
 		request.Input[1].Output[0].Text != descriptionPrefix+"a diagram" {
 		t.Fatalf("rewritten function output=%+v", request.Input[1].Output[0])
+	}
+}
+
+func TestOpenAIPreprocessorUsesEntranceOperationInsteadOfTopLevelMessages(t *testing.T) {
+	fake := &fakeDescriber{describe: func(imageRef) (string, error) {
+		return "response image", nil
+	}}
+	p := newPreprocessorForProtocol(
+		profile.ProtocolOpenAI,
+		"provider",
+		nil,
+		profile.VisionRuntime{
+			Model:               "vision-model",
+			Transport:           profile.VisionTransportOpenAIResponses,
+			UnlistedModelPolicy: profile.UnlistedModelEnhance,
+			Prompt:              "describe",
+			Timeout:             time.Second,
+			MaxConcurrency:      1,
+		},
+		fake,
+		newResultCache(8, time.Minute),
+	)
+	body := []byte(`{
+		"model":"main",
+		"messages":[],
+		"input":[{"role":"user","content":[
+			{"type":"input_image","image_url":"https://example.test/image.png"}
+		]}]
+	}`)
+
+	got, err := p.ProcessOperationTargetWithBudget(
+		context.Background(),
+		nil,
+		llmrequest.OperationOpenAIResponses,
+		body,
+		"https://example.test/v1/responses",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte(`"type":"input_image"`)) ||
+		!bytes.Contains(got, []byte("response image")) {
+		t.Fatalf("rewritten=%s", got)
 	}
 }
 

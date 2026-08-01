@@ -313,6 +313,70 @@ func TestResolveAutoRoutingRejectsIncompleteConfiguration(t *testing.T) {
 	}
 }
 
+func TestResolveAutoRoutingRequiresExecutableVisionModel(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Record)
+	}{
+		{
+			name: "vision capability is false",
+			mutate: func(record *Record) {
+				unsupported := false
+				record.Config.Models[2].SupportsVision = &unsupported
+			},
+		},
+		{
+			name: "context window is missing",
+			mutate: func(record *Record) {
+				record.Config.Models[2].ContextWindow = nil
+			},
+		},
+		{
+			name: "max output is missing",
+			mutate: func(record *Record) {
+				record.Config.Models[2].MaxOutputTokens = nil
+			},
+		},
+		{
+			name: "configured output exceeds model output",
+			mutate: func(record *Record) {
+				record.Config.Vision.MaxTokens = 16_001
+			},
+		},
+		{
+			name: "one image prompt reserve exceeds context",
+			mutate: func(record *Record) {
+				contextWindow := 6_000
+				maxOutput := 2_048
+				record.Config.Models[2].ContextWindow = &contextWindow
+				record.Config.Models[2].MaxOutputTokens = &maxOutput
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := validAutoRoutingRecord()
+			yes := true
+			contextWindow := 200_000
+			maxOutput := 16_000
+			inputPrice := int64(200_000)
+			outputPrice := int64(800_000)
+			record.Config.Vision.Enabled = true
+			record.Config.Vision.Model = "vision"
+			record.Config.Models = append(record.Config.Models, ModelCapabilityConfig{
+				ID: "vision", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutput,
+				SupportsVision:               &yes,
+				InputPriceMicroUSDPerMillion: &inputPrice, OutputPriceMicroUSDPerMillion: &outputPrice,
+			})
+			test.mutate(&record)
+			if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Resolve() error=%v, want ErrInvalidConfig", err)
+			}
+		})
+	}
+}
+
 func validAutoRoutingRecord() Record {
 	supportsVision := false
 	supportsTools := true

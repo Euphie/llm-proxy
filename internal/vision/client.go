@@ -144,7 +144,11 @@ func (c *visionClient) DescribeTarget(
 
 	target, err := shadowTarget(mainTarget, c.cfg.Transport)
 	if err != nil {
-		return "", safeClientError{"derive vision target", err}
+		return "", provider.NewFailure(
+			provider.FailureRequestProtocolCapability,
+			0,
+			safeClientError{"derive vision target", err},
+		)
 	}
 	body, err := c.requestBody(image)
 	if err != nil {
@@ -152,7 +156,11 @@ func (c *visionClient) DescribeTarget(
 		if errors.As(err, &unsupportedSource) {
 			return "", unsupportedSource
 		}
-		return "", safeClientError{"build vision request", err}
+		return "", provider.NewFailure(
+			provider.FailureRequestProtocolCapability,
+			0,
+			safeClientError{"build vision request", err},
+		)
 	}
 
 	var retryRule *provider.Rule
@@ -173,14 +181,14 @@ func (c *visionClient) DescribeTarget(
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				c.logAttempt(image, attempt+1, attemptStarted, visionErrorClass(ctxErr), 0, 0, false)
-				return "", safeClientError{"vision request canceled", ctxErr}
+				return "", provider.ClassifyTransportFailure(ctxErr)
 			}
 			c.logAttempt(image, attempt+1, attemptStarted, "network", 0, 0, false)
 			if retryRule == nil && len(c.rules) > 0 {
 				retryRule = &c.rules[0]
 			}
 			if retryRule == nil || attempt >= retryRule.MaxRetries {
-				return "", safeClientError{"vision upstream request failed", err}
+				return "", provider.ClassifyTransportFailure(err)
 			}
 			continue
 		}
@@ -190,12 +198,12 @@ func (c *visionClient) DescribeTarget(
 		if readErr != nil {
 			c.logAttempt(image, attempt+1, attemptStarted, "response_io",
 				response.StatusCode, len(responseBody), false)
-			return "", safeClientError{"read vision response", readErr}
+			return "", provider.NewFailure(provider.FailureMalformedResponse, response.StatusCode, readErr)
 		}
 		if closeErr != nil {
 			c.logAttempt(image, attempt+1, attemptStarted, "response_io",
 				response.StatusCode, len(responseBody), false)
-			return "", safeClientError{"close vision response", closeErr}
+			return "", provider.NewFailure(provider.FailureMalformedResponse, response.StatusCode, closeErr)
 		}
 
 		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
@@ -205,7 +213,7 @@ func (c *visionClient) DescribeTarget(
 			if err != nil {
 				c.logAttempt(image, attempt+1, attemptStarted, "invalid_response",
 					response.StatusCode, len(responseBody), false)
-				return "", safeClientError{"invalid vision response", err}
+				return "", provider.NewFailure(provider.FailureMalformedResponse, response.StatusCode, err)
 			}
 			c.logAttempt(image, attempt+1, attemptStarted, "none",
 				response.StatusCode, len(responseBody), false)
@@ -213,11 +221,12 @@ func (c *visionClient) DescribeTarget(
 		}
 
 		matched := provider.Match(c.rules, response.StatusCode, responseBody)
+		failure := provider.ClassifyHTTPFailure(c.rules, response.StatusCode, responseBody, nil)
 		c.logDebugUpstreamResponse(image, attempt+1, response.StatusCode, responseBody)
 		if matched == nil {
 			c.logAttempt(image, attempt+1, attemptStarted, "upstream",
 				response.StatusCode, len(responseBody), false)
-			return "", fmt.Errorf("vision upstream returned status %d", response.StatusCode)
+			return "", failure
 		}
 		c.logAttempt(image, attempt+1, attemptStarted, "overload",
 			response.StatusCode, len(responseBody), true)
@@ -226,7 +235,7 @@ func (c *visionClient) DescribeTarget(
 			httpRuleLocked = true
 		}
 		if attempt >= retryRule.MaxRetries {
-			return "", fmt.Errorf("vision upstream returned status %d after retries", response.StatusCode)
+			return "", failure
 		}
 	}
 }
@@ -383,6 +392,32 @@ func (c *visionClient) chatCompletionsRequestBody(image imageRef) ([]byte, error
 }
 
 func (c *visionClient) responsesRequestBody(image imageRef) ([]byte, error) {
+	type inputImage struct {
+		Type     string `json:"type"`
+		ImageURL string `json:"image_url,omitempty"`
+		FileID   string `json:"file_id,omitempty"`
+		Detail   string `json:"detail,omitempty"`
+	}
+	detail := image.detail
+	if detail == "" {
+		detail = "auto"
+	}
+	imageBlock := inputImage{Type: "input_image", Detail: detail}
+	switch {
+	case image.fileID != "" || image.sourceType == "file":
+		if strings.TrimSpace(image.fileID) == "" {
+			return nil, fmt.Errorf("file_id is required")
+		}
+		imageBlock.FileID = image.fileID
+	case strings.TrimSpace(image.imageURL) != "":
+		imageBlock.ImageURL = image.imageURL
+	default:
+		return nil, fmt.Errorf("image_url is required")
+	}
+	encodedImage, err := json.Marshal(imageBlock)
+	if err != nil {
+		return nil, err
+	}
 	prompt, err := json.Marshal(struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -413,7 +448,7 @@ func (c *visionClient) responsesRequestBody(image imageRef) ([]byte, error) {
 			Content []json.RawMessage `json:"content"`
 		}{{
 			Role:    "user",
-			Content: []json.RawMessage{image.block, prompt},
+			Content: []json.RawMessage{encodedImage, prompt},
 		}},
 	}
 	return json.Marshal(request)
@@ -446,22 +481,31 @@ func shadowTarget(mainTarget string, transport profile.VisionTransport) (string,
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("main target must be an absolute URL")
 	}
+	destination := ""
 	switch transport {
-	case profile.VisionTransportAnthropicMessages, profile.VisionTransportOpenAIResponses:
-		return parsed.String(), nil
+	case profile.VisionTransportAnthropicMessages:
+		destination = "/v1/messages"
+	case profile.VisionTransportOpenAIResponses:
+		destination = "/v1/responses"
 	case profile.VisionTransportOpenAIChatCompletions:
-		if strings.HasSuffix(parsed.Path, "/chat/completions") {
-			return parsed.String(), nil
-		}
-		if !strings.HasSuffix(parsed.Path, "/responses") {
-			return "", fmt.Errorf("main target path must end with %q or %q", "/responses", "/chat/completions")
-		}
-		parsed.Path = strings.TrimSuffix(parsed.Path, "/responses") + "/chat/completions"
-		parsed.RawPath = ""
-		return parsed.String(), nil
+		destination = "/v1/chat/completions"
 	default:
 		return "", fmt.Errorf("unsupported vision transport %q", transport)
 	}
+	for _, suffix := range []string{
+		"/v1/chat/completions",
+		"/v1/responses",
+		"/v1/messages",
+		"/responses",
+	} {
+		if !strings.HasSuffix(parsed.Path, suffix) {
+			continue
+		}
+		parsed.Path = strings.TrimSuffix(parsed.Path, suffix) + destination
+		parsed.RawPath = ""
+		return parsed.String(), nil
+	}
+	return "", fmt.Errorf("main target path does not identify a supported inference operation")
 }
 
 func parseChatCompletionsDescription(body []byte) (string, error) {
@@ -539,4 +583,8 @@ type unsupportedImageSourceError struct {
 
 func (e unsupportedImageSourceError) Error() string {
 	return fmt.Sprintf("vision transport %q does not support %s images", e.transport, e.source)
+}
+
+func (e unsupportedImageSourceError) Unwrap() error {
+	return provider.NewFailure(provider.FailureRequestProtocolCapability, 0, nil)
 }

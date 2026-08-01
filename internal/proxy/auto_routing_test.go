@@ -994,6 +994,177 @@ func TestAutoRoutingReplansCompositeVisionForSwitchedModel(t *testing.T) {
 	}
 }
 
+func TestAutoRoutingFallsBackTargetAfterTransientVisionFailureBeforeAnswer(t *testing.T) {
+	var primaryAnalyzerCalls atomic.Int32
+	var primaryVisionCalls atomic.Int32
+	var primaryAnswerCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		if _, analyzer := root["system"]; analyzer {
+			primaryAnalyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			return
+		}
+		if model == "vision" {
+			primaryVisionCalls.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"vision overloaded"}`)
+			return
+		}
+		primaryAnswerCalls.Add(1)
+		http.Error(w, "answer must not use primary", http.StatusInternalServerError)
+	}))
+	defer primary.Close()
+
+	var backupVisionCalls atomic.Int32
+	var backupAnswerCalls atomic.Int32
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		switch request.Model {
+		case "vision":
+			backupVisionCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"backup visual evidence"}]}`)
+		case "fast":
+			backupAnswerCalls.Add(1)
+			if bytes.Contains(body, []byte(`"type":"image"`)) ||
+				!bytes.Contains(body, []byte("backup visual evidence")) {
+				t.Errorf("backup answer body=%s", body)
+			}
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"backup answer"}]}`)
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer backup.Close()
+
+	runtime := autoProxyRuntime(t, primary.URL, true)
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"fast", "vision"},
+	})
+	runtime.OverloadRules[0].MaxRetries = 0
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 3
+	runtime.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},{"type":"text","text":"比较这个界面布局"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK ||
+		primaryAnalyzerCalls.Load() != 1 || primaryVisionCalls.Load() != 1 ||
+		primaryAnswerCalls.Load() != 0 || backupVisionCalls.Load() != 1 ||
+		backupAnswerCalls.Load() != 1 || !strings.Contains(response.Body.String(), "backup answer") {
+		t.Fatalf(
+			"status=%d primary(analyzer=%d vision=%d answer=%d) backup(vision=%d answer=%d) body=%q",
+			response.Code,
+			primaryAnalyzerCalls.Load(), primaryVisionCalls.Load(), primaryAnswerCalls.Load(),
+			backupVisionCalls.Load(), backupAnswerCalls.Load(), response.Body.String(),
+		)
+	}
+}
+
+func TestAutoRoutingFallsBackTargetWhilePreparingSwitchedModel(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	var fastAnswerCalls atomic.Int32
+	var primaryVisionCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		if _, analyzer := root["system"]; analyzer {
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			return
+		}
+		switch model {
+		case "fast":
+			fastAnswerCalls.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"answer overloaded"}`)
+		case "vision":
+			primaryVisionCalls.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"vision overloaded"}`)
+		default:
+			http.Error(w, "unexpected primary model", http.StatusBadRequest)
+		}
+	}))
+	defer primary.Close()
+
+	var backupVisionCalls atomic.Int32
+	var strongAnswerCalls atomic.Int32
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		switch request.Model {
+		case "vision":
+			backupVisionCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"switched visual evidence"}]}`)
+		case "strong":
+			strongAnswerCalls.Add(1)
+			if !bytes.Contains(body, []byte("switched visual evidence")) {
+				t.Errorf("strong answer body=%s", body)
+			}
+			_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"strong backup answer"}]}`)
+		default:
+			http.Error(w, "unexpected backup model", http.StatusBadRequest)
+		}
+	}))
+	defer backup.Close()
+
+	runtime := autoProxyRuntime(t, primary.URL, true)
+	fast := runtime.Models["fast"]
+	fast.SupportsVision = true
+	runtime.Models["fast"] = fast
+	strong := runtime.Models["strong"]
+	strong.SupportsVision = false
+	runtime.Models["strong"] = strong
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"strong", "vision"},
+	})
+	runtime.OverloadRules[0].MaxRetries = 0
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 3
+	runtime.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},{"type":"text","text":"比较这个界面布局"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || analyzerCalls.Load() != 1 ||
+		fastAnswerCalls.Load() != 1 || primaryVisionCalls.Load() != 1 ||
+		backupVisionCalls.Load() != 1 || strongAnswerCalls.Load() != 1 ||
+		!strings.Contains(response.Body.String(), "strong backup answer") {
+		t.Fatalf(
+			"status=%d analyzer=%d fast=%d primary_vision=%d backup_vision=%d strong=%d body=%q",
+			response.Code, analyzerCalls.Load(), fastAnswerCalls.Load(),
+			primaryVisionCalls.Load(), backupVisionCalls.Load(), strongAnswerCalls.Load(),
+			response.Body.String(),
+		)
+	}
+}
+
 func TestAutoRoutingPersistsStructuredRouteTrace(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

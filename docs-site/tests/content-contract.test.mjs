@@ -293,6 +293,7 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(isolation, /逻辑隔离合同[\s\S]*共享无状态代码和 SQLite 是允许的/);
   assert.match(routing, /本地规则优先[\s\S]*无法稳定判断[\s\S]*轻量任务分析器/);
   assert.match(routing, /Anthropic `POST \/v1\/messages`[\s\S]*OpenAI `POST \/v1\/chat\/completions`、`POST \/v1\/responses`[\s\S]*unsupported operation/);
+  assert.match(routing, /入口路径决定唯一操作[\s\S]*不会根据正文[\s\S]*Responses 字符串 `input`/);
   assert.match(routing, /任务类型按 active 策略映射到 Route[\s\S]*默认 Route/);
   assert.match(routing, /入口[\s\S]*预检[\s\S]*高风险请求只检查强模型基线[\s\S]*其他请求[\s\S]*候选硬约束过滤/);
   assert.match(routing, /失败、超时或置信度不足[\s\S]*强模型基线/);
@@ -315,6 +316,8 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(runtime, /任务分析先消耗预算[\s\S]*ExecutionPlan 固定剩余预算[\s\S]*异步评测不占用已结束的在线请求预算/);
   assert.match(runtime, /任务分析器[\s\S]*401\/403[\s\S]*硬失败[\s\S]*不回退到强模型基线/);
   assert.match(runtime, /视觉缓存键至少包含 Profile[\s\S]*当前问题上下文[\s\S]*鉴权域/);
+  assert.match(runtime, /OpenAI Chat 传输不能承载 `file_id`[\s\S]*回答模型和视觉模型共同支持的 Target/);
+  assert.match(runtime, /视觉前置临时故障[\s\S]*兼容 Target\/模型[\s\S]*完整最坏[\s\S]*尚未实现/);
   assert.match(runtime, /Session 键使用 HMAC[\s\S]*原始 Session ID[\s\S]*Profile[\s\S]*Route[\s\S]*鉴权域[\s\S]*缺少有效 Session ID[\s\S]*不建立跨请求绑定/);
   assert.match(evaluation, /默认关闭/);
   assert.match(evaluation, /有界内存队列[\s\S]*队列满时直接丢弃/);

@@ -1,34 +1,18 @@
 package vision
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
 
-func TestCollectTaskContext(t *testing.T) {
-	blocks := []json.RawMessage{
-		json.RawMessage(`{"type":"text","text":"  first  "}`),
-		json.RawMessage(`{"type":"image","source":{}}`),
-		json.RawMessage(`{"type":"text","text":"second"}`),
-		json.RawMessage(`{"type":"text","text":42}`),
-		json.RawMessage(`null`),
-		json.RawMessage(`{"type":"text","text":" \n\t "}`),
-	}
-	if got := collectTaskContext(blocks, "text"); got != "first\nsecond" {
+func TestBoundTaskContextPreservesShortContext(t *testing.T) {
+	if got := boundTaskContext("first\nsecond"); got != "first\nsecond" {
 		t.Fatalf("context=%q", got)
 	}
 }
 
-func TestCollectTaskContextTruncatesByUnicodeRune(t *testing.T) {
-	block, err := json.Marshal(map[string]string{
-		"type": "text",
-		"text": strings.Repeat("界", taskContextRuneLimit+20),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := collectTaskContext([]json.RawMessage{block}, "text")
+func TestBoundTaskContextTruncatesByUnicodeRune(t *testing.T) {
+	got := boundTaskContext(strings.Repeat("界", taskContextRuneLimit+20))
 	if len([]rune(got)) != taskContextRuneLimit ||
 		!strings.HasSuffix(got, taskContextTruncatedSuffix) {
 		t.Fatalf("context runes=%d context=%q", len([]rune(got)), got)

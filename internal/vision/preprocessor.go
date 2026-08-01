@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
@@ -139,9 +140,6 @@ func newPreprocessorForProtocol(
 	}
 	if protocol == profile.ProtocolOpenAI {
 		parse = func(root map[string]json.RawMessage) (requestDocument, error) {
-			if _, chat := root["messages"]; chat {
-				return parseChatCompletionsRoot(root)
-			}
 			return parseResponsesRoot(root)
 		}
 	}
@@ -195,6 +193,53 @@ func (p *Preprocessor) ProcessTargetWithBudget(
 	mainTarget string,
 	reserveCall func(context.Context) error,
 ) ([]byte, error) {
+	return p.processTargetWithBudget(ctx, headers, body, mainTarget, reserveCall, p.parse)
+}
+
+func (p *Preprocessor) ProcessOperationTargetWithBudget(
+	ctx context.Context,
+	headers http.Header,
+	operation llmrequest.Operation,
+	body []byte,
+	mainTarget string,
+	reserveCall func(context.Context) error,
+) ([]byte, error) {
+	parse, err := requestParser(operation)
+	if err != nil {
+		return nil, &processError{status: http.StatusBadRequest, err: err}
+	}
+	return p.processTargetWithBudget(ctx, headers, body, mainTarget, reserveCall, parse)
+}
+
+func requestParser(
+	operation llmrequest.Operation,
+) (func(map[string]json.RawMessage) (requestDocument, error), error) {
+	switch operation {
+	case llmrequest.OperationAnthropicMessages:
+		return func(root map[string]json.RawMessage) (requestDocument, error) {
+			return parseMessagesRoot(root)
+		}, nil
+	case llmrequest.OperationOpenAIChatCompletions:
+		return func(root map[string]json.RawMessage) (requestDocument, error) {
+			return parseChatCompletionsRoot(root)
+		}, nil
+	case llmrequest.OperationOpenAIResponses:
+		return func(root map[string]json.RawMessage) (requestDocument, error) {
+			return parseResponsesRoot(root)
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported inference operation %q", operation)
+	}
+}
+
+func (p *Preprocessor) processTargetWithBudget(
+	ctx context.Context,
+	headers http.Header,
+	body []byte,
+	mainTarget string,
+	reserveCall func(context.Context) error,
+	parse func(map[string]json.RawMessage) (requestDocument, error),
+) ([]byte, error) {
 	root, err := parseRequestRoot(body)
 	if err != nil {
 		return nil, &processError{
@@ -212,7 +257,7 @@ func (p *Preprocessor) ProcessTargetWithBudget(
 		slog.Debug("vision.skipped", "profile", p.profile, "model", model, "reason", reason)
 		return body, nil
 	}
-	doc, err := p.parse(root)
+	doc, err := parse(root)
 	if err != nil {
 		return nil, &processError{
 			status: http.StatusBadRequest,
@@ -226,12 +271,13 @@ func (p *Preprocessor) ProcessTargetWithBudget(
 	if p.transport == profile.VisionTransportOpenAIChatCompletions {
 		for _, image := range images {
 			if image.sourceType == "file" {
+				cause := unsupportedImageSourceError{
+					transport: p.transport,
+					source:    "file_id",
+				}
 				return nil, &processError{
 					status: http.StatusBadRequest,
-					err: unsupportedImageSourceError{
-						transport: p.transport,
-						source:    "file_id",
-					},
+					err:    cause,
 				}
 			}
 		}
@@ -368,7 +414,7 @@ func (p *Preprocessor) ProcessTargetWithBudget(
 			err:    fmt.Errorf("rewrite request: %w", err),
 		}
 	}
-	unhandledImageCount, err := p.countImages(rewritten)
+	unhandledImageCount, err := p.countImages(rewritten, parse)
 	if err != nil {
 		return nil, &processError{
 			status: http.StatusBadGateway,
@@ -397,12 +443,15 @@ func (p *Preprocessor) ProcessTargetWithBudget(
 	return rewritten, nil
 }
 
-func (p *Preprocessor) countImages(body []byte) (int, error) {
+func (p *Preprocessor) countImages(
+	body []byte,
+	parse func(map[string]json.RawMessage) (requestDocument, error),
+) (int, error) {
 	root, err := parseRequestRoot(body)
 	if err != nil {
 		return 0, err
 	}
-	doc, err := p.parse(root)
+	doc, err := parse(root)
 	if err != nil {
 		return 0, err
 	}

@@ -9,7 +9,7 @@ Profile 是一套可独立选择的代理运行配置。请在 `/_admin/profiles
 - `v1` 是默认路由的保留值，不能作为 slug。
 - 名称不能为空；slug 在数据库中唯一。
 - `anthropic` 支持 Anthropic Messages、图片增强和 Anthropic 用量解析。
-- `openai` 支持 OpenAI Chat Completions 与 Responses；图片增强只处理 Responses。
+- `openai` 支持 OpenAI Chat Completions 与 Responses；两种操作都可处理图片增强。
 
 ## 路由与 Upstream
 
@@ -74,9 +74,9 @@ Profile 必须启用，不能直接停用；切换默认项时目标也必须启
 
 ## 视觉设置
 
-视觉增强适用于 Anthropic `POST /v1/messages` 和 OpenAI
-`POST /responses` / `POST /v1/responses`。Chat Completions 可作为 OpenAI
-识图接口，但 Chat Completions 主请求仍保持原样转发。字段和默认值如下：
+视觉增强适用于 Anthropic `POST /v1/messages`，以及 OpenAI
+`POST /v1/chat/completions`、`POST /responses` / `POST /v1/responses`。入口路径固定解析操作，
+不会根据正文顶层字段猜测协议。字段和默认值如下：
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
@@ -93,7 +93,9 @@ Profile 必须启用，不能直接停用；切换默认项时目标也必须启
 
 配置版本保持 `1`；旧 Profile 缺少 `transport` 时按协议补默认值，编辑保存一次即可
 写入。OpenAI Responses 影子请求固定使用 `store: false`。
-代理只收集同一条 `user` 消息的直接 Anthropic `text` 或 Responses `input_text` 块；
+代理只处理协议位置中的直接图片块：Anthropic/Chat 的 `messages[].content[]`，以及 Responses
+消息 `content[]` 和 `function_call_output.output[]`。协议字段之外的同名嵌套对象会忽略。
+代理只收集同一条 `user` 消息的直接 Anthropic/Chat `text` 或 Responses `input_text` 块；
 非字符串、非直接和空白块会忽略。各块经 trim 后按顺序用换行拼接，最多保留 4096 个
 Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编码嵌入影子提示词。其他消息
 中的文本和工具输出不会作为问题上下文发送。该上下文使视觉 Upstream 返回与当前问题相关
@@ -101,6 +103,10 @@ Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编
 关闭此上下文，缓存按实际上下文提示词隔离，因此不同问题可为同一图片生成独立缓存条目。
 上下文可能随模型返回的视觉调试描述出现，应按敏感数据处理。
 行为、安全边界和调优说明见[图片预处理](vision.md)。
+
+**破坏性行为变更：**OpenAI Chat Completions 主请求现在也会进入图片增强；不再保留此前仅把
+Chat 当作识图传输、却原样转发 Chat 主请求的行为。若不希望增强，请关闭视觉预处理或把主模型
+标记为支持视觉。
 
 ## 模型能力
 
@@ -146,7 +152,8 @@ Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编
 - 所有可能被调用的模型具备所需能力和输入/输出参考价格；
 - 策略名称符合 `YYYYMMDD-NNN`，默认 Route、任务映射和候选引用有效；
 - Route 质量/严重错误门槛与统一尝试预算均在有效范围内；
-- 开启视觉增强时，视觉模型也必须在模型目录中。
+- 开启视觉增强时，视觉模型也必须在模型目录中，明确支持视觉，并配置能容纳描述输出及单图
+  提示预留的上下文窗口和最大输出上限。
 
 运行时先用本地规则识别明显任务，无法确定时才调用轻量分析模型。分析超时、网络故障、过载、
 畸形输出或低置信度请求可使用满足硬约束的强模型基线；分析器的 401/403、不可重试 4xx 和
@@ -154,6 +161,11 @@ Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编
 完整成本最低者。计划内模型切换只允许发生在 `ClientCommit` 前，并和任务分析、视觉及重试
 共享调用次数、截止时间和费用预算。多 Target 可重试故障先在同模型内切换端点，备用端点耗尽后
 才尝试计划中的下一个模型。
+
+含图片的复合候选只使用回答模型与视觉模型共同支持的 Target；图片来源必须兼容视觉传输，例如
+OpenAI Chat 传输不能承载 `file_id`。主回答前的临时视觉故障会在预算内先尝试下一兼容 Target，
+再尝试计划内模型；鉴权、请求/能力与不可重试 4xx 错误立即停止。完整最坏调用图和复合原子预算
+预留尚未实现。
 
 “Session 绑定有效期”默认 `24h`，允许范围为 `5m` 到 `720h`。客户端可在 Auto 请求中发送
 `X-LLM-Proxy-Session-ID`；代理仅在同时存在 `Authorization`、`X-Api-Key`、`Api-Key` 或

@@ -3,7 +3,6 @@ package vision
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 const (
@@ -45,29 +44,7 @@ Return only:
 【不确定项】
 ...`
 
-func collectTaskContext(blocks []json.RawMessage, textBlockType string) string {
-	texts := make([]string, 0, len(blocks))
-	for _, block := range blocks {
-		if !isJSONType(block, '{') {
-			continue
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(block, &fields); err != nil {
-			continue
-		}
-		blockType, present, err := requiredString(fields, "type")
-		if err != nil || !present || blockType != textBlockType {
-			continue
-		}
-		value, present, err := requiredString(fields, "text")
-		if err != nil || !present {
-			continue
-		}
-		if value = strings.TrimSpace(value); value != "" {
-			texts = append(texts, value)
-		}
-	}
-	context := strings.Join(texts, "\n")
+func boundTaskContext(context string) string {
 	if len([]rune(context)) <= taskContextRuneLimit {
 		return context
 	}

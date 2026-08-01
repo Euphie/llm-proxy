@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
@@ -454,8 +455,19 @@ func (p *Planner) evaluateCandidate(
 			if !exists || !visionModel.HasInputPrice || !visionModel.HasOutputPrice {
 				return candidatePlan{}, false
 			}
+			if !visionTransportSupportsSources(p.vision.Transport, request.Facts.ImageSources) {
+				return candidatePlan{}, false
+			}
+			targets = intersectTargetPlans(targets, p.targets[p.vision.Model])
+			if len(targets) == 0 {
+				return candidatePlan{}, false
+			}
 			visionMode = VisionComposite
-			visionCallCost = estimateCallCost(4096, p.vision.MaxTokens, visionModel)
+			visionCallCost = estimateCallCost(
+				profile.VisionImagePromptReserveTokens,
+				p.vision.MaxTokens,
+				visionModel,
+			)
 			visionCost = multiplyCost(visionCallCost, request.Facts.ImageCount)
 		default:
 			return candidatePlan{}, false
@@ -580,6 +592,49 @@ func buildTargetPlans(runtime profile.Runtime) map[string][]TargetPlan {
 
 func cloneTargetPlans(targets []TargetPlan) []TargetPlan {
 	return append([]TargetPlan(nil), targets...)
+}
+
+func intersectTargetPlans(answer []TargetPlan, vision []TargetPlan) []TargetPlan {
+	visionTargets := make(map[string]struct{}, len(vision))
+	for _, target := range vision {
+		visionTargets[target.id] = struct{}{}
+	}
+	compatible := make([]TargetPlan, 0, len(answer))
+	for _, target := range answer {
+		if _, ok := visionTargets[target.id]; ok {
+			compatible = append(compatible, target)
+		}
+	}
+	return compatible
+}
+
+func visionTransportSupportsSources(
+	transport profile.VisionTransport,
+	sources []llmrequest.ImageSourceKind,
+) bool {
+	for _, source := range sources {
+		switch transport {
+		case profile.VisionTransportAnthropicMessages:
+			if source != llmrequest.ImageSourceBase64 &&
+				source != llmrequest.ImageSourceURL &&
+				source != llmrequest.ImageSourceFileID {
+				return false
+			}
+		case profile.VisionTransportOpenAIResponses:
+			if source != llmrequest.ImageSourceURL &&
+				source != llmrequest.ImageSourceDataURL &&
+				source != llmrequest.ImageSourceFileID {
+				return false
+			}
+		case profile.VisionTransportOpenAIChatCompletions:
+			if source != llmrequest.ImageSourceURL && source != llmrequest.ImageSourceDataURL {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func cloneAutoRouting(auto profile.AutoRoutingRuntime) profile.AutoRoutingRuntime {

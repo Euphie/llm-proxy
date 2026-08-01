@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
@@ -20,22 +21,23 @@ var (
 	ErrInvalidRequest       = errors.New("invalid intelligent routing request")
 )
 
-type Operation string
+type Operation = llmrequest.Operation
 
 const (
-	OperationAnthropicMessages     Operation = "anthropic_messages"
-	OperationOpenAIChatCompletions Operation = "openai_chat_completions"
-	OperationOpenAIResponses       Operation = "openai_responses"
+	OperationAnthropicMessages     = llmrequest.OperationAnthropicMessages
+	OperationOpenAIChatCompletions = llmrequest.OperationOpenAIChatCompletions
+	OperationOpenAIResponses       = llmrequest.OperationOpenAIResponses
 )
 
 type RequestFacts struct {
-	EstimatedInputTokens     int  `json:"estimated_input_tokens"`
-	RequestedOutputTokens    int  `json:"requested_output_tokens"`
-	ImageCount               int  `json:"image_count"`
-	HasImages                bool `json:"has_images"`
-	HasTools                 bool `json:"has_tools"`
-	RequiresStructuredOutput bool `json:"requires_structured_output"`
-	Stream                   bool `json:"stream"`
+	EstimatedInputTokens     int                          `json:"estimated_input_tokens"`
+	RequestedOutputTokens    int                          `json:"requested_output_tokens"`
+	ImageCount               int                          `json:"image_count"`
+	HasImages                bool                         `json:"has_images"`
+	ImageSources             []llmrequest.ImageSourceKind `json:"image_sources,omitempty"`
+	HasTools                 bool                         `json:"has_tools"`
+	RequiresStructuredOutput bool                         `json:"requires_structured_output"`
+	Stream                   bool                         `json:"stream"`
 }
 
 type Request struct {
@@ -148,13 +150,18 @@ func extractFacts(
 	root map[string]json.RawMessage,
 	body []byte,
 ) RequestFacts {
-	imageCount := countImages(root)
+	inspection := llmrequest.Inspect(operation, root)
+	imageCount := len(inspection.Images)
 	facts := RequestFacts{
 		EstimatedInputTokens: (len(body) + 3) / 4,
 		ImageCount:           imageCount,
 		HasImages:            imageCount > 0,
+		ImageSources:         make([]llmrequest.ImageSourceKind, imageCount),
 		HasTools:             nonEmptyArray(root["tools"]),
 		Stream:               boolValue(root["stream"]),
+	}
+	for index, image := range inspection.Images {
+		facts.ImageSources[index] = image.SourceKind
 	}
 	switch operation {
 	case OperationAnthropicMessages:
@@ -172,39 +179,6 @@ func extractFacts(
 		facts.RequiresStructuredOutput = nestedType(root["text"], "format") == "json_schema"
 	}
 	return facts
-}
-
-func countImages(value any) int {
-	switch typed := value.(type) {
-	case map[string]json.RawMessage:
-		count := 0
-		for _, raw := range typed {
-			var decoded any
-			if err := json.Unmarshal(raw, &decoded); err == nil {
-				count += countImages(decoded)
-			}
-		}
-		return count
-	case map[string]any:
-		if blockType, ok := typed["type"].(string); ok {
-			switch blockType {
-			case "image", "image_url", "input_image":
-				return 1
-			}
-		}
-		count := 0
-		for _, child := range typed {
-			count += countImages(child)
-		}
-		return count
-	case []any:
-		count := 0
-		for _, child := range typed {
-			count += countImages(child)
-		}
-		return count
-	}
-	return 0
 }
 
 func positiveInt(raw json.RawMessage) int {
@@ -253,62 +227,11 @@ func cloneRoot(root map[string]json.RawMessage) map[string]json.RawMessage {
 }
 
 func (r Request) routingText() string {
-	field := "messages"
-	if r.Operation == OperationOpenAIResponses {
-		field = "input"
-	}
-	var items []json.RawMessage
-	if json.Unmarshal(r.root[field], &items) != nil {
-		return ""
-	}
-	texts := make([]string, 0, len(items))
-	for _, item := range items {
-		var message map[string]json.RawMessage
-		if json.Unmarshal(item, &message) != nil {
-			continue
-		}
-		var role string
-		_ = json.Unmarshal(message["role"], &role)
-		if role != "user" {
-			continue
-		}
-		texts = append(texts, contentTexts(message["content"])...)
-	}
-	joined := strings.TrimSpace(strings.Join(texts, "\n"))
+	inspection := llmrequest.Inspect(r.Operation, r.root)
+	joined := strings.TrimSpace(strings.Join(inspection.Texts, "\n"))
 	runes := []rune(joined)
 	if len(runes) > routingTextRuneLimit {
 		return string(runes[:routingTextRuneLimit])
 	}
 	return joined
-}
-
-func contentTexts(raw json.RawMessage) []string {
-	var direct string
-	if json.Unmarshal(raw, &direct) == nil {
-		if direct = strings.TrimSpace(direct); direct != "" {
-			return []string{direct}
-		}
-		return nil
-	}
-	var blocks []json.RawMessage
-	if json.Unmarshal(raw, &blocks) != nil {
-		return nil
-	}
-	texts := make([]string, 0, len(blocks))
-	for _, block := range blocks {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(block, &fields) != nil {
-			continue
-		}
-		var blockType, text string
-		_ = json.Unmarshal(fields["type"], &blockType)
-		if blockType != "text" && blockType != "input_text" {
-			continue
-		}
-		_ = json.Unmarshal(fields["text"], &text)
-		if text = strings.TrimSpace(text); text != "" {
-			texts = append(texts, text)
-		}
-	}
-	return texts
 }

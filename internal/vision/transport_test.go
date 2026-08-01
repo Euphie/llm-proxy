@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
@@ -42,7 +44,7 @@ func TestShadowTarget(t *testing.T) {
 			want:      "https://example.test/v1/chat/completions",
 		},
 		{
-			name: "chat invalid main", main: "https://example.test/v1/messages",
+			name: "chat invalid main", main: "https://example.test/v1/embeddings",
 			transport: profile.VisionTransportOpenAIChatCompletions,
 			wantErr:   true,
 		},
@@ -61,6 +63,46 @@ func TestShadowTarget(t *testing.T) {
 			}
 			if got != test.want {
 				t.Fatalf("target=%q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestShadowTargetNormalizesConfiguredTransportAndPreservesBasePrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		main      string
+		transport profile.VisionTransport
+		want      string
+	}{
+		{
+			name:      "responses from chat entrance",
+			main:      "https://example.test/openai/v1/chat/completions?trace=1",
+			transport: profile.VisionTransportOpenAIResponses,
+			want:      "https://example.test/openai/v1/responses?trace=1",
+		},
+		{
+			name:      "chat from responses entrance",
+			main:      "https://example.test/openai/v1/responses?trace=1",
+			transport: profile.VisionTransportOpenAIChatCompletions,
+			want:      "https://example.test/openai/v1/chat/completions?trace=1",
+		},
+		{
+			name:      "messages from responses path",
+			main:      "https://example.test/anthropic/v1/responses?trace=1",
+			transport: profile.VisionTransportAnthropicMessages,
+			want:      "https://example.test/anthropic/v1/messages?trace=1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := shadowTarget(test.main, test.transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("shadow target=%q, want %q", got, test.want)
 			}
 		})
 	}
@@ -123,6 +165,67 @@ func TestOpenAIVisionClientUsesChatCompletionsTransport(t *testing.T) {
 	}
 	if got != "chat description" || calls.Load() != 1 {
 		t.Fatalf("description=%q calls=%d", got, calls.Load())
+	}
+}
+
+func TestChatEntranceBuildsResponsesImageBlockForResponsesTransport(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("path=%q, want /v1/responses", r.URL.Path)
+		}
+		var request struct {
+			Model string `json:"model"`
+			Input []struct {
+				Content []struct {
+					Type     string `json:"type"`
+					ImageURL string `json:"image_url"`
+					Detail   string `json:"detail"`
+				} `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Model != "vision-model" || len(request.Input) != 1 ||
+			len(request.Input[0].Content) != 2 ||
+			request.Input[0].Content[0].Type != "input_image" ||
+			request.Input[0].Content[0].ImageURL != "data:image/png;base64,aW1hZ2U=" ||
+			request.Input[0].Content[0].Detail != "high" {
+			t.Errorf("request=%+v", request)
+		}
+		_, _ = io.WriteString(w, `{"output":[{"content":[{"type":"output_text","text":"response description"}]}]}`)
+	}))
+	defer server.Close()
+
+	cfg := testVisionConfig(server.URL)
+	cfg.Protocol = profile.ProtocolOpenAI
+	cfg.Models = profile.ModelCatalog{
+		"main": {ID: "main", SupportsVision: false},
+	}
+	cfg.Vision.Transport = profile.VisionTransportOpenAIResponses
+	cfg.Vision.Model = "vision-model"
+	cfg.Vision.MaxConcurrency = 1
+	cfg.Vision.CacheMaxEntries = 8
+	cfg.Vision.CacheTTL = time.Minute
+	p := New(cfg, server.Client(), nil)
+	body := []byte(`{"model":"main","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,aW1hZ2U=","detail":"high"}},{"type":"text","text":"inspect"}]}]}`)
+
+	rewritten, err := p.ProcessOperationTargetWithBudget(
+		context.Background(),
+		nil,
+		llmrequest.OperationOpenAIChatCompletions,
+		body,
+		server.URL+"/v1/chat/completions",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || strings.Contains(string(rewritten), `"type":"image_url"`) ||
+		!strings.Contains(string(rewritten), "response description") {
+		t.Fatalf("calls=%d rewritten=%s", calls.Load(), rewritten)
 	}
 }
 

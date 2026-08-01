@@ -19,7 +19,7 @@ Profile -> 入口 / 请求级预检 -> 请求特征 -> 本地规则
 
 ## 支持的操作
 
-v1 的 `model=auto` 只支持 Anthropic `POST /v1/messages`，以及 OpenAI `POST /v1/chat/completions`、`POST /v1/responses`。这些操作必须能被入口适配器完整解析。其他方法或路径使用 `auto` 时返回明确的 unsupported operation 错误；显式模型继续沿用当前透传行为。
+v1 的 `model=auto` 只支持 Anthropic `POST /v1/messages`，以及 OpenAI `POST /v1/chat/completions`、`POST /v1/responses`。入口路径决定唯一操作，适配器不会根据正文中碰巧出现的 `messages` 或 `input` 猜协议。图片和任务文本共享同一份操作感知解析结果：只统计协议位置中的直接图片，忽略其他字段中的同名嵌套对象；Responses 字符串 `input` 和直接 `input_text` 仍可用于任务分析。其他方法或路径使用 `auto` 时返回明确的 unsupported operation 错误；显式模型继续沿用当前透传行为。
 
 ## 显式模型与 auto
 
