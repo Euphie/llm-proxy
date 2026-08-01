@@ -12,6 +12,8 @@ var (
 	routingIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 )
 
+const defaultRoutingSessionTTL = 24 * time.Hour
+
 type AutoRoutingConfig struct {
 	Enabled                  bool                  `json:"enabled"`
 	Participants             []string              `json:"participants,omitempty"`
@@ -19,6 +21,7 @@ type AutoRoutingConfig struct {
 	TaskAnalyzerModel        string                `json:"task_analyzer_model,omitempty"`
 	AnalyzerTimeout          string                `json:"analyzer_timeout,omitempty"`
 	AnalyzerMinConfidenceBPS int                   `json:"analyzer_min_confidence_bps,omitempty"`
+	SessionTTL               string                `json:"session_ttl,omitempty"`
 	Strategy                 RoutingStrategyConfig `json:"strategy,omitempty"`
 }
 
@@ -67,6 +70,7 @@ type AutoRoutingRuntime struct {
 	TaskAnalyzerModel        string
 	AnalyzerTimeout          time.Duration
 	AnalyzerMinConfidenceBPS int
+	SessionTTL               time.Duration
 	Strategy                 RoutingStrategyRuntime
 
 	participantSet map[string]struct{}
@@ -163,6 +167,13 @@ func resolveAutoRouting(
 	if config.AnalyzerMinConfidenceBPS < 0 || config.AnalyzerMinConfidenceBPS > 10_000 {
 		return AutoRoutingRuntime{}, invalidAuto("analyzer minimum confidence must be between 0 and 10000")
 	}
+	sessionTTL := defaultRoutingSessionTTL
+	if config.SessionTTL != "" {
+		sessionTTL, err = time.ParseDuration(config.SessionTTL)
+		if err != nil || sessionTTL < 5*time.Minute || sessionTTL > 30*24*time.Hour {
+			return AutoRoutingRuntime{}, invalidAuto("Session TTL must be between 5m and 720h")
+		}
+	}
 
 	strategy, err := resolveRoutingStrategy(config.Strategy, participantSet)
 	if err != nil {
@@ -179,6 +190,7 @@ func resolveAutoRouting(
 		TaskAnalyzerModel:        analyzer,
 		AnalyzerTimeout:          analyzerTimeout,
 		AnalyzerMinConfidenceBPS: config.AnalyzerMinConfidenceBPS,
+		SessionTTL:               sessionTTL,
 		Strategy:                 strategy,
 		participantSet:           participantSet,
 	}, nil

@@ -687,7 +687,7 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"data_dir":             fixture.dataDir,
 		"database_file":        "llm-proxy.db",
 		"database_bytes":       float64(databaseInfo.Size()),
-		"schema_version":       float64(2),
+		"schema_version":       float64(3),
 		"default_profile_id":   float64(first.ID),
 		"password_must_change": false,
 	}

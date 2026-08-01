@@ -19,6 +19,7 @@ import (
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/proxy"
+	"github.com/Euphie/llm-proxy/internal/routing"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
@@ -56,6 +57,10 @@ func New(options Options) (*App, error) {
 		return nil, errors.Join(cause, usageErr, databaseErr)
 	}
 
+	routingSessions, err := routing.NewSessionStore(db, time.Now)
+	if err != nil {
+		return fail(fmt.Errorf("initialize routing Sessions: %w", err))
+	}
 	accounts := admin.NewAccountStore(db)
 	sessions := admin.NewSessionStore(db, time.Now)
 	profiles := profile.NewStore(db)
@@ -66,7 +71,7 @@ func New(options Options) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve Profile %q: %w", record.Slug, err)
 		}
-		return proxy.New(runtime, client, usage), nil
+		return proxy.NewWithSessionStore(runtime, client, usage, routingSessions), nil
 	}
 	coordinator := gateway.NewCoordinator(profiles, registry, build)
 

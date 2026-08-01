@@ -24,6 +24,15 @@ import (
 // automatically retrying when the response matches an overload rule.
 // Pass a non-nil *stats.DB to enable async token usage recording.
 func New(cfg profile.Runtime, client *http.Client, sdb *stats.DB) http.Handler {
+	return NewWithSessionStore(cfg, client, sdb, nil)
+}
+
+func NewWithSessionStore(
+	cfg profile.Runtime,
+	client *http.Client,
+	sdb *stats.DB,
+	sessions *routing.SessionStore,
+) http.Handler {
 	var visionPreprocessor *vision.Preprocessor
 	if cfg.Vision.Enabled && strings.TrimSpace(cfg.Vision.Model) != "" {
 		visionPreprocessor = vision.New(cfg, client, sdb)
@@ -38,22 +47,24 @@ func New(cfg profile.Runtime, client *http.Client, sdb *stats.DB) http.Handler {
 		}
 	}
 	return &handler{
-		cfg:     cfg,
-		client:  client,
-		stats:   sdb,
-		parser:  stats.NewParser(string(cfg.Protocol)),
-		vision:  visionPreprocessor,
-		routing: routeEngine,
+		cfg:      cfg,
+		client:   client,
+		stats:    sdb,
+		parser:   stats.NewParser(string(cfg.Protocol)),
+		vision:   visionPreprocessor,
+		routing:  routeEngine,
+		sessions: sessions,
 	}
 }
 
 type handler struct {
-	cfg     profile.Runtime
-	client  *http.Client
-	stats   *stats.DB
-	parser  stats.Parser
-	vision  *vision.Preprocessor
-	routing *routing.Engine
+	cfg      profile.Runtime
+	client   *http.Client
+	stats    *stats.DB
+	parser   stats.Parser
+	vision   *vision.Preprocessor
+	routing  *routing.Engine
+	sessions *routing.SessionStore
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +75,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	slog.Info("->", "method", r.Method, "path", r.URL.Path)
+	sessionID := singleSessionID(r.Header)
+	r.Header.Del(routing.SessionIDHeader)
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -82,6 +95,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelAttemptIndex := 0
 	isAuto := false
 	autoStream := false
+	var sessionKey routing.SessionKey
+	sessionKeyValid := false
+	sessionBindingUsed := false
 	if model, ok := routing.RequestedModel(body); ok && model == routing.AutoModel {
 		isAuto = true
 		if h.routing == nil {
@@ -104,7 +120,41 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var cancel context.CancelFunc
 		budget, requestCtx, cancel = h.routing.NewAttemptBudget(r.Context())
 		defer cancel()
-		plan, classification, routeErr = h.routing.Route(requestCtx, r.Header, routeRequest, budget)
+		plan, classification, routeErr = h.routing.RouteWithPreference(
+			requestCtx,
+			r.Header,
+			routeRequest,
+			budget,
+			func(routeID string) routing.SessionPreference {
+				if h.sessions == nil || sessionID == "" {
+					return routing.SessionPreference{}
+				}
+				key, ok := h.sessions.Key(
+					r.Header,
+					sessionID,
+					h.cfg.ID,
+					routeID,
+					routing.SessionPurposeLLM,
+				)
+				if !ok {
+					return routing.SessionPreference{}
+				}
+				sessionKey = key
+				sessionKeyValid = true
+				binding, found, err := h.sessions.Get(requestCtx, key)
+				if err != nil {
+					slog.Warn("routing.session.read_failed", "profile", label, "route", routeID, "error", err)
+					return routing.SessionPreference{}
+				}
+				if !found {
+					return routing.SessionPreference{}
+				}
+				sessionBindingUsed = true
+				return routing.SessionPreference{
+					Model: binding.Model, MinQualityScoreBPS: binding.QualityScoreBPS,
+				}
+			},
+		)
 		if routeErr != nil {
 			if requestCtx.Err() != nil {
 				return
@@ -152,6 +202,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"vision_mode", plan.VisionMode(),
 			"planned_model_attempts", len(modelAttempts),
 			"classification_source", classification.Source,
+			"decision_reason", plan.Reason(),
+			"session_binding_used", sessionBindingUsed,
 			"estimated_cost_micro_usd", plan.EstimatedCostMicroUSD(),
 			"worst_case_cost_micro_usd", plan.WorstCaseCostMicroUSD())
 	}
@@ -340,6 +392,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					Path:        r.URL.Path,
 				}, captured, h.parser)
 			}
+			if isAuto && sessionKeyValid && modelAttemptIndex == 0 {
+				h.bindRoutingSession(sessionKey, plan, currentAttempt)
+			}
 			return
 		}
 
@@ -377,6 +432,37 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Non-overload error: forward as-is
 		forward(w, resp, errBody)
 		return
+	}
+}
+
+func singleSessionID(headers http.Header) string {
+	values := headers.Values(routing.SessionIDHeader)
+	if len(values) != 1 {
+		return ""
+	}
+	return values[0]
+}
+
+func (h *handler) bindRoutingSession(
+	key routing.SessionKey,
+	plan routing.ExecutionPlan,
+	attempt routing.ModelAttemptPlan,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.sessions.Bind(ctx, key, routing.SessionBinding{
+		ProfileID: h.cfg.ID,
+		Route:     plan.Route(), Purpose: routing.SessionPurposeLLM,
+		Model: attempt.Model(), QualityScoreBPS: attempt.QualityScoreBPS(),
+		Strategy: plan.Strategy(),
+	}, h.cfg.AutoRouting.SessionTTL); err != nil {
+		slog.Warn(
+			"routing.session.write_failed",
+			"profile", h.cfg.Slug,
+			"route", plan.Route(),
+			"model", attempt.Model(),
+			"error", err,
+		)
 	}
 }
 

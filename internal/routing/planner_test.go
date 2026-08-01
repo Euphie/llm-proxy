@@ -31,6 +31,53 @@ func TestPlannerChoosesLowestCostQualifiedCandidate(t *testing.T) {
 	}
 }
 
+func TestPlannerKeepsSessionModelAndOnlyMovesToEqualOrHigherQuality(t *testing.T) {
+	runtime := routingRuntime(t, false)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`)
+	classification := Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	}
+
+	plan, err := planner.PlanWithPreference(request, classification, SessionPreference{
+		Model: "strong", MinQualityScoreBPS: 9900,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Model() != "strong" || plan.Reason() != "Session binding" {
+		t.Fatalf("plan=%+v", plan.Snapshot())
+	}
+	if attempts := plan.ModelAttempts(); len(attempts) != 1 ||
+		attempts[0].Model() != "strong" || attempts[0].QualityScoreBPS() != 9900 {
+		t.Fatalf("attempts=%+v", attempts)
+	}
+}
+
+func TestPlannerUpgradesSessionWhenBoundModelCannotSatisfyRequest(t *testing.T) {
+	config := routingConfig(false)
+	unsupported := false
+	config.Models[0].SupportsTools = &unsupported
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":"edit"}]}`)
+
+	plan, err := planner.PlanWithPreference(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	}, SessionPreference{Model: "fast", MinQualityScoreBPS: 9200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Model() != "strong" || plan.ModelAttempts()[0].QualityScoreBPS() < 9200 {
+		t.Fatalf("plan=%+v", plan.Snapshot())
+	}
+}
+
 func TestPlannerFreezesPrimaryAndStrongFallbackAttempts(t *testing.T) {
 	runtime := routingRuntime(t, false)
 	planner, err := NewPlanner(runtime)

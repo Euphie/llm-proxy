@@ -172,7 +172,7 @@ func TestSystemAPIUsesConfiguredDataDirectoryAndVersion(t *testing.T) {
 		body["data_dir"] != dataDir ||
 		body["database_file"] != "llm-proxy.db" ||
 		body["database_bytes"] != float64(databaseInfo.Size()) ||
-		body["schema_version"] != float64(2) ||
+		body["schema_version"] != float64(3) ||
 		body["default_profile_id"] != float64(0) ||
 		body["password_must_change"] != false {
 		t.Fatalf("system=%+v", body)

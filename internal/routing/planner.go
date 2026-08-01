@@ -36,6 +36,11 @@ type Classification struct {
 	Source        ClassificationSource
 }
 
+type SessionPreference struct {
+	Model              string
+	MinQualityScoreBPS int
+}
+
 type VisionMode string
 
 const (
@@ -83,6 +88,7 @@ type ExecutionPlanSnapshot struct {
 type ModelAttemptPlan struct {
 	model                  string
 	visionMode             VisionMode
+	qualityScoreBPS        int
 	answerCallCostMicroUSD int64
 	visionCallCostMicroUSD int64
 }
@@ -90,6 +96,7 @@ type ModelAttemptPlan struct {
 type ModelAttemptSnapshot struct {
 	Model                  string
 	VisionMode             VisionMode
+	QualityScoreBPS        int
 	AnswerCallCostMicroUSD int64
 	VisionCallCostMicroUSD int64
 }
@@ -107,10 +114,15 @@ func NewPlanner(runtime profile.Runtime) (*Planner, error) {
 }
 
 func (p *Planner) Plan(request Request, classification Classification) (ExecutionPlan, error) {
-	routeID := p.strategy.DefaultRoute
-	if mapped, ok := p.strategy.TaskRoutes[classification.TaskType]; ok {
-		routeID = mapped
-	}
+	return p.PlanWithPreference(request, classification, SessionPreference{})
+}
+
+func (p *Planner) PlanWithPreference(
+	request Request,
+	classification Classification,
+	preference SessionPreference,
+) (ExecutionPlan, error) {
+	routeID := p.RouteID(classification)
 	route := p.strategy.Routes[routeID]
 
 	if classification.Risk == RiskHigh {
@@ -125,13 +137,15 @@ func (p *Planner) Plan(request Request, classification Classification) (Executio
 	ranked := make([]rankedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.QualityScoreBPS < route.MinQualityBPS ||
-			candidate.SevereErrorRateBPS > route.MaxSevereErrorRateBPS {
+			candidate.SevereErrorRateBPS > route.MaxSevereErrorRateBPS ||
+			candidate.QualityScoreBPS < preference.MinQualityScoreBPS {
 			continue
 		}
 		planned, ok := p.evaluateCandidate(request, candidate.Model, classification.Source)
 		if !ok {
 			continue
 		}
+		planned.qualityScoreBPS = candidate.QualityScoreBPS
 		ranked = append(ranked, rankedCandidate{plan: planned, metrics: candidate})
 	}
 	if len(ranked) == 0 {
@@ -145,13 +159,30 @@ func (p *Planner) Plan(request Request, classification Classification) (Executio
 	sort.SliceStable(ranked, func(i, j int) bool {
 		return betterCandidate(ranked[i].plan, ranked[j].plan, ranked[i].metrics, ranked[j].metrics)
 	})
-	attempts := p.plannedAttempts(request, classification.Source, ranked)
+	reason := "lowest complete cost"
+	if preference.Model != "" {
+		for index := range ranked {
+			if ranked[index].plan.model == preference.Model {
+				ranked[0], ranked[index] = ranked[index], ranked[0]
+				reason = "Session binding"
+				break
+			}
+		}
+	}
+	attempts := p.plannedAttempts(request, classification.Source, route, ranked)
 	return p.executionPlan(
 		routeID,
 		attempts,
 		attempts[0].model == p.auto.StrongBaselineModel,
-		"lowest complete cost",
+		reason,
 	), nil
+}
+
+func (p *Planner) RouteID(classification Classification) string {
+	if mapped, ok := p.strategy.TaskRoutes[classification.TaskType]; ok {
+		return mapped
+	}
+	return p.strategy.DefaultRoute
 }
 
 func (p *Planner) planStrongBaseline(
@@ -164,6 +195,7 @@ func (p *Planner) planStrongBaseline(
 	if !ok {
 		return ExecutionPlan{}, fmt.Errorf("%w: strong baseline %q", ErrNoCapableModel, p.auto.StrongBaselineModel)
 	}
+	candidate.qualityScoreBPS = 10_000
 	return p.executionPlan(routeID, []candidatePlan{candidate}, true, reason), nil
 }
 
@@ -215,6 +247,7 @@ type rankedCandidate struct {
 func (p *Planner) plannedAttempts(
 	request Request,
 	classificationSource ClassificationSource,
+	route profile.RouteRuntime,
 	ranked []rankedCandidate,
 ) []candidatePlan {
 	capacity := min(
@@ -231,6 +264,10 @@ func (p *Planner) plannedAttempts(
 		p.auto.StrongBaselineModel,
 		classificationSource,
 	)
+	baseline.qualityScoreBPS = 10_000
+	if metrics := candidatesForModel(route.Candidates, baseline.model); metrics.Model != "" {
+		baseline.qualityScoreBPS = metrics.QualityScoreBPS
+	}
 	baselineAdded := baselineOK && baseline.model != attempts[0].model &&
 		p.canAddAttempt(attempts, baseline)
 	if baselineAdded {
@@ -273,18 +310,20 @@ func modelAttemptPlan(candidate candidatePlan) ModelAttemptPlan {
 	return ModelAttemptPlan{
 		model:                  candidate.model,
 		visionMode:             candidate.visionMode,
+		qualityScoreBPS:        candidate.qualityScoreBPS,
 		answerCallCostMicroUSD: candidate.answerCallCost,
 		visionCallCostMicroUSD: candidate.visionCallCost,
 	}
 }
 
 type candidatePlan struct {
-	model          string
-	visionMode     VisionMode
-	estimatedCost  int64
-	worstCaseCost  int64
-	answerCallCost int64
-	visionCallCost int64
+	model           string
+	visionMode      VisionMode
+	qualityScoreBPS int
+	estimatedCost   int64
+	worstCaseCost   int64
+	answerCallCost  int64
+	visionCallCost  int64
 }
 
 func (p *Planner) evaluateCandidate(
@@ -467,6 +506,7 @@ func (p ExecutionPlan) WorstCaseCostMicroUSD() int64         { return p.worstCas
 func (p ExecutionPlan) AnswerCallCostMicroUSD() int64        { return p.answerCallCostMicroUSD }
 func (p ExecutionPlan) VisionCallCostMicroUSD() int64        { return p.visionCallCostMicroUSD }
 func (p ExecutionPlan) Budget() profile.AttemptBudgetRuntime { return p.budget }
+func (p ExecutionPlan) Reason() string                       { return p.reason }
 
 func (p ExecutionPlan) ModelAttempts() []ModelAttemptPlan {
 	return append([]ModelAttemptPlan(nil), p.modelAttempts...)
@@ -474,6 +514,7 @@ func (p ExecutionPlan) ModelAttempts() []ModelAttemptPlan {
 
 func (p ModelAttemptPlan) Model() string                 { return p.model }
 func (p ModelAttemptPlan) VisionMode() VisionMode        { return p.visionMode }
+func (p ModelAttemptPlan) QualityScoreBPS() int          { return p.qualityScoreBPS }
 func (p ModelAttemptPlan) AnswerCallCostMicroUSD() int64 { return p.answerCallCostMicroUSD }
 func (p ModelAttemptPlan) VisionCallCostMicroUSD() int64 { return p.visionCallCostMicroUSD }
 
@@ -481,6 +522,7 @@ func (p ModelAttemptPlan) Snapshot() ModelAttemptSnapshot {
 	return ModelAttemptSnapshot{
 		Model:                  p.model,
 		VisionMode:             p.visionMode,
+		QualityScoreBPS:        p.qualityScoreBPS,
 		AnswerCallCostMicroUSD: p.answerCallCostMicroUSD,
 		VisionCallCostMicroUSD: p.visionCallCostMicroUSD,
 	}

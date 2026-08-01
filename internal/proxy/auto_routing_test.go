@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/database"
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/routing"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
@@ -159,6 +161,148 @@ func TestAutoRoutingAnalyzesUncertainRequestAndRewritesModel(t *testing.T) {
 	}
 	if analyzerCalls.Load() != 1 || answerCalls.Load() != 1 || answerModel != "fast" {
 		t.Fatalf("analyzer=%d answer=%d model=%q", analyzerCalls.Load(), answerCalls.Load(), answerModel)
+	}
+}
+
+func TestAutoRoutingSessionStaysOnItsModelAndOnlyUpgrades(t *testing.T) {
+	models := make([]string, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(routing.SessionIDHeader) != "" {
+			t.Error("internal Session header reached upstream")
+		}
+		var request struct {
+			Model  string          `json:"model"`
+			System json.RawMessage `json:"system"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		if len(request.System) > 0 {
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9000}"}]}`)
+			return
+		}
+		models = append(models, request.Model)
+		_, _ = io.WriteString(w, `{"model":"`+request.Model+`","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO profiles (
+			id, slug, display_name, enabled, config_json, created_at, updated_at
+		) VALUES (8, 'auto', 'Auto', 1, '{}', ?, ?)
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := routing.NewSessionStore(db, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := autoProxyRuntime(t, server.URL, false)
+	handler := NewWithSessionStore(runtime, server.Client(), nil, sessions)
+
+	send := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Api-Key", "caller-secret")
+		request.Header.Set(routing.SessionIDHeader, "agent-session-42")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+		}
+		return response
+	}
+
+	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`)
+	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"text","text":"比较这个布局"}]}]}`)
+	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`)
+
+	if len(models) != 3 || models[0] != "fast" || models[1] != "strong" || models[2] != "strong" {
+		t.Fatalf("models=%v", models)
+	}
+	var model string
+	var quality int
+	if err := db.QueryRow(`
+		SELECT model, quality_score_bps FROM routing_session_bindings
+	`).Scan(&model, &quality); err != nil {
+		t.Fatal(err)
+	}
+	if model != "strong" || quality != 9900 {
+		t.Fatalf("binding model=%q quality=%d", model, quality)
+	}
+}
+
+func TestAutoRoutingTransientModelSwitchDoesNotChangeSessionBinding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		if request.Model == "fast" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO profiles (
+			id, slug, display_name, enabled, config_json, created_at, updated_at
+		) VALUES (8, 'auto', 'Auto', 1, '{}', ?, ?)
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := routing.NewSessionStore(db, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := http.Header{
+		"Content-Type": {"application/json"},
+		"X-Api-Key":    {"caller-secret"},
+	}
+	key, ok := sessions.Key(headers, "agent-session-42", 8, "balanced", routing.SessionPurposeLLM)
+	if !ok {
+		t.Fatal("valid Session identity was rejected")
+	}
+	if err := sessions.Bind(context.Background(), key, routing.SessionBinding{
+		ProfileID: 8, Route: "balanced", Purpose: routing.SessionPurposeLLM,
+		Model: "fast", QualityScoreBPS: 9200, Strategy: "20260802-001",
+	}, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.OverloadRules[0].MaxRetries = 0
+	handler := NewWithSessionStore(runtime, server.Client(), nil, sessions)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header = headers.Clone()
+	request.Header.Set(routing.SessionIDHeader, "agent-session-42")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+
+	binding, found, err := sessions.Get(context.Background(), key)
+	if err != nil || !found || binding.Model != "fast" {
+		t.Fatalf("binding=%+v found=%v err=%v", binding, found, err)
 	}
 }
 

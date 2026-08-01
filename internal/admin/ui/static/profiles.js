@@ -56,6 +56,7 @@ function newDefaultAutoRouting() {
     task_analyzer_model: "",
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
+    session_ttl: "24h",
     strategy: {
       name: "",
       alias: "",
@@ -993,6 +994,16 @@ export function renderProfileEditor(root, source, actions = {}) {
       description: "低于该值的分析结果不参与选型，直接使用强模型基线。",
     },
   );
+  const sessionTTL = fieldInput(
+    roleGrid,
+    "Session 绑定有效期",
+    "auto_session_ttl",
+    working.config.auto_routing.session_ttl,
+    {
+      description:
+        "默认 24h。客户端发送 X-LLM-Proxy-Session-ID 且带鉴权头时，同一 Route 会沿用已选模型；只升级、不自动降级。",
+    },
+  );
   autoRoles.append(roleGrid);
 
   const strategySection = editorSubsection("策略");
@@ -1639,6 +1650,7 @@ export function renderProfileEditor(root, source, actions = {}) {
           analyzerConfidence.value,
           "任务分析最低置信度",
         ),
+        session_ttl: sessionTTL.value,
         strategy: {
           ...working.config.auto_routing.strategy,
           name: strategyName.value,
@@ -1842,6 +1854,7 @@ function autoRoutingPayload(auto) {
       auto.analyzer_min_confidence_bps,
       "任务分析最低置信度",
     ),
+    session_ttl: String(auto.session_ttl ?? "24h"),
     strategy: {
       name: String(strategy.name ?? ""),
       alias: String(strategy.alias ?? ""),

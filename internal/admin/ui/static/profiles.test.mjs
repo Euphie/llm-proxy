@@ -158,6 +158,7 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
     task_analyzer_model: "fast",
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: "7000",
+    session_ttl: "24h",
     strategy: {
       name: "20260802-001",
       alias: "均衡",
@@ -190,6 +191,7 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
   assert.equal(auto.enabled, true);
   assert.deepEqual(auto.participants, ["fast", "strong"]);
   assert.equal(auto.analyzer_min_confidence_bps, 7000);
+  assert.equal(auto.session_ttl, "24h");
   assert.equal(auto.strategy.routes[0].min_quality_bps, 9000);
   assert.equal(auto.strategy.routes[0].candidates[0].quality_score_bps, 9200);
   assert.equal(auto.strategy.budget.max_worst_case_cost_micro_usd, 500000);
@@ -785,6 +787,7 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     task_analyzer_model: "fast",
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
+    session_ttl: "48h",
     strategy: {
       name: "20260802-001",
       alias: "均衡",
@@ -821,6 +824,11 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
 
   assert.equal(controlByName(root, "auto_routing_enabled").checked, true);
   assert.equal(controlByName(root, "auto_analyzer_confidence").value, "70");
+  assert.equal(controlByName(root, "auto_session_ttl").value, "48h");
+  assert.match(
+    fieldDescription(root, controlByName(root, "auto_session_ttl")),
+    /X-LLM-Proxy-Session-ID/,
+  );
   assert.equal(controlByName(root, "auto-route-0-min-quality").value, "90");
   assert.match(
     fieldDescription(root, controlByName(root, "auto_strong_baseline_model")),
@@ -832,11 +840,13 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   );
 
   controlByName(root, "auto_analyzer_confidence").value = "72.5";
+  controlByName(root, "auto_session_ttl").value = "72h";
   controlByName(root, "auto-route-0-min-quality").value = "91.25";
   await findTag(root, "FORM").dispatch("submit");
 
   assert.equal(saves.length, 1);
   assert.equal(saves[0].config.auto_routing.analyzer_min_confidence_bps, 7250);
+  assert.equal(saves[0].config.auto_routing.session_ttl, "72h");
   assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_quality_bps, 9125);
   assert.deepEqual(saves[0].config.auto_routing.participants, ["fast", "strong"]);
 

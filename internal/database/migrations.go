@@ -1,12 +1,13 @@
 package database
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"time"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 var schemaV1 = []string{
 	`CREATE TABLE admin_account (
@@ -93,6 +94,24 @@ var schemaV2 = []string{
 	`CREATE INDEX routing_traces_route_idx ON routing_traces(route_id)`,
 }
 
+var schemaV3 = []string{
+	`ALTER TABLE app_settings ADD COLUMN routing_session_hmac_key BLOB`,
+	`CREATE TABLE routing_session_bindings (
+        key_hash          BLOB PRIMARY KEY CHECK (length(key_hash) = 32),
+        profile_id        INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        route_id          TEXT NOT NULL,
+        purpose           TEXT NOT NULL,
+        model             TEXT NOT NULL,
+        quality_score_bps INTEGER NOT NULL CHECK (quality_score_bps BETWEEN 0 AND 10000),
+        strategy_name     TEXT NOT NULL,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL,
+        expires_at        TEXT NOT NULL
+    )`,
+	`CREATE INDEX routing_session_bindings_profile_idx ON routing_session_bindings(profile_id)`,
+	`CREATE INDEX routing_session_bindings_expires_idx ON routing_session_bindings(expires_at)`,
+}
+
 func Migrate(db *sql.DB) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -109,6 +128,9 @@ func Migrate(db *sql.DB) (err error) {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 	if version >= schemaVersion {
+		if err := ensureRoutingSessionHMACKey(tx); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration: %w", err)
 		}
@@ -137,11 +159,45 @@ func Migrate(db *sql.DB) (err error) {
 			}
 		}
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 2`); err != nil {
+	if version < 3 {
+		for _, statement := range schemaV3 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v3: %w", err)
+			}
+		}
+	}
+	if err := ensureRoutingSessionHMACKey(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 3`); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
+}
+
+func ensureRoutingSessionHMACKey(tx *sql.Tx) error {
+	var key []byte
+	if err := tx.QueryRow(
+		`SELECT routing_session_hmac_key FROM app_settings WHERE id = 1`,
+	).Scan(&key); err != nil {
+		return fmt.Errorf("read routing session HMAC key: %w", err)
+	}
+	if len(key) == 32 {
+		return nil
+	}
+	key = make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("generate routing session HMAC key: %w", err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE app_settings SET routing_session_hmac_key = ?, updated_at = ? WHERE id = 1`,
+		key,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("store routing session HMAC key: %w", err)
 	}
 	return nil
 }

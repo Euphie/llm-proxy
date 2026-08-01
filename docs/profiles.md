@@ -122,6 +122,14 @@ Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编
 完整成本最低者。计划内模型切换只允许发生在 `ClientCommit` 前，并和任务分析、视觉及重试
 共享调用次数、截止时间和费用预算。
 
+“Session 绑定有效期”默认 `24h`，允许范围为 `5m` 到 `720h`。客户端可在 Auto 请求中发送
+`X-LLM-Proxy-Session-ID`；代理仅在同时存在 `Authorization`、`X-Api-Key`、`Api-Key` 或
+`Anthropic-Api-Key` 之一时建立绑定。键由原始 Session ID、Profile、Route、用途和鉴权域
+HMAC 生成；原始 Session ID 与凭据不写数据库，内部 Session 头会在任何请求转发前移除。
+
+同一 Route 优先沿用已经成功的模型。规划阶段确认原模型能力或上下文不足时可升级到质量不低于
+原绑定的模型；临时 `429`、`5xx`、网络错误或计划内故障切换不会修改绑定，也不会自动降级。
+
 当前支持 Anthropic `POST /v1/messages`、OpenAI `POST /v1/chat/completions` 和
 `POST /v1/responses`。其他操作使用 `auto` 会返回 unsupported operation；不会静默透传或猜测
 模型。详细算法、费用口径和后续范围见[智能路由](intelligent-routing.md)。

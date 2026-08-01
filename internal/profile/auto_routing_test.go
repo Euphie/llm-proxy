@@ -22,7 +22,8 @@ func TestResolveAutoRoutingContract(t *testing.T) {
 		t.Fatalf("roles=%+v", runtime.AutoRouting)
 	}
 	if runtime.AutoRouting.AnalyzerTimeout != 5*time.Second ||
-		runtime.AutoRouting.AnalyzerMinConfidenceBPS != 7000 {
+		runtime.AutoRouting.AnalyzerMinConfidenceBPS != 7000 ||
+		runtime.AutoRouting.SessionTTL != 24*time.Hour {
 		t.Fatalf("analyzer settings=%+v", runtime.AutoRouting)
 	}
 	if runtime.AutoRouting.Strategy.Name != "20260802-001" ||
@@ -142,6 +143,12 @@ func TestResolveAutoRoutingRejectsIncompleteConfiguration(t *testing.T) {
 			name: "invalid analyzer confidence",
 			mutate: func(r *Record) {
 				r.Config.AutoRouting.AnalyzerMinConfidenceBPS = 10_001
+			},
+		},
+		{
+			name: "invalid Session TTL",
+			mutate: func(r *Record) {
+				r.Config.AutoRouting.SessionTTL = "1s"
 			},
 		},
 		{

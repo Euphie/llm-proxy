@@ -32,7 +32,7 @@ docker compose up -d --build
 
 ## 数据目录
 
-llm-proxy 在 `DATA_DIR` 中创建 `llm-proxy.db`，保存管理员、Session、
+llm-proxy 在 `DATA_DIR` 中创建 `llm-proxy.db`，保存管理员 Session、Auto 路由的 HMAC Session 绑定、
 Profiles、默认项和 Token 用量。启动时目录权限会收紧为 `0700`，数据库文件为
 `0600`。生产环境应使用持久化、仅服务账号可读写的目录，并按
 [管理控制台](admin.md)中的停机流程备份。

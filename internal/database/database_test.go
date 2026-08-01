@@ -18,7 +18,7 @@ func TestOpenCreatesPrivateDatabaseAndSchema(t *testing.T) {
 
 	for _, table := range []string{
 		"app_settings", "admin_account", "admin_sessions", "profiles", "usage",
-		"routing_traces",
+		"routing_traces", "routing_session_bindings",
 	} {
 		var name string
 		err := db.QueryRow(
@@ -100,7 +100,7 @@ func TestOpenMigratesOnlyOnce(t *testing.T) {
 			db.Close()
 			t.Fatal(err)
 		}
-		if version != 2 {
+		if version != 3 {
 			db.Close()
 			t.Fatalf("user_version=%d", version)
 		}
@@ -113,6 +113,15 @@ func TestOpenMigratesOnlyOnce(t *testing.T) {
 		if count != 1 {
 			db.Close()
 			t.Fatalf("app_settings rows=%d", count)
+		}
+		var key []byte
+		if err := db.QueryRow(`SELECT routing_session_hmac_key FROM app_settings WHERE id = 1`).Scan(&key); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		if len(key) != 32 {
+			db.Close()
+			t.Fatalf("routing session HMAC key length=%d", len(key))
 		}
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
@@ -154,7 +163,7 @@ func TestMigrateUpgradesV1WithoutReplacingExistingData(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_settings`).Scan(&settings); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 || profiles != 1 || settings != 1 {
+	if version != 3 || profiles != 1 || settings != 1 {
 		t.Fatalf("version=%d profiles=%d settings=%d", version, profiles, settings)
 	}
 }
