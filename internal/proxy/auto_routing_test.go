@@ -1075,6 +1075,90 @@ func TestAutoRoutingFallsBackTargetAfterTransientVisionFailureBeforeAnswer(t *te
 	}
 }
 
+func TestAutoRoutingParallelVisionHardFailurePreventsFallback(t *testing.T) {
+	secondStarted := make(chan struct{})
+	transientFinished := make(chan struct{})
+	var analyzerCalls atomic.Int32
+	var primaryVisionCalls atomic.Int32
+	var primaryAnswerCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		if _, analyzer := root["system"]; analyzer {
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			return
+		}
+		if model != "vision" {
+			primaryAnswerCalls.Add(1)
+			http.Error(w, "answer must not run", http.StatusInternalServerError)
+			return
+		}
+		primaryVisionCalls.Add(1)
+		switch {
+		case bytes.Contains(body, []byte("transient-image")):
+			<-secondStarted
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"vision overloaded"}`)
+			close(transientFinished)
+		case bytes.Contains(body, []byte("auth-image")):
+			close(secondStarted)
+			<-transientFinished
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"error":"invalid credential"}`)
+		default:
+			http.Error(w, "unexpected image", http.StatusBadRequest)
+		}
+	}))
+	defer primary.Close()
+
+	var backupCalls atomic.Int32
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		if request.Model == "vision" {
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"backup evidence"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"backup answer"}]}`)
+	}))
+	defer backup.Close()
+
+	runtime := autoProxyRuntime(t, primary.URL, true)
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"fast", "strong", "vision"},
+	})
+	runtime.OverloadRules[0].MaxRetries = 0
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 6
+	runtime.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 10
+	runtime.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/transient-image.png"}},{"type":"image","source":{"type":"url","url":"https://example.test/auth-image.png"}},{"type":"text","text":"比较这两张图片"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadGateway || primaryVisionCalls.Load() != 2 ||
+		primaryAnswerCalls.Load() != 0 || backupCalls.Load() != 0 {
+		t.Fatalf(
+			"status=%d analyzer=%d primary_vision=%d primary_answer=%d backup=%d body=%q",
+			response.Code, analyzerCalls.Load(), primaryVisionCalls.Load(),
+			primaryAnswerCalls.Load(), backupCalls.Load(), response.Body.String(),
+		)
+	}
+}
+
 func TestAutoRoutingFallsBackTargetWhilePreparingSwitchedModel(t *testing.T) {
 	var analyzerCalls atomic.Int32
 	var fastAnswerCalls atomic.Int32

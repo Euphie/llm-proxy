@@ -20,7 +20,7 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 		return document, nil
 	}
 	if !isJSONType(rawInput, '[') {
-		return document, nil
+		return nil, fmt.Errorf("request input must be a string or array")
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(rawInput, &items); err != nil {
@@ -30,8 +30,7 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 	for itemIndex, rawItem := range items {
 		node := documentNode{raw: rawItem}
 		if !isJSONType(rawItem, '{') {
-			document.nodes = append(document.nodes, node)
-			continue
+			return nil, fmt.Errorf("input item %d must be an object", itemIndex)
 		}
 		if err := json.Unmarshal(rawItem, &node.fields); err != nil {
 			return nil, fmt.Errorf("parse input item %d: %w", itemIndex, err)
@@ -49,6 +48,9 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 		}
 		rawBlocks, ok := node.fields[node.blockField]
 		if !ok || !isJSONType(rawBlocks, '[') {
+			if node.blockField == "content" {
+				return nil, fmt.Errorf("input item %d content must be an array", itemIndex)
+			}
 			document.nodes = append(document.nodes, node)
 			continue
 		}

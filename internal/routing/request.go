@@ -45,7 +45,8 @@ type Request struct {
 	Model     string
 	Facts     RequestFacts
 
-	root map[string]json.RawMessage
+	root           map[string]json.RawMessage
+	evaluationText string
 }
 
 func RequestedModel(body []byte) (string, bool) {
@@ -84,12 +85,18 @@ func ParseAutoRequest(
 	if err := json.Unmarshal(root["model"], &model); err != nil || model != AutoModel {
 		return Request{}, fmt.Errorf("%w: model must be %q", ErrInvalidRequest, AutoModel)
 	}
+	document, err := llmrequest.ParseRoot(operation, root)
+	if err != nil {
+		return Request{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	images := document.Images()
 
 	return Request{
-		Operation: operation,
-		Model:     model,
-		Facts:     extractFacts(operation, root, body),
-		root:      cloneRoot(root),
+		Operation:      operation,
+		Model:          model,
+		Facts:          extractFacts(operation, root, body, images),
+		root:           cloneRoot(root),
+		evaluationText: boundedRoutingText(document.Texts()),
 	}, nil
 }
 
@@ -125,6 +132,10 @@ func (r Request) EvaluationText() string {
 	return r.routingText()
 }
 
+func (r Request) routingText() string {
+	return r.evaluationText
+}
+
 func supportedOperation(protocol profile.Protocol, method, path string) (Operation, bool) {
 	if method != http.MethodPost {
 		return "", false
@@ -149,9 +160,9 @@ func extractFacts(
 	operation Operation,
 	root map[string]json.RawMessage,
 	body []byte,
+	images []llmrequest.Image,
 ) RequestFacts {
-	inspection := llmrequest.Inspect(operation, root)
-	imageCount := len(inspection.Images)
+	imageCount := len(images)
 	facts := RequestFacts{
 		EstimatedInputTokens: (len(body) + 3) / 4,
 		ImageCount:           imageCount,
@@ -160,7 +171,7 @@ func extractFacts(
 		HasTools:             nonEmptyArray(root["tools"]),
 		Stream:               boolValue(root["stream"]),
 	}
-	for index, image := range inspection.Images {
+	for index, image := range images {
 		facts.ImageSources[index] = image.SourceKind
 	}
 	switch operation {
@@ -226,9 +237,8 @@ func cloneRoot(root map[string]json.RawMessage) map[string]json.RawMessage {
 	return cloned
 }
 
-func (r Request) routingText() string {
-	inspection := llmrequest.Inspect(r.Operation, r.root)
-	joined := strings.TrimSpace(strings.Join(inspection.Texts, "\n"))
+func boundedRoutingText(texts []string) string {
+	joined := strings.TrimSpace(strings.Join(texts, "\n"))
 	runes := []rune(joined)
 	if len(runes) > routingTextRuneLimit {
 		return string(runes[:routingTextRuneLimit])

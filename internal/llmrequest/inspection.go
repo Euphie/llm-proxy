@@ -31,16 +31,3 @@ type Image struct {
 	NodeIndex    int
 	BlockIndex   int
 }
-
-type Inspection struct {
-	Images []Image
-	Texts  []string
-}
-
-func Inspect(operation Operation, root map[string]json.RawMessage) Inspection {
-	document, err := parseRoot(operation, root)
-	if err != nil {
-		return Inspection{}
-	}
-	return Inspection{Images: document.Images(), Texts: document.Texts()}
-}

@@ -141,6 +141,55 @@ func TestParseAutoRequestRejectsInvalidMediaAndBody(t *testing.T) {
 	}
 }
 
+func TestParseAutoRequestRejectsMalformedCanonicalProtocolContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol profile.Protocol
+		path     string
+		body     string
+	}{
+		{
+			name: "anthropic malformed image", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","messages":[{"role":"user","content":[{"type":"image","source":{"type":"url"}}]}]}`,
+		},
+		{
+			name: "chat malformed image", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions",
+			body: `{"model":"auto","messages":[{"role":"user","content":[{"type":"image_url","image_url":{}}]}]}`,
+		},
+		{
+			name: "responses malformed image", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
+			body: `{"model":"auto","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://example.test/image.png","file_id":"file-1"}]}]}`,
+		},
+		{
+			name: "anthropic malformed messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","messages":{}}`,
+		},
+		{
+			name: "chat malformed message content", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions",
+			body: `{"model":"auto","messages":[{"role":"user","content":{}}]}`,
+		},
+		{
+			name: "responses malformed message content", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
+			body: `{"model":"auto","input":[{"type":"message","role":"user","content":{}}]}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ParseAutoRequest(
+				test.protocol,
+				http.MethodPost,
+				test.path,
+				"application/json",
+				[]byte(test.body),
+			)
+			if !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("error=%v, want ErrInvalidRequest", err)
+			}
+		})
+	}
+}
+
 func TestRequestWithModelPreservesUnknownFields(t *testing.T) {
 	body := []byte(`{"model":"auto","messages":[],"vendor_extension":{"enabled":true},"number":7}`)
 	request, err := ParseAutoRequest(

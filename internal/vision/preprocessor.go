@@ -13,6 +13,7 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
@@ -22,32 +23,63 @@ type processError struct {
 }
 
 type processFailures struct {
-	mu               sync.Mutex
-	first            error
-	firstNonCanceled error
+	mu       sync.Mutex
+	selected processFailure
+	hasError bool
 }
 
-func (f *processFailures) record(err error) {
+type processFailure struct {
+	err      error
+	image    int
+	priority int
+}
+
+const (
+	processFailureCanceled = iota
+	processFailureTransient
+	processFailureHard
+)
+
+func (f *processFailures) record(image int, err error) bool {
 	if err == nil {
-		return
+		return false
 	}
+	priority := processFailurePriority(err)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.first == nil {
-		f.first = err
+	if !f.hasError || priority > f.selected.priority ||
+		(priority == f.selected.priority && image < f.selected.image) {
+		f.selected = processFailure{err: err, image: image, priority: priority}
+		f.hasError = true
 	}
-	if f.firstNonCanceled == nil && !errors.Is(err, context.Canceled) {
-		f.firstNonCanceled = err
-	}
+	return priority == processFailureHard
 }
 
 func (f *processFailures) err() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.firstNonCanceled != nil {
-		return f.firstNonCanceled
+	if !f.hasError {
+		return nil
 	}
-	return f.first
+	return f.selected.err
+}
+
+func processFailurePriority(err error) int {
+	if class, ok := provider.FailureClassOf(err); ok {
+		switch class {
+		case provider.FailureOverloadTransient,
+			provider.FailureOperationTimeout,
+			provider.FailureUnknownTransport,
+			provider.FailureMalformedResponse:
+			return processFailureTransient
+		default:
+			return processFailureHard
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		return processFailureCanceled
+	}
+	return processFailureHard
 }
 
 func (e *processError) Error() string {
@@ -333,7 +365,7 @@ func (p *Preprocessor) processTargetWithBudget(
 					}
 					if reserveCall != nil {
 						if err := reserveCall(operationCtx); err != nil {
-							failures.record(err)
+							failures.record(i, err)
 							cancel()
 							return "", err
 						}
@@ -346,8 +378,9 @@ func (p *Preprocessor) processTargetWithBudget(
 						image,
 					)
 					if err != nil {
-						failures.record(err)
-						cancel()
+						if failures.record(i, err) {
+							cancel()
+						}
 					}
 					return description, err
 				},
@@ -389,8 +422,9 @@ func (p *Preprocessor) processTargetWithBudget(
 				"cache_source", cacheSource,
 				"duration_ms", time.Since(imageStarted).Milliseconds(),
 				"error_class", visionErrorClass(err))
-			failures.record(err)
-			cancel()
+			if failures.record(i, err) {
+				cancel()
+			}
 		}()
 	}
 	wg.Wait()

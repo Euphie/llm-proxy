@@ -1162,8 +1162,8 @@ func TestProcessFailuresKeepsFirstDeadlineOverLaterFailure(t *testing.T) {
 	laterErr := errors.New("later failure")
 	var failures processFailures
 
-	failures.record(context.DeadlineExceeded)
-	failures.record(laterErr)
+	failures.record(0, context.DeadlineExceeded)
+	failures.record(1, laterErr)
 
 	err := failures.err()
 	if !errors.Is(err, context.DeadlineExceeded) {
