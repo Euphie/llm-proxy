@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 var schemaV1 = []string{
 	`CREATE TABLE admin_account (
@@ -112,6 +112,46 @@ var schemaV3 = []string{
 	`CREATE INDEX routing_session_bindings_expires_idx ON routing_session_bindings(expires_at)`,
 }
 
+var schemaV4 = []string{
+	`CREATE TABLE routing_strategies (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id  INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        alias       TEXT NOT NULL DEFAULT '',
+        state       TEXT NOT NULL CHECK (state IN ('draft', 'evaluating', 'ready', 'canary', 'active')),
+        config_json TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        UNIQUE(profile_id, name)
+    )`,
+	`CREATE INDEX routing_strategies_profile_idx ON routing_strategies(profile_id)`,
+	`CREATE INDEX routing_strategies_state_idx ON routing_strategies(profile_id, state)`,
+	`CREATE TABLE routing_strategy_pointers (
+        profile_id                 INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+        active_strategy_id         INTEGER NOT NULL REFERENCES routing_strategies(id),
+        canary_strategy_id         INTEGER REFERENCES routing_strategies(id),
+        last_known_good_strategy_id INTEGER REFERENCES routing_strategies(id),
+        canary_bps                 INTEGER NOT NULL DEFAULT 0 CHECK (canary_bps BETWEEN 0 AND 9999),
+        revision                   INTEGER NOT NULL CHECK (revision > 0),
+        updated_at                 TEXT NOT NULL,
+        CHECK (
+            (canary_strategy_id IS NULL AND canary_bps = 0) OR
+            (canary_strategy_id IS NOT NULL AND canary_bps > 0)
+        )
+    )`,
+	`CREATE TABLE routing_strategy_events (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id   INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        strategy_id  INTEGER REFERENCES routing_strategies(id) ON DELETE SET NULL,
+        action       TEXT NOT NULL,
+        from_state   TEXT NOT NULL DEFAULT '',
+        to_state     TEXT NOT NULL DEFAULT '',
+        revision     INTEGER NOT NULL CHECK (revision > 0),
+        created_at   TEXT NOT NULL
+    )`,
+	`CREATE INDEX routing_strategy_events_profile_idx ON routing_strategy_events(profile_id, created_at)`,
+}
+
 func Migrate(db *sql.DB) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -166,10 +206,17 @@ func Migrate(db *sql.DB) (err error) {
 			}
 		}
 	}
+	if version < 4 {
+		for _, statement := range schemaV4 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v4: %w", err)
+			}
+		}
+	}
 	if err := ensureRoutingSessionHMACKey(tx); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 3`); err != nil {
+	if _, err := tx.Exec(`PRAGMA user_version = 4`); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

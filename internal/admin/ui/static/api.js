@@ -130,6 +130,49 @@ Object.assign(api, {
       method: "PUT",
       body: { profile_id: profileId },
     }),
+  listStrategies: (profileId) =>
+    request(`/_admin/api/profiles/${profileId}/strategies`),
+  createStrategy: (profileId, config) =>
+    request(`/_admin/api/profiles/${profileId}/strategies`, {
+      method: "POST",
+      body: { config },
+    }),
+  updateStrategy: (profileId, strategyId, config) =>
+    request(`/_admin/api/profiles/${profileId}/strategies/${strategyId}`, {
+      method: "PUT",
+      body: { config },
+    }),
+  advanceStrategy: (profileId, strategyId, from, to) =>
+    request(
+      `/_admin/api/profiles/${profileId}/strategies/${strategyId}/advance`,
+      { method: "POST", body: { from, to } },
+    ),
+  startStrategyCanary: (profileId, strategyId, canaryBps, expectedRevision) =>
+    request(
+      `/_admin/api/profiles/${profileId}/strategies/${strategyId}/canary`,
+      {
+        method: "POST",
+        body: {
+          canary_bps: canaryBps,
+          expected_revision: expectedRevision,
+        },
+      },
+    ),
+  cancelStrategyCanary: (profileId, expectedRevision) =>
+    request(`/_admin/api/profiles/${profileId}/strategies/cancel-canary`, {
+      method: "POST",
+      body: { expected_revision: expectedRevision },
+    }),
+  promoteStrategy: (profileId, expectedRevision) =>
+    request(`/_admin/api/profiles/${profileId}/strategies/promote`, {
+      method: "POST",
+      body: { expected_revision: expectedRevision },
+    }),
+  rollbackStrategy: (profileId, expectedRevision) =>
+    request(`/_admin/api/profiles/${profileId}/strategies/rollback`, {
+      method: "POST",
+      body: { expected_revision: expectedRevision },
+    }),
   stats: (params = {}) => {
     const query = new URLSearchParams(
       Object.entries(params)

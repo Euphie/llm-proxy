@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/strategy"
 )
 
 type errorResponse struct {
@@ -167,6 +168,16 @@ func (a *API) writeDomainError(w http.ResponseWriter, r *http.Request, err error
 		)
 	case errors.Is(err, profile.ErrDefaultRequired):
 		writeError(w, http.StatusConflict, "default_profile_required", "An enabled default Profile is required.", nil)
+	case errors.Is(err, strategy.ErrNotFound):
+		writeError(w, http.StatusNotFound, "strategy_not_found", "Routing strategy not found.", nil)
+	case errors.Is(err, strategy.ErrConflict):
+		writeError(w, http.StatusConflict, "strategy_conflict", "Routing strategy changed; refresh and try again.", nil)
+	case errors.Is(err, strategy.ErrImmutable):
+		writeError(w, http.StatusConflict, "strategy_immutable", "Only draft strategies can be edited.", nil)
+	case errors.Is(err, strategy.ErrInvalidTransition):
+		writeError(w, http.StatusConflict, "strategy_transition_invalid", "Routing strategy cannot make that transition.", nil)
+	case errors.Is(err, strategy.ErrNoLastKnownGood):
+		writeError(w, http.StatusConflict, "strategy_lkg_unavailable", "No last-known-good strategy is available.", nil)
 	default:
 		a.writeInternalError(w, r, fmt.Errorf("handle admin API request: %w", err))
 	}

@@ -11,7 +11,7 @@
 
 {{SOURCE_FACTS}}
 
-这些事实覆盖当前智能路由执行面与 Session 连续性；独立策略生命周期、动态质量学习和多 Target 仍未实现。
+固定源码快照覆盖 Phase 1 执行面与 Session 连续性；当前分支在此基础上还实现了独立策略生命周期。动态质量学习和多 Target 仍未实现。
 
 ## 从现状到目标
 
@@ -19,13 +19,13 @@
 | --- | --- |
 | Profile-local Auto 配置、候选校验与 HMAC Session 绑定 | 为后续异步评测延续同一隔离合同 |
 | Profile Upstream + 模型 ID 作为隐式单 Target | 增加同 Profile、同供应商的 Target 池和健康调度 |
-| 统一 AttemptBudget、ClientCommit 与 Session 升级不降级 | 增加独立策略发布和安全回滚 |
+| 统一 AttemptBudget、ClientCommit、Session 升级不降级与独立策略发布 | 增加自动可靠性回滚 |
 | 管理员填写 Route 质量事实并按完整费用选型 | 从异步质量证据生成候选策略 |
-| 结构化路由轨迹与费用估算 | 增加质量置信区间和 A/B/C/D 展示 |
-| Profile 保存后原子热更新策略配置 | 增加不可变版本、CAS 发布、灰度和 LKG 回滚 |
+| 结构化路由轨迹、费用估算与配置 A/B/C/D 展示 | 增加基于评测置信区间的等级 |
+| 不可变版本、CAS 发布、稳定灰度和 LKG 回滚 | 增加自动健康门槛与紧急模型停用 |
 
 > [!TARGET]
-> 当前 `model=auto` 已做到可解释和有界调用；“可安全回滚”仍指后续独立策略生命周期，不能用 Profile 热更新替代该验收。
+> 当前 `model=auto` 已做到可解释、有界调用和可安全回滚；自动学习仍只能在异步评测与人工发布边界内扩展。
 
 ## 判断文档是否过时
 

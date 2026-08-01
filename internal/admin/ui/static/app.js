@@ -176,9 +176,38 @@ async function renderAuthenticated(root, client, generateProfile, path) {
     }
   }
 
-  function showEditor(draft) {
+  async function showEditor(draft, editingStrategyID = 0) {
     alert.hidden = true;
     alert.textContent = "";
+    let strategyOverview = null;
+    if (
+      draft.id &&
+      draft.config?.auto_routing?.enabled &&
+      typeof client.listStrategies === "function"
+    ) {
+      strategyOverview = await client.listStrategies(draft.id);
+      if (editingStrategyID) {
+        const editing = (strategyOverview.strategies || []).find(
+          (version) => Number(version.id) === Number(editingStrategyID),
+        );
+        if (editing) {
+          draft.config.auto_routing.strategy = structuredClone(editing.config);
+        } else {
+          editingStrategyID = 0;
+        }
+      }
+    }
+    draft.strategy_overview = strategyOverview;
+    draft.strategy_editing_id = editingStrategyID;
+
+    async function reloadStrategyEditor(nextEditingID = 0) {
+      const profile = await client.getProfile(draft.id);
+      await showEditor(
+        profileDraft(profile, draft.make_default ? profile.id : 0),
+        nextEditingID,
+      );
+    }
+
     renderProfileEditor(workspace, draft, {
       save: async (payload) => {
         await runMutation(async () => {
@@ -193,7 +222,53 @@ async function renderAuthenticated(root, client, generateProfile, path) {
         void showList();
       },
       generate: generateProfile,
+      createStrategy: async (config) => {
+        const version = await client.createStrategy(draft.id, config);
+        await reloadStrategyEditor(version.id);
+      },
+      updateStrategy: async (strategyID, config) => {
+        await client.updateStrategy(draft.id, strategyID, config);
+        await reloadStrategyEditor(strategyID);
+      },
+      editStrategy: (strategyID) => reloadStrategyEditor(strategyID),
+      advanceStrategy: async (strategyID, from, to) => {
+        await client.advanceStrategy(draft.id, strategyID, from, to);
+        await reloadStrategyEditor(to === "evaluating" ? strategyID : 0);
+      },
+      startStrategyCanary: async (strategyID, canaryBps, revision) => {
+        await client.startStrategyCanary(
+          draft.id,
+          strategyID,
+          canaryBps,
+          revision,
+        );
+        await reloadStrategyEditor();
+      },
+      cancelStrategyCanary: async (revision) => {
+        await client.cancelStrategyCanary(draft.id, revision);
+        await reloadStrategyEditor();
+      },
+      promoteStrategy: async (revision) => {
+        await client.promoteStrategy(draft.id, revision);
+        await reloadStrategyEditor();
+      },
+      rollbackStrategy: async (revision) => {
+        await client.rollbackStrategy(draft.id, revision);
+        await reloadStrategyEditor();
+      },
     });
+  }
+
+  async function openEditor(draft, editingStrategyID = 0) {
+    try {
+      await showEditor(draft, editingStrategyID);
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        renderLoginScreen(root, client, generateProfile, path);
+        return;
+      }
+      showAppError(error);
+    }
   }
 
   async function showList() {
@@ -208,10 +283,10 @@ async function renderAuthenticated(root, client, generateProfile, path) {
         create: () => {
           const draft = defaultProfileDraft();
           draft.make_default = data.profiles.length === 0;
-          showEditor(draft);
+          void openEditor(draft);
         },
         edit: (profile) =>
-          showEditor(profileDraft(profile, data.default_profile_id)),
+          void openEditor(profileDraft(profile, data.default_profile_id)),
         generate: generateProfile,
         copy: async (profile, body) => {
           await runMutation(() => client.copyProfile(profile.id, body));

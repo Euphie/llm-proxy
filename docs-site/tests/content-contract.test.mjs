@@ -25,7 +25,7 @@ const canonicalChapters = [
   ["target-reliability", "Target 与容错", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。", "运行时", "activity", "teal", "本版目标", "竞品源码验证"],
   ["runtime-reliability", "视觉、重试与 Session", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。", "运行时", "shield", "slate", "本版目标", "竞品源码验证"],
   ["evaluation-feedback", "异步评测与策略优化", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。", "控制面", "activity", "orange", "本版目标", "竞品源码验证"],
-  ["strategy-lifecycle", "策略生命周期", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。", "控制面", "git-branch", "indigo", "本版目标", "竞品源码验证"],
+  ["strategy-lifecycle", "策略生命周期", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。", "控制面", "git-branch", "indigo", "已实现", "本项目源码与测试验证"],
   ["engineering-and-delivery", "实施范围与交付", "明确 v1 范围、实施阶段和验收条件。", "交付", "database", "slate", "本版目标", "本项目源码验证"],
 ].map(([slug, title, summary, group, icon, accent, implementation_status, evidence_level]) => ({
   slug, title, summary, group, icon, accent, implementation_status, evidence_level,

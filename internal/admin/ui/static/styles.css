@@ -879,6 +879,43 @@ caption {
   font-size: 0.96rem;
 }
 
+.strategy-lifecycle-summary,
+.strategy-draft-controls,
+.strategy-version-header,
+.strategy-version-actions,
+.strategy-publication-actions {
+  align-items: center;
+}
+
+.strategy-version-list {
+  gap: 0.65rem;
+}
+
+.strategy-version-card {
+  gap: 0.55rem;
+  padding: 0.85rem;
+  box-shadow: none;
+}
+
+.strategy-version-header {
+  justify-content: space-between;
+}
+
+.strategy-version-header h4,
+.strategy-version-card p {
+  margin: 0;
+}
+
+.strategy-version-actions input {
+  width: 6.5rem;
+}
+
+.strategy-publication-actions {
+  justify-content: flex-end;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--separator);
+}
+
 .model-participant-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));

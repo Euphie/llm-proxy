@@ -22,6 +22,7 @@ const (
 type Dependencies struct {
 	Auth             *AuthService
 	Profiles         *ProfileService
+	Strategies       *StrategyService
 	Stats            *stats.DB
 	DB               *sql.DB
 	Version          string
@@ -34,6 +35,7 @@ type Dependencies struct {
 type API struct {
 	auth             *AuthService
 	profiles         *ProfileService
+	strategies       *StrategyService
 	stats            *stats.DB
 	db               *sql.DB
 	version          string
@@ -69,6 +71,7 @@ func NewAPI(deps Dependencies) http.Handler {
 	api := &API{
 		auth:             deps.Auth,
 		profiles:         deps.Profiles,
+		strategies:       deps.Strategies,
 		stats:            deps.Stats,
 		db:               deps.DB,
 		version:          version,
@@ -114,6 +117,14 @@ func (a *API) routes() []apiRoute {
 		{method: http.MethodPut, pattern: "/_admin/api/profiles/{id}", handler: a.updateProfile},
 		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/copy", handler: a.copyProfile},
 		{method: http.MethodDelete, pattern: "/_admin/api/profiles/{id}", handler: a.deleteProfile},
+		{method: http.MethodGet, pattern: "/_admin/api/profiles/{id}/strategies", handler: a.listStrategies},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies", handler: a.createStrategy},
+		{method: http.MethodPut, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}", handler: a.updateStrategy},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}/advance", handler: a.advanceStrategy},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}/canary", handler: a.startStrategyCanary},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/cancel-canary", handler: a.cancelStrategyCanary},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/promote", handler: a.promoteStrategy},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/rollback", handler: a.rollbackStrategy},
 		{method: http.MethodPut, pattern: "/_admin/api/default-profile", handler: a.setDefaultProfile},
 		{method: http.MethodGet, pattern: "/_admin/api/stats", handler: a.getStats},
 		{method: http.MethodGet, pattern: "/_admin/api/routing-traces", handler: a.getRoutingTraces},

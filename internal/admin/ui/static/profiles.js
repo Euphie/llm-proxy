@@ -396,6 +396,8 @@ export function renderProfileList(root, data, actions = {}) {
 }
 
 export function renderProfileEditor(root, source, actions = {}) {
+	const strategyOverview = source?.strategy_overview || null;
+	const editingStrategyID = Number(source?.strategy_editing_id || 0);
   const working = profileDraft(
     {
       ...source,
@@ -1017,6 +1019,9 @@ export function renderProfileEditor(root, source, actions = {}) {
       description: "唯一版本号，格式为 YYYYMMDD-NNN，例如 20260802-001。",
     },
   );
+	if (working.id > 0) {
+		strategyName.readOnly = true;
+	}
   const strategyAlias = fieldInput(
     strategyGrid,
     "策略别名",
@@ -1305,6 +1310,212 @@ export function renderProfileEditor(root, source, actions = {}) {
   };
   budgetSection.append(budgetGrid);
 
+	const lifecycleSection = editorSubsection("策略版本");
+	if (!working.id) {
+		const initialHelp = textElement(
+			"p",
+			"首次保存 Profile 时，当前策略会作为第一个 active 版本。之后的修改通过草稿、评估、灰度和发布流程完成。",
+		);
+		initialHelp.className = "field-help";
+		lifecycleSection.append(initialHelp);
+	} else if (!strategyOverview) {
+		const disabledHelp = textElement(
+			"p",
+			"启用并保存智能路由后，才能管理独立策略版本。",
+		);
+		disabledHelp.className = "field-help";
+		lifecycleSection.append(disabledHelp);
+	} else {
+		const snapshot = strategyOverview.snapshot || {};
+		const lifecycleHelp = textElement(
+			"p",
+			"Profile 保存只更新模型角色等公共配置，不会直接覆盖线上策略。先在上方调整 Route 与预算，再保存为草稿；草稿进入评估后不可修改。",
+		);
+		lifecycleHelp.className = "field-help";
+		const summary = element("div", "cluster strategy-lifecycle-summary");
+		summary.append(
+			badge(`revision ${snapshot.revision || 0}`, ""),
+			badge(
+				`active：${snapshot.active?.config?.alias || snapshot.active?.config?.name || "-"}`,
+				"badge-success",
+			),
+		);
+		if (snapshot.canary) {
+			summary.append(
+				badge(
+					`灰度：${basisPointsToPercent(snapshot.canary_bps)}%`,
+					"badge-warning",
+				),
+			);
+		}
+		const invokeStrategyAction = (action) => {
+			void runEditorAction(alert, action).catch(() => {});
+		};
+
+		const draftControls = element("div", "cluster strategy-draft-controls");
+		const saveDraft = actionButton(
+			editingStrategyID ? "更新当前草稿" : "保存为新草稿",
+			"button-secondary",
+		);
+		saveDraft.addEventListener("click", async () => {
+			try {
+				await runEditorAction(alert, async () => {
+					syncForm();
+					const config = autoRoutingPayload(
+						working.config.auto_routing,
+					).strategy;
+					if (editingStrategyID) {
+						await actions.updateStrategy?.(editingStrategyID, config);
+						return;
+					}
+					await actions.createStrategy?.({ ...config, name: "" });
+				});
+			} catch {}
+		});
+		draftControls.append(saveDraft);
+		if (editingStrategyID) {
+			const stopEditing = actionButton("退出草稿编辑", "button-secondary");
+			stopEditing.addEventListener("click", () =>
+				invokeStrategyAction(() => actions.editStrategy?.(0))
+			);
+			draftControls.append(stopEditing);
+		}
+
+		const versions = element("div", "stack strategy-version-list");
+		for (const version of strategyOverview.strategies || []) {
+			const card = element("article", "card strategy-version-card stack");
+			const header = element("div", "cluster strategy-version-header");
+			const title = textElement(
+				"h4",
+				version.config?.alias || version.config?.name || `策略 ${version.id}`,
+			);
+			const state = badge(
+				strategyStateLabel(version.state),
+				strategyStateBadge(version.state),
+			);
+			header.append(title, state);
+			if (version.rating?.grade) {
+				header.append(
+					badge(
+						`质量 ${version.rating.grade}`,
+						strategyGradeBadge(version.rating.grade),
+					),
+				);
+			}
+			const metadata = textElement(
+				"p",
+				`${version.config?.name || "-"} · ID ${version.id}`,
+			);
+			metadata.className = "muted";
+			const rating = version.rating
+				? textElement(
+					"p",
+					`配置估算：${basisPointsToPercent(version.rating.display_score_bps)} 分 · 质量下限 ${basisPointsToPercent(version.rating.quality_floor_bps)}% · 严重错误上限 ${basisPointsToPercent(version.rating.severe_error_ceiling_bps)}%`,
+				)
+				: null;
+			if (rating) {
+				rating.className = "muted";
+			}
+			const controls = element("div", "cluster strategy-version-actions");
+
+			if (version.state === "draft") {
+				const edit = actionButton("载入草稿", "button-secondary");
+				edit.addEventListener("click", () =>
+					invokeStrategyAction(() => actions.editStrategy?.(version.id))
+				);
+				const evaluate = actionButton("开始评估", "button-secondary");
+				evaluate.addEventListener("click", () =>
+					invokeStrategyAction(() =>
+						actions.advanceStrategy?.(version.id, "draft", "evaluating")
+					)
+				);
+				controls.append(edit, evaluate);
+			} else if (version.state === "evaluating") {
+				const ready = actionButton("评估通过", "button-secondary");
+				ready.addEventListener("click", () =>
+					invokeStrategyAction(() =>
+						actions.advanceStrategy?.(version.id, "evaluating", "ready")
+					)
+				);
+				controls.append(ready);
+			} else if (version.state === "ready" && !snapshot.canary) {
+				const percent = element("input");
+				percent.type = "number";
+				percent.min = "0.01";
+				percent.max = "99.99";
+				percent.step = "0.01";
+				percent.value = "10";
+				percent.setAttribute("aria-label", "灰度比例（%）");
+				const canary = actionButton("开始灰度", "button-secondary");
+				canary.addEventListener("click", async () => {
+					try {
+						const canaryBPS = percentToBasisPoints(percent.value, "灰度比例");
+						if (canaryBPS <= 0 || canaryBPS >= 10000) {
+							throw new Error("灰度比例必须大于 0% 且小于 100%。");
+						}
+						await runEditorAction(alert, () =>
+							actions.startStrategyCanary?.(
+								version.id,
+								canaryBPS,
+								snapshot.revision,
+							),
+						);
+					} catch (error) {
+						if (alert.hidden) {
+							alert.textContent = error?.message || "请求失败，请重试。";
+							alert.hidden = false;
+						}
+					}
+				});
+				controls.append(percent, canary);
+			}
+			card.append(header, metadata);
+			if (rating) {
+				card.append(rating);
+			}
+			if (controls.children.length) {
+				card.append(controls);
+			}
+			versions.append(card);
+		}
+
+		const publicationControls = element(
+			"div",
+			"cluster strategy-publication-actions",
+		);
+		if (snapshot.canary) {
+			const cancelCanary = actionButton("取消灰度", "button-secondary");
+			cancelCanary.addEventListener("click", () =>
+				invokeStrategyAction(() =>
+					actions.cancelStrategyCanary?.(snapshot.revision)
+				)
+			);
+			const promote = actionButton("发布为正式策略", "button");
+			promote.addEventListener("click", () =>
+				invokeStrategyAction(() =>
+					actions.promoteStrategy?.(snapshot.revision)
+				)
+			);
+			publicationControls.append(cancelCanary, promote);
+		} else if (snapshot.last_known_good) {
+			const rollback = actionButton("回滚到上一正式策略", "button-danger");
+			rollback.addEventListener("click", () =>
+				invokeStrategyAction(() =>
+					actions.rollbackStrategy?.(snapshot.revision)
+				)
+			);
+			publicationControls.append(rollback);
+		}
+
+		lifecycleSection.append(
+			lifecycleHelp,
+			summary,
+			draftControls,
+			versions,
+			publicationControls,
+		);
+	}
+
   function refreshRoleChoices() {
     const participants = participantModelIDs();
     setSelectChoices(
@@ -1353,7 +1564,13 @@ export function renderProfileEditor(root, source, actions = {}) {
     }
   });
   autoDetails.hidden = !autoEnabled.checked;
-  autoDetails.append(autoRoles, strategySection, mappingSection, budgetSection);
+	autoDetails.append(
+		autoRoles,
+		strategySection,
+		mappingSection,
+		budgetSection,
+		lifecycleSection,
+	);
   autoRouting.append(autoDetails);
 
   const vision = editorSection("视觉增强");
@@ -1981,6 +2198,43 @@ function lifecycleLabel(lifecycle) {
     default:
       return "暂无可靠数据";
   }
+}
+
+function strategyStateLabel(state) {
+	switch (state) {
+		case "draft":
+			return "草稿";
+		case "evaluating":
+			return "评估中";
+		case "ready":
+			return "待灰度";
+		case "canary":
+			return "灰度中";
+		case "active":
+			return "正式";
+		default:
+			return String(state || "未知");
+	}
+}
+
+function strategyStateBadge(state) {
+	if (state === "active") {
+		return "badge-success";
+	}
+	if (state === "canary" || state === "evaluating") {
+		return "badge-warning";
+	}
+	return "";
+}
+
+function strategyGradeBadge(grade) {
+	if (grade === "A") {
+		return "badge-success";
+	}
+	if (grade === "B" || grade === "C") {
+		return "badge-warning";
+	}
+	return "badge-danger";
 }
 
 function reliableValue(value) {

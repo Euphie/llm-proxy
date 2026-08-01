@@ -21,6 +21,7 @@ import (
 	"github.com/Euphie/llm-proxy/internal/proxy"
 	"github.com/Euphie/llm-proxy/internal/routing"
 	"github.com/Euphie/llm-proxy/internal/stats"
+	"github.com/Euphie/llm-proxy/internal/strategy"
 )
 
 type Options struct {
@@ -64,14 +65,32 @@ func New(options Options) (*App, error) {
 	accounts := admin.NewAccountStore(db)
 	sessions := admin.NewSessionStore(db, time.Now)
 	profiles := profile.NewStore(db)
+	strategies := strategy.NewStore(db, time.Now)
 	registry := gateway.NewRegistry()
 	client := &http.Client{Timeout: 10 * time.Minute}
 	build := func(record profile.Record) (http.Handler, error) {
-		runtime, err := record.Resolve()
+		resolved, snapshot, err := strategies.ResolveRecord(context.Background(), record)
+		if err != nil {
+			return nil, fmt.Errorf("resolve strategy for Profile %q: %w", record.Slug, err)
+		}
+		runtime, err := resolved.Resolve()
 		if err != nil {
 			return nil, fmt.Errorf("resolve Profile %q: %w", record.Slug, err)
 		}
-		return proxy.NewWithSessionStore(runtime, client, usage, routingSessions), nil
+		active := proxy.NewWithSessionStore(runtime, client, usage, routingSessions)
+		if snapshot.Canary == nil {
+			return active, nil
+		}
+		canaryRecord := resolved
+		canaryRecord.Config.AutoRouting.Strategy = snapshot.Canary.Config
+		canaryRuntime, err := canaryRecord.Resolve()
+		if err != nil {
+			return nil, fmt.Errorf("resolve canary strategy for Profile %q: %w", record.Slug, err)
+		}
+		canary := proxy.NewWithSessionStore(canaryRuntime, client, usage, routingSessions)
+		return canaryHandler(
+			active, canary, routingSessions, record.ID, snapshot.Canary.ID, snapshot.CanaryBPS,
+		), nil
 	}
 	coordinator := gateway.NewCoordinator(profiles, registry, build)
 
@@ -89,7 +108,14 @@ func New(options Options) (*App, error) {
 		return fail(fmt.Errorf("load Profile snapshot: %w", err))
 	}
 	for _, record := range records {
-		if _, err := record.Resolve(); err != nil {
+		resolved := record
+		if record.Config.AutoRouting.Enabled {
+			resolved, _, err = strategies.ResolveRecord(context.Background(), record)
+			if err != nil {
+				return fail(fmt.Errorf("load routing strategy for Profile %q: %w", record.Slug, err))
+			}
+		}
+		if _, err := resolved.Resolve(); err != nil {
 			return fail(fmt.Errorf("validate persisted Profile %q: %w", record.Slug, err))
 		}
 	}
@@ -119,7 +145,8 @@ func New(options Options) (*App, error) {
 	}
 	adminAPI := admin.NewAPI(admin.Dependencies{
 		Auth:             auth,
-		Profiles:         admin.NewProfileService(profiles, coordinator),
+		Profiles:         admin.NewProfileService(profiles, coordinator, strategies),
+		Strategies:       admin.NewStrategyService(profiles, strategies, coordinator, time.Now),
 		Stats:            usage,
 		DB:               db,
 		Version:          options.Version,
@@ -143,6 +170,28 @@ func New(options Options) (*App, error) {
 	application.closeUsage = usage.Close
 	application.closeDatabase = db.Close
 	return application, nil
+}
+
+func canaryHandler(
+	active http.Handler,
+	canary http.Handler,
+	sessions *routing.SessionStore,
+	profileID int64,
+	strategyID int64,
+	canaryBPS int,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessionID := ""
+		if values := r.Header.Values(routing.SessionIDHeader); len(values) == 1 {
+			sessionID = values[0]
+		}
+		bucket, identified := sessions.CanaryBucket(r.Header, sessionID, profileID, strategyID)
+		if identified && bucket < canaryBPS {
+			canary.ServeHTTP(w, r)
+			return
+		}
+		active.ServeHTTP(w, r)
+	})
 }
 
 func routeApplication(adminAPI, adminUI, dataPlane http.Handler) http.Handler {

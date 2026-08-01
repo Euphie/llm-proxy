@@ -430,6 +430,14 @@ test("Profile API methods use exact routes, methods, JSON, and CSRF", async (t) 
   await api.deleteProfile(7);
   await api.deleteProfile(7, 12);
   await api.setDefaultProfile(12);
+	await api.listStrategies(7);
+	await api.createStrategy(7, { name: "" });
+	await api.updateStrategy(7, 9, { name: "20260802-002" });
+	await api.advanceStrategy(7, 9, "draft", "evaluating");
+	await api.startStrategyCanary(7, 9, 2500, 4);
+	await api.cancelStrategyCanary(7, 5);
+	await api.promoteStrategy(7, 6);
+	await api.rollbackStrategy(7, 7);
 
   assert.deepEqual(calls, [
     {
@@ -480,6 +488,54 @@ test("Profile API methods use exact routes, methods, JSON, and CSRF", async (t) 
       body: { profile_id: 12 },
       csrf: "csrf-token",
     },
+		{
+			path: "/_admin/api/profiles/7/strategies",
+			method: "GET",
+			body: undefined,
+			csrf: null,
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies",
+			method: "POST",
+			body: { config: { name: "" } },
+			csrf: "csrf-token",
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies/9",
+			method: "PUT",
+			body: { config: { name: "20260802-002" } },
+			csrf: "csrf-token",
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies/9/advance",
+			method: "POST",
+			body: { from: "draft", to: "evaluating" },
+			csrf: "csrf-token",
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies/9/canary",
+			method: "POST",
+			body: { canary_bps: 2500, expected_revision: 4 },
+			csrf: "csrf-token",
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies/cancel-canary",
+			method: "POST",
+			body: { expected_revision: 5 },
+			csrf: "csrf-token",
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies/promote",
+			method: "POST",
+			body: { expected_revision: 6 },
+			csrf: "csrf-token",
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies/rollback",
+			method: "POST",
+			body: { expected_revision: 7 },
+			csrf: "csrf-token",
+		},
   ]);
 });
 
@@ -856,6 +912,105 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.equal(saves.length, 1);
   assert.equal(findClass(root, "error-banner").hidden, false);
   assert.match(findClass(root, "error-banner").textContent, /最低质量必须是/);
+});
+
+test("strategy lifecycle UI creates drafts and exposes only valid publication actions", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const active = {
+		id: 1,
+		profile_id: 7,
+		state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+		rating: {
+			display_score_bps: 9907,
+			grade: "A",
+			quality_floor_bps: 9900,
+			severe_error_ceiling_bps: 50,
+			passing_routes: 1,
+			total_routes: 1,
+			source: "configured",
+		},
+	};
+	const candidateConfig = structuredClone(active.config);
+	candidateConfig.name = "20260802-002";
+	candidateConfig.alias = "候选";
+	const draftVersion = { id: 2, profile_id: 7, state: "draft", config: candidateConfig };
+	const evaluating = { id: 3, profile_id: 7, state: "evaluating", config: { ...candidateConfig, name: "20260802-003" } };
+	const ready = { id: 4, profile_id: 7, state: "ready", config: { ...candidateConfig, name: "20260802-004" } };
+	draft.strategy_overview = {
+		snapshot: { revision: 4, active, canary_bps: 0 },
+		strategies: [ready, evaluating, draftVersion, active],
+	};
+	const calls = [];
+	renderProfileEditor(root, draft, {
+		createStrategy: async (config) => calls.push(["create", config]),
+		editStrategy: (id) => calls.push(["edit", id]),
+		advanceStrategy: async (id, from, to) => calls.push(["advance", id, from, to]),
+		startStrategyCanary: async (id, bps, revision) => calls.push(["canary", id, bps, revision]),
+		save: async () => {},
+		cancel: () => {},
+		generate: () => {},
+	});
+
+	assert.ok(findText(root, "Profile 保存只更新模型角色等公共配置"));
+	assert.ok(findText(root, "配置估算：99.07 分"));
+	assert.equal(controlByName(root, "auto_strategy_name").readOnly, true);
+	await buttonByText(root, "保存为新草稿").dispatch("click");
+	await buttonByText(root, "载入草稿").dispatch("click");
+	await buttonByText(root, "开始评估").dispatch("click");
+	await buttonByText(root, "评估通过").dispatch("click");
+	const canaryPercent = descendants(root).find(
+		(element) => element.getAttribute("aria-label") === "灰度比例（%）",
+	);
+	assert.ok(canaryPercent);
+	canaryPercent.value = "12.5";
+	await buttonByText(root, "开始灰度").dispatch("click");
+
+	assert.equal(calls[0][0], "create");
+	assert.equal(calls[0][1].name, "");
+	assert.deepEqual(calls.slice(1), [
+		["edit", 2],
+		["advance", 2, "draft", "evaluating"],
+		["advance", 3, "evaluating", "ready"],
+		["canary", 4, 1250, 4],
+	]);
+
+	const canaryRoot = root;
+	const canaryDraft = autoLifecycleDraft();
+	canaryDraft.strategy_overview = {
+		snapshot: {
+			revision: 5,
+			active,
+			canary: { ...ready, state: "canary" },
+			canary_bps: 1250,
+			last_known_good: null,
+		},
+		strategies: [{ ...ready, state: "canary" }, active],
+	};
+	const publication = [];
+	renderProfileEditor(canaryRoot, canaryDraft, {
+		cancelStrategyCanary: async (revision) => publication.push(["cancel", revision]),
+		promoteStrategy: async (revision) => publication.push(["promote", revision]),
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+	await buttonByText(canaryRoot, "取消灰度").dispatch("click");
+	await buttonByText(canaryRoot, "发布为正式策略").dispatch("click");
+	assert.deepEqual(publication, [["cancel", 5], ["promote", 5]]);
+
+	const rollbackRoot = root;
+	const rollbackDraft = autoLifecycleDraft();
+	rollbackDraft.strategy_overview = {
+		snapshot: { revision: 6, active: ready, canary_bps: 0, last_known_good: active },
+		strategies: [ready, active],
+	};
+	let rollbackRevision = 0;
+	renderProfileEditor(rollbackRoot, rollbackDraft, {
+		rollbackStrategy: async (revision) => { rollbackRevision = revision; },
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+	await buttonByText(rollbackRoot, "回滚到上一正式策略").dispatch("click");
+	assert.equal(rollbackRevision, 6);
 });
 
 test("saved model rows retain empty optional limits while still showing catalog provenance", async (t) => {
@@ -1864,6 +2019,66 @@ function profileFixture(overrides = {}) {
     config: overrides.config || base.config,
     usage_30d: overrides.usage_30d || base.usage_30d,
   };
+}
+
+function autoLifecycleDraft() {
+	const draft = defaultProfileDraft();
+	draft.id = 7;
+	draft.slug = "auto";
+	draft.original_slug = "auto";
+	draft.display_name = "Auto";
+	draft.make_default = true;
+	draft.config.models = [
+		{
+			id: "fast", context_window: 128000, max_output_tokens: 16000,
+			supports_vision: false, supports_tools: true,
+			supports_structured_output: true,
+			input_price_micro_usd_per_million: 100000,
+			output_price_micro_usd_per_million: 400000,
+		},
+		{
+			id: "strong", context_window: 128000, max_output_tokens: 16000,
+			supports_vision: true, supports_tools: true,
+			supports_structured_output: true,
+			input_price_micro_usd_per_million: 3000000,
+			output_price_micro_usd_per_million: 15000000,
+		},
+	];
+	draft.config.auto_routing = {
+		enabled: true,
+		participants: ["fast", "strong"],
+		strong_baseline_model: "strong",
+		task_analyzer_model: "fast",
+		analyzer_timeout: "5s",
+		analyzer_min_confidence_bps: 7000,
+		session_ttl: "24h",
+		strategy: {
+			name: "20260802-001",
+			alias: "当前",
+			default_route: "balanced",
+			task_routes: [{ task_type: "simple", route: "balanced" }],
+			routes: [{
+				id: "balanced",
+				min_quality_bps: 9000,
+				max_severe_error_rate_bps: 100,
+				candidates: [
+					{ model: "fast", quality_score_bps: 9200, severe_error_rate_bps: 50 },
+					{ model: "strong", quality_score_bps: 9900, severe_error_rate_bps: 10 },
+				],
+			}],
+			budget: {
+				max_answer_attempts: 2,
+				max_auxiliary_calls: 2,
+				max_total_outbound_calls: 5,
+				max_retries_per_target: 1,
+				max_target_switches: 0,
+				max_model_switches: 1,
+				deadline: "2m",
+				max_worst_case_cost_micro_usd: 500000,
+			},
+		},
+	};
+	return draft;
 }
 
 class FakeElement {

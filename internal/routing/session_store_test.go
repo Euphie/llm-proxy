@@ -124,6 +124,34 @@ func TestSessionStoreUpgradesButNeverDowngradesAndExpiresBindings(t *testing.T) 
 	}
 }
 
+func TestSessionStoreBuildsStablePrivateCanaryBuckets(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store, err := NewSessionStore(db, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := http.Header{"Authorization": {"Bearer caller-secret"}}
+	bucket, ok := store.CanaryBucket(headers, "agent-session-42", 8, 17)
+	if !ok || bucket < 0 || bucket >= 10_000 {
+		t.Fatalf("bucket=%d ok=%v", bucket, ok)
+	}
+	same, ok := store.CanaryBucket(headers, "agent-session-42", 8, 17)
+	if !ok || same != bucket {
+		t.Fatalf("same bucket=%d ok=%v, want %d", same, ok, bucket)
+	}
+	other, ok := store.CanaryBucket(headers, "agent-session-42", 8, 18)
+	if !ok || other == bucket {
+		t.Fatalf("strategy did not scope bucket: %d", other)
+	}
+	if _, ok := store.CanaryBucket(http.Header{}, "agent-session-42", 8, 17); ok {
+		t.Fatal("anonymous request received a canary bucket")
+	}
+}
+
 func insertRoutingSessionProfile(t *testing.T, db *sql.DB, id int64) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339Nano)

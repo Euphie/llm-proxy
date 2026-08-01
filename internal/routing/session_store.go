@@ -90,6 +90,32 @@ func (s *SessionStore) Key(
 	return key, true
 }
 
+func (s *SessionStore) CanaryBucket(
+	headers http.Header,
+	rawSessionID string,
+	profileID int64,
+	strategyID int64,
+) (int, bool) {
+	if s == nil || profileID <= 0 || strategyID <= 0 {
+		return 0, false
+	}
+	if rawSessionID != "" && !validRawSessionID(rawSessionID) {
+		return 0, false
+	}
+	authDomain, ok := sessionAuthDomain(headers)
+	if !ok {
+		return 0, false
+	}
+	mac := hmac.New(sha256.New, s.key)
+	writeSessionPart(mac, "canary")
+	writeSessionPart(mac, rawSessionID)
+	writeSessionPart(mac, fmt.Sprint(profileID))
+	writeSessionPart(mac, fmt.Sprint(strategyID))
+	_, _ = mac.Write(authDomain[:])
+	sum := mac.Sum(nil)
+	return int(binary.BigEndian.Uint64(sum[:8]) % 10_000), true
+}
+
 func (s *SessionStore) Get(
 	ctx context.Context,
 	key SessionKey,

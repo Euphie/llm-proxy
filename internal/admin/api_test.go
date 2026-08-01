@@ -23,6 +23,7 @@ import (
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/stats"
+	"github.com/Euphie/llm-proxy/internal/strategy"
 )
 
 const initialCredentialWarning = "High risk: the default admin/admin credentials are active. Change the password immediately."
@@ -593,6 +594,140 @@ func TestAPIProfileCRUDAndDomainErrors(t *testing.T) {
 	}
 }
 
+func TestAPIStrategyLifecyclePublishesAndRollsBackWithCAS(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	createBody, err := json.Marshal(saveProfileRequest{
+		Slug: "auto", DisplayName: "Auto", Enabled: true,
+		Config: apiAutoRoutingConfig(), MakeDefault: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := fixture.request(
+		t, http.MethodPost, "/_admin/api/profiles", string(createBody), cookies, csrf,
+	)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	var profileBody profileResponse
+	decodeTestJSON(t, created, &profileBody)
+
+	basePath := "/_admin/api/profiles/" + strconv.FormatInt(profileBody.ID, 10) + "/strategies"
+	overviewResponse := fixture.request(t, http.MethodGet, basePath, "", cookies, "")
+	if overviewResponse.Code != http.StatusOK {
+		t.Fatalf("overview status=%d body=%s", overviewResponse.Code, overviewResponse.Body.String())
+	}
+	var overview StrategyOverview
+	decodeTestJSON(t, overviewResponse, &overview)
+	if overview.Snapshot.Revision != 1 || overview.Snapshot.Active.Config.Name != "20260802-001" {
+		t.Fatalf("overview=%+v", overview)
+	}
+
+	candidateConfig := overview.Snapshot.Active.Config
+	candidateConfig.Name = ""
+	candidateConfig.Alias = "更省成本"
+	candidateConfig.Routes[0].Candidates[0].QualityScoreBPS = 9400
+	draftJSON, err := json.Marshal(strategyConfigRequest{Config: candidateConfig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draftResponse := fixture.request(t, http.MethodPost, basePath, string(draftJSON), cookies, csrf)
+	if draftResponse.Code != http.StatusCreated {
+		t.Fatalf("draft status=%d body=%s", draftResponse.Code, draftResponse.Body.String())
+	}
+	var candidate strategy.Version
+	decodeTestJSON(t, draftResponse, &candidate)
+	if candidate.Config.Name != "20260729-001" || candidate.State != strategy.StateDraft {
+		t.Fatalf("candidate=%+v", candidate)
+	}
+
+	versionPath := basePath + "/" + strconv.FormatInt(candidate.ID, 10)
+	advance := func(from, to strategy.State) strategy.Version {
+		t.Helper()
+		body := fmt.Sprintf(`{"from":%q,"to":%q}`, from, to)
+		response := fixture.request(t, http.MethodPost, versionPath+"/advance", body, cookies, csrf)
+		if response.Code != http.StatusOK {
+			t.Fatalf("advance %s -> %s status=%d body=%s", from, to, response.Code, response.Body.String())
+		}
+		var version strategy.Version
+		decodeTestJSON(t, response, &version)
+		return version
+	}
+	advance(strategy.StateDraft, strategy.StateEvaluating)
+	ready := advance(strategy.StateEvaluating, strategy.StateReady)
+	immutable := fixture.request(t, http.MethodPut, versionPath, string(draftJSON), cookies, csrf)
+	assertAPIError(t, immutable, http.StatusConflict, "strategy_immutable")
+
+	canary := fixture.request(
+		t, http.MethodPost, versionPath+"/canary",
+		`{"expected_revision":1,"canary_bps":2500}`, cookies, csrf,
+	)
+	if canary.Code != http.StatusOK {
+		t.Fatalf("canary status=%d body=%s", canary.Code, canary.Body.String())
+	}
+	var canarySnapshot strategy.Snapshot
+	decodeTestJSON(t, canary, &canarySnapshot)
+	if canarySnapshot.Revision != 2 || canarySnapshot.Canary == nil ||
+		canarySnapshot.Canary.ID != ready.ID || canarySnapshot.CanaryBPS != 2500 {
+		t.Fatalf("canary=%+v", canarySnapshot)
+	}
+
+	stale := fixture.request(
+		t, http.MethodPost, basePath+"/promote", `{"expected_revision":1}`, cookies, csrf,
+	)
+	assertAPIError(t, stale, http.StatusConflict, "strategy_conflict")
+	canceled := fixture.request(
+		t, http.MethodPost, basePath+"/cancel-canary", `{"expected_revision":2}`, cookies, csrf,
+	)
+	if canceled.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", canceled.Code, canceled.Body.String())
+	}
+
+	canary = fixture.request(
+		t, http.MethodPost, versionPath+"/canary",
+		`{"expected_revision":3,"canary_bps":1000}`, cookies, csrf,
+	)
+	if canary.Code != http.StatusOK {
+		t.Fatalf("second canary status=%d body=%s", canary.Code, canary.Body.String())
+	}
+	promoted := fixture.request(
+		t, http.MethodPost, basePath+"/promote", `{"expected_revision":4}`, cookies, csrf,
+	)
+	if promoted.Code != http.StatusOK {
+		t.Fatalf("promote status=%d body=%s", promoted.Code, promoted.Body.String())
+	}
+	var promotedSnapshot strategy.Snapshot
+	decodeTestJSON(t, promoted, &promotedSnapshot)
+	if promotedSnapshot.Revision != 5 || promotedSnapshot.Active.ID != candidate.ID ||
+		promotedSnapshot.LastKnownGood == nil {
+		t.Fatalf("promoted=%+v", promotedSnapshot)
+	}
+
+	getProfile := fixture.request(
+		t, http.MethodGet, "/_admin/api/profiles/"+strconv.FormatInt(profileBody.ID, 10), "", cookies, "",
+	)
+	if getProfile.Code != http.StatusOK {
+		t.Fatalf("get profile status=%d body=%s", getProfile.Code, getProfile.Body.String())
+	}
+	decodeTestJSON(t, getProfile, &profileBody)
+	if profileBody.Config.AutoRouting.Strategy.Name != candidate.Config.Name {
+		t.Fatalf("profile active strategy=%q", profileBody.Config.AutoRouting.Strategy.Name)
+	}
+
+	rolledBack := fixture.request(
+		t, http.MethodPost, basePath+"/rollback", `{"expected_revision":5}`, cookies, csrf,
+	)
+	if rolledBack.Code != http.StatusOK {
+		t.Fatalf("rollback status=%d body=%s", rolledBack.Code, rolledBack.Body.String())
+	}
+	var rolledBackSnapshot strategy.Snapshot
+	decodeTestJSON(t, rolledBack, &rolledBackSnapshot)
+	if rolledBackSnapshot.Revision != 6 || rolledBackSnapshot.Active.Config.Name != "20260802-001" {
+		t.Fatalf("rolled back=%+v", rolledBackSnapshot)
+	}
+}
+
 // Break caught: omitting zero-value usage objects, counting data outside 30 days, or querying usage separately per Profile.
 func TestAPIProfileListIncludesThirtyDayUsageSummaries(t *testing.T) {
 	fixture := newTestAPI(t)
@@ -687,7 +822,7 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"data_dir":             fixture.dataDir,
 		"database_file":        "llm-proxy.db",
 		"database_bytes":       float64(databaseInfo.Size()),
-		"schema_version":       float64(3),
+		"schema_version":       float64(4),
 		"default_profile_id":   float64(first.ID),
 		"password_must_change": false,
 	}
@@ -852,6 +987,15 @@ func TestAPIKnownRoutesReturnAccurateAllowHeader(t *testing.T) {
 			},
 		},
 		{name: "profile copy", path: "/_admin/api/profiles/123/copy", allow: []string{http.MethodPost}},
+		{
+			name: "strategy collection", path: "/_admin/api/profiles/123/strategies",
+			allow: []string{http.MethodGet, http.MethodHead, http.MethodPost},
+		},
+		{name: "strategy item", path: "/_admin/api/profiles/123/strategies/456", allow: []string{http.MethodPut}},
+		{name: "strategy advance", path: "/_admin/api/profiles/123/strategies/456/advance", allow: []string{http.MethodPost}},
+		{name: "strategy canary", path: "/_admin/api/profiles/123/strategies/456/canary", allow: []string{http.MethodPost}},
+		{name: "strategy promote", path: "/_admin/api/profiles/123/strategies/promote", allow: []string{http.MethodPost}},
+		{name: "strategy rollback", path: "/_admin/api/profiles/123/strategies/rollback", allow: []string{http.MethodPost}},
 		{name: "default profile", path: "/_admin/api/default-profile", allow: []string{http.MethodPut}},
 		{name: "stats", path: "/_admin/api/stats", allow: []string{http.MethodGet, http.MethodHead}},
 		{name: "system", path: "/_admin/api/system", allow: []string{http.MethodGet, http.MethodHead}},
@@ -1027,9 +1171,14 @@ func newTestAPIWithActivation(
 		NewLoginLimiter(func() time.Time { return now }),
 	)
 	store := profile.NewStore(db)
+	strategyStore := strategy.NewStore(db, func() time.Time { return now })
 	registry := gateway.NewRegistry()
 	coordinator := gateway.NewCoordinator(store, registry, func(record profile.Record) (http.Handler, error) {
-		if _, err := record.Resolve(); err != nil {
+		resolved, _, err := strategyStore.ResolveRecord(context.Background(), record)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := resolved.Resolve(); err != nil {
 			return nil, err
 		}
 		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
@@ -1037,7 +1186,8 @@ func newTestAPIWithActivation(
 	logs := &bytes.Buffer{}
 	handler := NewAPI(Dependencies{
 		Auth:             auth,
-		Profiles:         NewProfileService(store, coordinator),
+		Profiles:         NewProfileService(store, coordinator, strategyStore),
+		Strategies:       NewStrategyService(store, strategyStore, coordinator, func() time.Time { return now }),
 		Stats:            stats.New(db),
 		DB:               db,
 		Version:          "test-version",
@@ -1141,6 +1291,52 @@ func profileConfigJSON(protocol, upstream string) string {
 		`{"version":1,"protocol":%q,"upstream":%q,"vision":{"enabled":false,"model":"sonnet","max_tokens":2048,"timeout":"2m","max_concurrency":4,"cache_ttl":"30m","cache_max_entries":512},"overload_rules":[]}`,
 		protocol, upstream,
 	)
+}
+
+func apiAutoRoutingConfig() profile.Config {
+	no := false
+	yes := true
+	contextWindow := 200_000
+	maxOutput := 16_000
+	fastInput := int64(100_000)
+	fastOutput := int64(400_000)
+	strongInput := int64(3_000_000)
+	strongOutput := int64(15_000_000)
+	config := profile.NewConfig(profile.ProtocolAnthropic, "https://auto.example")
+	config.Models = []profile.ModelCapabilityConfig{
+		{
+			ID: "fast", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutput,
+			SupportsVision: &no, SupportsTools: &yes, SupportsStructuredOutput: &yes,
+			InputPriceMicroUSDPerMillion: &fastInput, OutputPriceMicroUSDPerMillion: &fastOutput,
+		},
+		{
+			ID: "strong", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutput,
+			SupportsVision: &yes, SupportsTools: &yes, SupportsStructuredOutput: &yes,
+			InputPriceMicroUSDPerMillion: &strongInput, OutputPriceMicroUSDPerMillion: &strongOutput,
+		},
+	}
+	config.AutoRouting = profile.AutoRoutingConfig{
+		Enabled: true, Participants: []string{"fast", "strong"},
+		StrongBaselineModel: "strong", TaskAnalyzerModel: "fast",
+		AnalyzerTimeout: "5s", AnalyzerMinConfidenceBPS: 7000,
+		Strategy: profile.RoutingStrategyConfig{
+			Name: "20260802-001", Alias: "当前", DefaultRoute: "balanced",
+			TaskRoutes: []profile.TaskRouteConfig{{TaskType: "simple", Route: "balanced"}},
+			Routes: []profile.RouteConfig{{
+				ID: "balanced", MinQualityBPS: 9000, MaxSevereErrorRateBPS: 100,
+				Candidates: []profile.RouteCandidateConfig{
+					{Model: "fast", QualityScoreBPS: 9200, SevereErrorRateBPS: 50},
+					{Model: "strong", QualityScoreBPS: 9900, SevereErrorRateBPS: 10},
+				},
+			}},
+			Budget: profile.AttemptBudgetConfig{
+				MaxAnswerAttempts: 2, MaxAuxiliaryCalls: 2, MaxTotalOutboundCalls: 5,
+				MaxRetriesPerTarget: 1, MaxModelSwitches: 1, Deadline: "2m",
+				MaxWorstCaseCostMicroUSD: 500_000,
+			},
+		},
+	}
+	return config
 }
 
 func insertAPIUsage(
