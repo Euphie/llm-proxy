@@ -52,26 +52,30 @@ type Planner struct {
 }
 
 type ExecutionPlan struct {
-	strategyName          string
-	routeID               string
-	model                 string
-	visionMode            VisionMode
-	usesStrongBaseline    bool
-	estimatedCostMicroUSD int64
-	worstCaseCostMicroUSD int64
-	reason                string
-	budget                profile.AttemptBudgetRuntime
+	strategyName           string
+	routeID                string
+	model                  string
+	visionMode             VisionMode
+	usesStrongBaseline     bool
+	estimatedCostMicroUSD  int64
+	worstCaseCostMicroUSD  int64
+	answerCallCostMicroUSD int64
+	visionCallCostMicroUSD int64
+	reason                 string
+	budget                 profile.AttemptBudgetRuntime
 }
 
 type ExecutionPlanSnapshot struct {
-	StrategyName          string
-	RouteID               string
-	Model                 string
-	VisionMode            VisionMode
-	UsesStrongBaseline    bool
-	EstimatedCostMicroUSD int64
-	WorstCaseCostMicroUSD int64
-	Reason                string
+	StrategyName           string
+	RouteID                string
+	Model                  string
+	VisionMode             VisionMode
+	UsesStrongBaseline     bool
+	EstimatedCostMicroUSD  int64
+	WorstCaseCostMicroUSD  int64
+	AnswerCallCostMicroUSD int64
+	VisionCallCostMicroUSD int64
+	Reason                 string
 }
 
 func NewPlanner(runtime profile.Runtime) (*Planner, error) {
@@ -148,23 +152,27 @@ func (p *Planner) executionPlan(
 	reason string,
 ) ExecutionPlan {
 	return ExecutionPlan{
-		strategyName:          p.strategy.Name,
-		routeID:               routeID,
-		model:                 candidate.model,
-		visionMode:            candidate.visionMode,
-		usesStrongBaseline:    baseline,
-		estimatedCostMicroUSD: candidate.estimatedCost,
-		worstCaseCostMicroUSD: candidate.worstCaseCost,
-		reason:                reason,
-		budget:                p.strategy.Budget,
+		strategyName:           p.strategy.Name,
+		routeID:                routeID,
+		model:                  candidate.model,
+		visionMode:             candidate.visionMode,
+		usesStrongBaseline:     baseline,
+		estimatedCostMicroUSD:  candidate.estimatedCost,
+		worstCaseCostMicroUSD:  candidate.worstCaseCost,
+		answerCallCostMicroUSD: candidate.answerCallCost,
+		visionCallCostMicroUSD: candidate.visionCallCost,
+		reason:                 reason,
+		budget:                 p.strategy.Budget,
 	}
 }
 
 type candidatePlan struct {
-	model         string
-	visionMode    VisionMode
-	estimatedCost int64
-	worstCaseCost int64
+	model          string
+	visionMode     VisionMode
+	estimatedCost  int64
+	worstCaseCost  int64
+	answerCallCost int64
+	visionCallCost int64
 }
 
 func (p *Planner) evaluateCandidate(
@@ -234,6 +242,7 @@ func (p *Planner) evaluateCandidate(
 	return candidatePlan{
 		model: modelID, visionMode: visionMode,
 		estimatedCost: estimated, worstCaseCost: worst,
+		answerCallCost: answerCost, visionCallCost: visionCost,
 	}, true
 }
 
@@ -341,17 +350,21 @@ func (p ExecutionPlan) VisionMode() VisionMode               { return p.visionMo
 func (p ExecutionPlan) UsesStrongBaseline() bool             { return p.usesStrongBaseline }
 func (p ExecutionPlan) EstimatedCostMicroUSD() int64         { return p.estimatedCostMicroUSD }
 func (p ExecutionPlan) WorstCaseCostMicroUSD() int64         { return p.worstCaseCostMicroUSD }
+func (p ExecutionPlan) AnswerCallCostMicroUSD() int64        { return p.answerCallCostMicroUSD }
+func (p ExecutionPlan) VisionCallCostMicroUSD() int64        { return p.visionCallCostMicroUSD }
 func (p ExecutionPlan) Budget() profile.AttemptBudgetRuntime { return p.budget }
 
 func (p ExecutionPlan) Snapshot() ExecutionPlanSnapshot {
 	return ExecutionPlanSnapshot{
-		StrategyName:          p.strategyName,
-		RouteID:               p.routeID,
-		Model:                 p.model,
-		VisionMode:            p.visionMode,
-		UsesStrongBaseline:    p.usesStrongBaseline,
-		EstimatedCostMicroUSD: p.estimatedCostMicroUSD,
-		WorstCaseCostMicroUSD: p.worstCaseCostMicroUSD,
-		Reason:                p.reason,
+		StrategyName:           p.strategyName,
+		RouteID:                p.routeID,
+		Model:                  p.model,
+		VisionMode:             p.visionMode,
+		UsesStrongBaseline:     p.usesStrongBaseline,
+		EstimatedCostMicroUSD:  p.estimatedCostMicroUSD,
+		WorstCaseCostMicroUSD:  p.worstCaseCostMicroUSD,
+		AnswerCallCostMicroUSD: p.answerCallCostMicroUSD,
+		VisionCallCostMicroUSD: p.visionCallCostMicroUSD,
+		Reason:                 p.reason,
 	}
 }

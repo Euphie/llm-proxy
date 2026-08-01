@@ -4,6 +4,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"mime"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
+	"github.com/Euphie/llm-proxy/internal/routing"
 	"github.com/Euphie/llm-proxy/internal/stats"
 	"github.com/Euphie/llm-proxy/internal/vision"
 )
@@ -25,21 +27,32 @@ func New(cfg profile.Runtime, client *http.Client, sdb *stats.DB) http.Handler {
 	if cfg.Vision.Enabled && strings.TrimSpace(cfg.Vision.Model) != "" {
 		visionPreprocessor = vision.New(cfg, client, sdb)
 	}
+	var routeEngine *routing.Engine
+	if cfg.AutoRouting.Enabled {
+		engine, err := routing.NewEngine(cfg, client)
+		if err != nil {
+			slog.Error("routing.engine.disabled", "profile", cfg.Slug, "error", err)
+		} else {
+			routeEngine = engine
+		}
+	}
 	return &handler{
-		cfg:    cfg,
-		client: client,
-		stats:  sdb,
-		parser: stats.NewParser(string(cfg.Protocol)),
-		vision: visionPreprocessor,
+		cfg:     cfg,
+		client:  client,
+		stats:   sdb,
+		parser:  stats.NewParser(string(cfg.Protocol)),
+		vision:  visionPreprocessor,
+		routing: routeEngine,
 	}
 }
 
 type handler struct {
-	cfg    profile.Runtime
-	client *http.Client
-	stats  *stats.DB
-	parser stats.Parser
-	vision *vision.Preprocessor
+	cfg     profile.Runtime
+	client  *http.Client
+	stats   *stats.DB
+	parser  stats.Parser
+	vision  *vision.Preprocessor
+	routing *routing.Engine
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,10 +69,69 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	if h.vision != nil && shouldPreprocessVision(h.cfg.Protocol, r) {
-		body, err = h.vision.ProcessTarget(r.Context(), r.Header, body, target)
+	requestCtx := r.Context()
+	var budget *routing.AttemptBudget
+	var plan routing.ExecutionPlan
+	isAuto := false
+	if model, ok := routing.RequestedModel(body); ok && model == routing.AutoModel {
+		isAuto = true
+		if h.routing == nil {
+			http.Error(w, "intelligent routing is not enabled for this Profile", http.StatusBadRequest)
+			return
+		}
+		routeRequest, routeErr := routing.ParseAutoRequest(
+			h.cfg.Protocol,
+			r.Method,
+			r.URL.EscapedPath(),
+			r.Header.Get("Content-Type"),
+			body,
+		)
+		if routeErr != nil {
+			writeRoutingError(w, routeErr)
+			return
+		}
+		var cancel context.CancelFunc
+		budget, requestCtx, cancel = h.routing.NewAttemptBudget(r.Context())
+		defer cancel()
+		var classification routing.Classification
+		plan, classification, routeErr = h.routing.Route(requestCtx, r.Header, routeRequest, budget)
+		if routeErr != nil {
+			if requestCtx.Err() != nil {
+				return
+			}
+			writeRoutingError(w, routeErr)
+			return
+		}
+		body, routeErr = routeRequest.WithModel(plan.Model())
+		if routeErr != nil {
+			writeRoutingError(w, routeErr)
+			return
+		}
+		slog.Info("routing.plan.created",
+			"profile", label,
+			"strategy", plan.Strategy(),
+			"route", plan.Route(),
+			"model", plan.Model(),
+			"vision_mode", plan.VisionMode(),
+			"classification_source", classification.Source,
+			"estimated_cost_micro_usd", plan.EstimatedCostMicroUSD(),
+			"worst_case_cost_micro_usd", plan.WorstCaseCostMicroUSD())
+	}
+
+	preprocessVision := h.vision != nil && shouldPreprocessVision(h.cfg.Protocol, r)
+	if isAuto {
+		preprocessVision = h.vision != nil && plan.VisionMode() == routing.VisionComposite
+	}
+	if preprocessVision {
+		if budget != nil {
+			if err := budget.ReserveCall(requestCtx, routing.CallVision, plan.VisionCallCostMicroUSD()); err != nil {
+				writeRoutingError(w, err)
+				return
+			}
+		}
+		body, err = h.vision.ProcessTarget(requestCtx, r.Header, body, target)
 		if err != nil {
-			if r.Context().Err() != nil {
+			if requestCtx.Err() != nil {
 				return
 			}
 			status := vision.HTTPStatus(err)
@@ -67,51 +139,42 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.Context().Err() != nil {
+	if requestCtx.Err() != nil {
 		return
 	}
-
-	// rule is locked in on the first overload match and reused for subsequent retries.
-	var rule *provider.Rule
-
-	for attempt := 0; ; attempt++ {
-		if rule != nil {
-			if attempt > rule.MaxRetries {
-				slog.Warn("max retries reached, giving up",
-					"profile", label, "max", rule.MaxRetries)
-				break
-			}
-			wait := rule.RetryDelay + time.Duration(attempt)*rule.RetryJitter
-			slog.Info("retry",
-				"profile", label, "attempt", attempt,
-				"max", rule.MaxRetries, "wait", wait, "path", r.URL.Path)
-
-			select {
-			case <-r.Context().Done():
-				return
-			case <-time.After(wait):
-			}
+	if budget != nil {
+		if err := budget.ReserveCall(requestCtx, routing.CallAnswer, plan.AnswerCallCostMicroUSD()); err != nil {
+			writeRoutingError(w, err)
+			return
 		}
+	}
 
-		resp, err := h.do(r.Context(), r.Method, target, r.Header, body)
+	var rule *provider.Rule
+	retries := 0
+	for {
+		resp, err := h.do(requestCtx, r.Method, target, r.Header, body)
 		if err != nil {
-			if r.Context().Err() != nil {
+			if requestCtx.Err() != nil {
 				return
 			}
-			if rule != nil && attempt >= rule.MaxRetries {
-				slog.Error("upstream failed", "profile", label, "attempts", attempt+1, "err", err)
-				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
-				return
-			}
-			if rule == nil && len(h.cfg.OverloadRules) == 0 {
-				slog.Error("upstream failed without retry rules",
-					"profile", label, "attempts", attempt+1, "err", err)
-				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
-				return
-			}
-			slog.Warn("upstream error, will retry", "profile", label, "attempt", attempt+1, "err", err)
 			if rule == nil {
+				if len(h.cfg.OverloadRules) == 0 {
+					slog.Error("upstream failed without retry rules",
+						"profile", label, "attempts", retries+1, "err", err)
+					http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+					return
+				}
 				rule = &h.cfg.OverloadRules[0]
+			}
+			if retries >= rule.MaxRetries || !h.reserveRetry(requestCtx, budget, target, plan) {
+				slog.Error("upstream failed without retry rules",
+					"profile", label, "attempts", retries+1, "err", err)
+				http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+			retries++
+			if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
+				return
 			}
 			continue
 		}
@@ -120,7 +183,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode < 400 {
 			slog.Info("<-",
 				"status", resp.StatusCode, "path", r.URL.Path,
-				"attempts", attempt+1, "elapsed", time.Since(start).Round(time.Millisecond))
+				"attempts", retries+1, "elapsed", time.Since(start).Round(time.Millisecond))
 			captured := stream(w, resp)
 			if h.stats != nil {
 				h.stats.RecordAsync(stats.RequestMeta{
@@ -142,6 +205,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if rule == nil {
 				rule = matched
 			}
+			if retries >= rule.MaxRetries || !h.reserveRetry(requestCtx, budget, target, plan) {
+				forward(w, resp, errBody)
+				return
+			}
+			retries++
+			if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
+				return
+			}
 			continue
 		}
 
@@ -149,19 +220,52 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		forward(w, resp, errBody)
 		return
 	}
+}
 
-	// Still overloaded after max retries — re-issue one final request to forward the error.
-	resp, err := h.do(r.Context(), r.Method, target, r.Header, body)
-	if err != nil {
-		if r.Context().Err() != nil {
-			return
-		}
-		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
-		return
+func (h *handler) reserveRetry(
+	ctx context.Context,
+	budget *routing.AttemptBudget,
+	target string,
+	plan routing.ExecutionPlan,
+) bool {
+	if budget == nil {
+		return true
 	}
-	errBody, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	forward(w, resp, errBody)
+	return budget.ReserveRetry(ctx, target, plan.AnswerCallCostMicroUSD()) == nil
+}
+
+func waitForRetry(
+	ctx context.Context,
+	profileSlug string,
+	path string,
+	rule *provider.Rule,
+	retry int,
+) bool {
+	wait := rule.RetryDelay + time.Duration(retry)*rule.RetryJitter
+	slog.Info("retry",
+		"profile", profileSlug, "attempt", retry,
+		"max", rule.MaxRetries, "wait", wait, "path", path)
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func writeRoutingError(w http.ResponseWriter, err error) {
+	status := http.StatusBadGateway
+	switch {
+	case errors.Is(err, routing.ErrUnsupportedOperation), errors.Is(err, routing.ErrNoCapableModel):
+		status = http.StatusUnprocessableEntity
+	case errors.Is(err, routing.ErrInvalidRequest), errors.Is(err, routing.ErrRoutingDisabled):
+		status = http.StatusBadRequest
+	case errors.Is(err, routing.ErrAttemptBudgetExceeded):
+		status = http.StatusTooManyRequests
+	}
+	http.Error(w, err.Error(), status)
 }
 
 func targetURL(upstream, requestURI string) string {
