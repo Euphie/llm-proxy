@@ -138,6 +138,7 @@ test("buildCatalog filters ineligible records and compacts confirmed values", ()
     context_window: 1000000,
     max_output_tokens: 131072,
     supports_vision: false,
+    supports_tools: true,
     lifecycle: "stable",
     releaseDate: "2026-06-13",
     lastUpdated: "2026-06-13",
@@ -179,6 +180,85 @@ test("buildCatalog does not treat audio input as vision support", () => {
 
   assert.equal(models.length, 1);
   assert.equal(models[0].supports_vision, false);
+});
+
+test("buildCatalog includes routing capabilities and conservative direct-provider prices", () => {
+  const models = buildCatalog({
+    canonical: {
+      "acme/model": {
+        ...canonicalTextModel("Priced Model"),
+        structured_output: false,
+      },
+    },
+    providers: {
+      acme: {
+        name: "Acme",
+        models: {
+          model: {
+            id: "model",
+            tool_call: true,
+            structured_output: true,
+            cost: {
+              input: 0.25,
+              output: 1.5,
+              tiers: [{ input: 0.5, output: 2 }],
+              context_over_200k: { input: 0.75, output: 2.5 },
+            },
+          },
+        },
+      },
+    },
+    overrides: {},
+    source: sourceFixture,
+  });
+
+  assert.equal(models[0].supports_tools, true);
+  assert.equal(models[0].supports_structured_output, true);
+  assert.equal(models[0].input_price_micro_usd_per_million, 750000);
+  assert.equal(models[0].output_price_micro_usd_per_million, 2500000);
+});
+
+test("buildCatalog preserves zero direct-provider prices", () => {
+  const models = buildCatalog({
+    canonical: { "free/model": canonicalTextModel("Free Model") },
+    providers: {
+      free: {
+        name: "Free",
+        models: {
+          model: {
+            id: "model",
+            cost: { input: 0, output: 0 },
+          },
+        },
+      },
+    },
+    overrides: {},
+    source: sourceFixture,
+  });
+
+  assert.equal(models[0].input_price_micro_usd_per_million, 0);
+  assert.equal(models[0].output_price_micro_usd_per_million, 0);
+});
+
+test("buildCatalog rejects malformed provider prices", () => {
+  for (const value of [-1, Number.POSITIVE_INFINITY, "1.5"]) {
+    assert.throws(
+      () => buildCatalog({
+        canonical: { "broken/model": canonicalTextModel("Broken") },
+        providers: {
+          broken: {
+            name: "Broken",
+            models: {
+              model: { id: "model", cost: { input: value, output: 1 } },
+            },
+          },
+        },
+        overrides: {},
+        source: sourceFixture,
+      }),
+      /price.*non-negative finite number/i,
+    );
+  }
 });
 
 test("buildCatalog omits an output limit equal to the context window", () => {

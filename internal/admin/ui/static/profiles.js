@@ -681,7 +681,16 @@ export function renderProfileEditor(root, source, actions = {}) {
         context_window: contextWindow,
         max_output_tokens: maxOutputTokens,
         supports_vision: supportsVision,
+        supports_tools: supportsTools,
+        supports_structured_output: supportsStructuredOutput,
+        input_price_micro_usd_per_million: inputPrice,
+        output_price_micro_usd_per_million: outputPrice,
       };
+      const booleanCapabilityFields = new Set([
+        "supports_vision",
+        "supports_tools",
+        "supports_structured_output",
+      ]);
       let renderedRecommendationQuery = null;
       let renderedRecommendationSignature = null;
       let renderedMatches = [];
@@ -711,7 +720,7 @@ export function renderProfileEditor(root, source, actions = {}) {
             continue;
           }
 
-          const value = field === "supports_vision"
+          const value = booleanCapabilityFields.has(field)
             ? booleanSelectValue(match.entry[field])
             : String(match.entry[field]);
           control.value = value;
@@ -769,13 +778,24 @@ export function renderProfileEditor(root, source, actions = {}) {
           `上下文窗口：${recommendedField(match.entry, "context_window")} · ` +
             `最大输出 Token：${
               recommendedField(match.entry, "max_output_tokens")
-            } · 视觉：${recommendedVision(match.entry)}`,
+            } · 视觉：${recommendedBoolean(match.entry, "supports_vision")} · ` +
+            `工具：${recommendedBoolean(match.entry, "supports_tools")} · ` +
+            `结构化输出：${
+              recommendedBoolean(match.entry, "supports_structured_output")
+            }`,
+        );
+        const pricing = textElement(
+          "p",
+          `参考价格：输入 ${recommendedPrice(match.entry, "input_price_micro_usd_per_million")} · ` +
+            `输出 ${recommendedPrice(match.entry, "output_price_micro_usd_per_million")}。` +
+            "用于 Auto 成本估算，请按实际上游账单确认。",
         );
         provider.className = "muted model-recommendation-provider";
         details.className = "muted model-recommendation-source";
         dates.className = "muted model-recommendation-meta";
         capabilities.className = "model-recommendation-capabilities";
-        card.append(header, provider, details, dates, capabilities);
+        pricing.className = "muted model-recommendation-price";
+        card.append(header, provider, details, dates, capabilities, pricing);
 
         if (!match.autoApply) {
           const apply = actionButton(
@@ -1961,11 +1981,18 @@ function recommendedField(entry, field) {
     : "暂无可靠数据";
 }
 
-function recommendedVision(entry) {
-  if (!Object.hasOwn(entry, "supports_vision")) {
+function recommendedBoolean(entry, field) {
+  if (!Object.hasOwn(entry, field)) {
     return "暂无可靠数据";
   }
-  return entry.supports_vision ? "是" : "否";
+  return entry[field] ? "是" : "否";
+}
+
+function recommendedPrice(entry, field) {
+  if (!Object.hasOwn(entry, field)) {
+    return "暂无可靠数据";
+  }
+  return `$${entry[field] / 1_000_000}/百万 Token`;
 }
 
 function openCopyDialog(root, profile, actions, pageAlert) {

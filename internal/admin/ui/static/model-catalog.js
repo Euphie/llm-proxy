@@ -193,6 +193,10 @@ export function applyModelSuggestion(model, match) {
     "context_window",
     "max_output_tokens",
     "supports_vision",
+    "supports_tools",
+    "supports_structured_output",
+    "input_price_micro_usd_per_million",
+    "output_price_micro_usd_per_million",
   ]) {
     if (isEmpty(applied[field]) && Object.hasOwn(match.entry, field)) {
       applied[field] = match.entry[field];

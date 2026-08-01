@@ -115,6 +115,10 @@ function compactModel(
   );
   const context = override.context_window ?? model.limit?.context;
   const output = override.max_output_tokens ?? model.limit?.output;
+  const inputPrice = override.input_price_micro_usd_per_million ??
+    conservativePrice(directModel?.cost ?? model.cost, "input", canonicalId);
+  const outputPrice = override.output_price_micro_usd_per_million ??
+    conservativePrice(directModel?.cost ?? model.cost, "output", canonicalId);
 
   validateOptionalLimit(context, `${canonicalId} context`);
   validateOptionalLimit(output, `${canonicalId} output`);
@@ -160,6 +164,19 @@ function compactModel(
 
   entry.supports_vision = override.supports_vision ??
     model.modalities.input.includes("image");
+  entry.supports_tools = override.supports_tools ??
+    directModel?.tool_call ?? model.tool_call;
+  const structuredOutput = override.supports_structured_output ??
+    directModel?.structured_output ?? model.structured_output;
+  if (typeof structuredOutput === "boolean") {
+    entry.supports_structured_output = structuredOutput;
+  }
+  if (inputPrice !== undefined) {
+    entry.input_price_micro_usd_per_million = inputPrice;
+  }
+  if (outputPrice !== undefined) {
+    entry.output_price_micro_usd_per_million = outputPrice;
+  }
   entry.lifecycle = override.lifecycle ??
     lifecycle(model.status, known);
 
@@ -273,6 +290,26 @@ function validateCatalog(models) {
       model.max_output_tokens,
       `${model.canonicalId} output`,
     );
+    for (const field of [
+      "supports_vision",
+      "supports_tools",
+      "supports_structured_output",
+    ]) {
+      if (
+        Object.hasOwn(model, field) &&
+        typeof model[field] !== "boolean"
+      ) {
+        throw new TypeError(`${model.canonicalId} ${field} must be boolean`);
+      }
+    }
+    validateOptionalPrice(
+      model.input_price_micro_usd_per_million,
+      `${model.canonicalId} input price`,
+    );
+    validateOptionalPrice(
+      model.output_price_micro_usd_per_million,
+      `${model.canonicalId} output price`,
+    );
     if (
       model.context_window !== undefined &&
       model.max_output_tokens !== undefined &&
@@ -357,6 +394,43 @@ function validateOptionalLimit(value, label) {
   }
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new RangeError(`${label} must be a positive safe integer`);
+  }
+}
+
+function conservativePrice(cost, field, canonicalId) {
+  if (!isRecord(cost)) {
+    return undefined;
+  }
+  const candidates = [
+    cost[field],
+    isRecord(cost.context_over_200k)
+      ? cost.context_over_200k[field]
+      : undefined,
+    ...(Array.isArray(cost.tiers)
+      ? cost.tiers.map((tier) => isRecord(tier) ? tier[field] : undefined)
+      : []),
+  ].filter((value) => value !== undefined);
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  for (const value of candidates) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      throw new RangeError(
+        `${canonicalId} ${field} price must be a non-negative finite number`,
+      );
+    }
+  }
+  const microUSD = Math.ceil(Math.max(...candidates) * 1_000_000);
+  validateOptionalPrice(microUSD, `${canonicalId} ${field} price`);
+  return microUSD;
+}
+
+function validateOptionalPrice(value, label) {
+  if (value === undefined) {
+    return;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${label} must be a non-negative safe integer`);
   }
 }
 

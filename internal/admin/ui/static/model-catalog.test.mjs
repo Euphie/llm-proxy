@@ -96,6 +96,16 @@ test("built-in catalog is a broad immutable Models.dev snapshot", () => {
       assert.ok(entry.max_output_tokens > 0);
       assert.ok(entry.max_output_tokens < entry.context_window);
     }
+    assert.equal(entry.supports_tools, true);
+    for (const field of [
+      "input_price_micro_usd_per_million",
+      "output_price_micro_usd_per_million",
+    ]) {
+      if (Object.hasOwn(entry, field)) {
+        assert.ok(Number.isSafeInteger(entry[field]));
+        assert.ok(entry[field] >= 0);
+      }
+    }
   }
 
   const compatibilityOwners = BUILT_IN_MODELS.filter((entry) =>
@@ -168,6 +178,10 @@ test("matcher is case-insensitive without altering dots, numeric versions, or in
       context_window: "",
       max_output_tokens: null,
       supports_vision: undefined,
+      supports_tools: undefined,
+      supports_structured_output: undefined,
+      input_price_micro_usd_per_million: "",
+      output_price_micro_usd_per_million: "",
     },
     kimi,
   );
@@ -175,6 +189,9 @@ test("matcher is case-insensitive without altering dots, numeric versions, or in
   assert.equal(applied.context_window, 262144);
   assert.equal(applied.max_output_tokens, null);
   assert.equal(applied.supports_vision, true);
+  assert.equal(applied.supports_tools, true);
+  assert.equal(applied.input_price_micro_usd_per_million, 600000);
+  assert.equal(applied.output_price_micro_usd_per_million, 3000000);
 });
 
 test("matcher prioritizes registered Haiku IDs before the snapshot rule", () => {
@@ -415,8 +432,15 @@ test("applyModelSuggestion fills only empty capability fields", () => {
   const applied = applyModelSuggestion(model, match);
 
   assert.notEqual(applied, model);
-  assert.deepEqual(applied, model);
   assert.equal(applied.id, "GPT-5.4");
+  assert.equal(applied.context_window, 999);
+  assert.equal(applied.max_output_tokens, 333);
+  assert.equal(applied.supports_vision, false);
+  assert.equal(applied.supports_tools, true);
+  assert.equal(applied.supports_structured_output, true);
+  assert.equal(applied.input_price_micro_usd_per_million, 5000000);
+  assert.equal(applied.output_price_micro_usd_per_million, 22500000);
+  assert.equal(applied.note, "keep");
 
   assert.deepEqual(
     applyModelSuggestion(
@@ -433,6 +457,9 @@ test("applyModelSuggestion fills only empty capability fields", () => {
       context_window: 204800,
       max_output_tokens: 131072,
       supports_vision: false,
+      supports_tools: true,
+      input_price_micro_usd_per_million: 1000000,
+      output_price_micro_usd_per_million: 3200000,
     },
   );
 });

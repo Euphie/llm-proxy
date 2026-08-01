@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { api } from "./api.js";
 import { bootstrap } from "./app.js";
+import { MODELS_DEV_SOURCE } from "./model-catalog.js";
 import {
   addModelCapability,
   addRetryRule,
@@ -865,7 +866,7 @@ test("saved model rows retain empty optional limits while still showing catalog 
   assert.equal(controlByField(exact, "supports_vision").value, "false");
   assert.ok(findText(exact, "来源：Models.dev"));
   assert.ok(findText(exact, "更新：2026-02-12"));
-  assert.ok(findText(exact, "获取：2026-07-30"));
+  assert.ok(findText(exact, `获取：${MODELS_DEV_SOURCE.retrieved}`));
 });
 
 test("progressive model input renders recommendations but waits for change before applying exact values", async (t) => {
@@ -932,6 +933,17 @@ test("pasting a unique model ID immediately applies its safe recommendation", as
   assert.equal(controlByField(row, "context_window").value, "200000");
   assert.equal(controlByField(row, "max_output_tokens").value, "64000");
   assert.equal(controlByField(row, "supports_vision").value, "true");
+  assert.equal(controlByField(row, "supports_tools").value, "true");
+  assert.equal(
+    controlByField(row, "input_price_micro_usd_per_million").value,
+    "1000000",
+  );
+  assert.equal(
+    controlByField(row, "output_price_micro_usd_per_million").value,
+    "5000000",
+  );
+  assert.ok(findText(row, "参考价格"));
+  assert.ok(findText(row, "实际上游账单"));
 });
 
 test("compatibility aliases retain the exact entered ID when change auto-applies values", async (t) => {
@@ -1208,7 +1220,7 @@ test("family candidates show complete provenance and expose a named apply action
   assert.ok(findText(cards[0], "生命周期：稳定"));
   assert.ok(findText(cards[0], "匹配：同系列候选"));
   assert.ok(findText(cards[0], "来源：Models.dev"));
-  assert.ok(findText(cards[0], "获取：2026-07-30"));
+  assert.ok(findText(cards[0], `获取：${MODELS_DEV_SOURCE.retrieved}`));
   assert.ok(findText(cards[0], "更新：2026-07-09"));
   assert.ok(findText(cards[0], "上下文窗口：1050000"));
   assert.ok(findText(cards[0], "最大输出 Token：128000"));
