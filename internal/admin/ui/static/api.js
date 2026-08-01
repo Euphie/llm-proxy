@@ -138,5 +138,15 @@ Object.assign(api, {
     ).toString();
     return request(`/_admin/api/stats${query === "" ? "" : `?${query}`}`);
   },
+  routingTraces: (params = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(params)
+        .map(([key, value]) => [key, String(value ?? "").trim()])
+        .filter(([, value]) => value !== ""),
+    ).toString();
+    return request(
+      `/_admin/api/routing-traces${query === "" ? "" : `?${query}`}`,
+    );
+  },
   system: () => request("/_admin/api/system"),
 });

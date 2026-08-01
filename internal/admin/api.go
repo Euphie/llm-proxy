@@ -116,6 +116,7 @@ func (a *API) routes() []apiRoute {
 		{method: http.MethodDelete, pattern: "/_admin/api/profiles/{id}", handler: a.deleteProfile},
 		{method: http.MethodPut, pattern: "/_admin/api/default-profile", handler: a.setDefaultProfile},
 		{method: http.MethodGet, pattern: "/_admin/api/stats", handler: a.getStats},
+		{method: http.MethodGet, pattern: "/_admin/api/routing-traces", handler: a.getRoutingTraces},
 		{method: http.MethodGet, pattern: "/_admin/api/system", handler: a.getSystem},
 	}
 }

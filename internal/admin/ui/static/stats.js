@@ -38,7 +38,12 @@ export function kindLabel(kind) {
 
 export async function renderStatsPage(
   root,
-  { profiles = [], loadStats, onUnauthorized = () => {} },
+  {
+    profiles = [],
+    loadStats,
+    loadRoutingTraces = async () => [],
+    onUnauthorized = () => {},
+  },
 ) {
   const page = element("div", "stack stats-page");
   const form = element("form", "card stats-filters");
@@ -76,8 +81,11 @@ export async function renderStatsPage(
     output.replaceChildren(statusMessage("正在加载统计数据…"));
     submit.disabled = true;
     try {
-      const response = await loadStats(filters);
-      renderStatsResponse(output, response);
+      const [response, traces] = await Promise.all([
+        loadStats(filters),
+        loadRoutingTraces(routingTraceFilters(filters)),
+      ]);
+      renderStatsResponse(output, response, traces);
     } catch (error) {
       if (error?.status === 401) {
         onUnauthorized();
@@ -110,7 +118,17 @@ export async function renderStatsPage(
   await refresh({});
 }
 
-function renderStatsResponse(root, response) {
+function routingTraceFilters(filters) {
+  const selected = { limit: 100 };
+  for (const field of ["profile_id", "from", "to"]) {
+    if (filters[field] !== undefined) {
+      selected[field] = filters[field];
+    }
+  }
+  return selected;
+}
+
+function renderStatsResponse(root, response, traces = []) {
   const summary = response?.summary || {};
   const cards = element("div", "summary-grid");
   for (const [label, value] of [
@@ -133,8 +151,90 @@ function renderStatsResponse(root, response) {
   children.push(
     usageTable("按日期", "日期", response?.by_day || []),
     usageTable("按模型", "模型", response?.by_model || []),
+    routingTraceTable(traces),
   );
   root.replaceChildren(...children);
+}
+
+function routingTraceTable(rows) {
+  const wrapper = element("div", "table-wrap");
+  const table = element("table");
+  const caption = textElement("caption", "最近 Auto 路由");
+  const head = element("thead");
+  const headerRow = element("tr");
+  for (const heading of [
+    "时间",
+    "Profile",
+    "策略 / Route",
+    "任务判断",
+    "模型路径",
+    "视觉",
+    "结果",
+    "调用预算",
+    "成本估算",
+    "耗时",
+  ]) {
+    headerRow.append(textElement("th", heading));
+  }
+  head.append(headerRow);
+
+  const body = element("tbody");
+  for (const row of rows) {
+    const tableRow = element("tr");
+    const modelPath = row.initial_model === row.final_model
+      ? row.initial_model
+      : `${row.initial_model} → ${row.final_model}`;
+    for (const value of [
+      reliableDate(row.created_at),
+      row.profile_slug,
+      `${row.strategy} / ${row.route}`,
+      `${row.task_type} · ${classificationSourceLabel(row.classification_source)}`,
+      modelPath,
+      visionModeLabel(row.vision_mode),
+      `${Number(row.status_code ?? 0)} · ${row.client_committed ? "已提交" : "未提交"}`,
+      `回答 ${Number(row.answer_attempts ?? 0)} / 辅助 ${Number(row.auxiliary_calls ?? 0)} / 模型切换 ${Number(row.model_switches ?? 0)}`,
+      `计划上限 ${formatMicroUSD(row.planned_worst_case_cost_micro_usd)} / 已预留 ${formatMicroUSD(row.reserved_cost_micro_usd)}`,
+      `${Number(row.elapsed_ms ?? 0)} ms`,
+    ]) {
+      tableRow.append(textElement("td", value));
+    }
+    body.append(tableRow);
+  }
+  table.append(caption, head, body);
+  wrapper.append(table);
+  return wrapper;
+}
+
+function classificationSourceLabel(source) {
+  if (source === "rule") {
+    return "本地规则";
+  }
+  if (source === "analyzer") {
+    return "任务分析";
+  }
+  if (source === "fallback") {
+    return "安全回退";
+  }
+  return String(source ?? "");
+}
+
+function visionModeLabel(mode) {
+  if (mode === "native") {
+    return "原生视觉";
+  }
+  if (mode === "composite") {
+    return "视觉增强";
+  }
+  return "无";
+}
+
+function formatMicroUSD(value) {
+  return `$${Number(value ?? 0) / 1_000_000}`;
+}
+
+function reliableDate(value) {
+  const text = String(value ?? "");
+  return text || "-";
 }
 
 function usageTable(captionText, keyHeading, rows) {

@@ -75,20 +75,5 @@ func (a *API) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func statsScalarQueryValues(r *http.Request) (map[string]string, error) {
-	query := r.URL.Query()
-	values := make(map[string]string, len(statsScalarQueryParameters))
-	for _, name := range statsScalarQueryParameters {
-		entries, present := query[name]
-		if !present {
-			continue
-		}
-		if len(entries) != 1 {
-			return nil, invalidRequestField(name, "Must be supplied once.")
-		}
-		if entries[0] == "" {
-			return nil, invalidRequestField(name, "Must not be empty.")
-		}
-		values[name] = entries[0]
-	}
-	return values, nil
+	return scalarQueryValues(r, statsScalarQueryParameters)
 }

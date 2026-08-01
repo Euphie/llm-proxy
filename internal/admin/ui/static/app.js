@@ -251,6 +251,10 @@ async function renderAuthenticated(root, client, generateProfile, path) {
       await renderStatsPage(workspace, {
         profiles: data.profiles,
         loadStats: (filters) => client.stats(filters),
+        loadRoutingTraces: (filters) =>
+          typeof client.routingTraces === "function"
+            ? client.routingTraces(filters)
+            : Promise.resolve([]),
         onUnauthorized: () =>
           renderLoginScreen(root, client, generateProfile, path),
       });

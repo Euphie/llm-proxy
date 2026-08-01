@@ -702,6 +702,40 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"username", "dsn", "environment")
 }
 
+func TestAPIRoutingTracesReturnsAnEmptyListAndValidatesLimit(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+
+	response := fixture.request(
+		t,
+		http.MethodGet,
+		"/_admin/api/routing-traces?limit=25",
+		"",
+		cookies,
+		"",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var rows []map[string]any
+	decodeTestJSON(t, response, &rows)
+	if rows == nil || len(rows) != 0 {
+		t.Fatalf("rows=%+v", rows)
+	}
+
+	invalid := fixture.request(
+		t,
+		http.MethodGet,
+		"/_admin/api/routing-traces?limit=0",
+		"",
+		cookies,
+		"",
+	)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
 // Break caught: treating an empty or repeated stats scalar filter as if one valid value was supplied.
 func TestAPIStatsRejectsEmptyAndRepeatedScalarFilters(t *testing.T) {
 	fixture := newTestAPI(t)

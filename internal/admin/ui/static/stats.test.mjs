@@ -84,6 +84,7 @@ test("statistics and System API methods omit blanks and encode exact queries", a
     to: "",
   });
   await api.stats({});
+  await api.routingTraces({ profile_id: "7", limit: 50 });
   await api.system();
 
   assert.deepEqual(calls, [
@@ -92,6 +93,7 @@ test("statistics and System API methods omit blanks and encode exact queries", a
       "GET",
     ],
     ["/_admin/api/stats", "GET"],
+    ["/_admin/api/routing-traces?profile_id=7&limit=50", "GET"],
     ["/_admin/api/system", "GET"],
   ]);
 });
@@ -139,6 +141,7 @@ test("statistics page exposes loading then exact summary and accessible tables",
       { id: 1, display_name: "Coding", slug: "coding" },
     ],
     loadStats: async () => pending,
+    loadRoutingTraces: async () => routingTraceFixture(),
     onUnauthorized: () => {},
   });
 
@@ -168,15 +171,19 @@ test("statistics page exposes loading then exact summary and accessible tables",
   }
   assert.deepEqual(
     findAllTags(root, "CAPTION").map((caption) => caption.textContent),
-    ["按日期", "按模型"],
+    ["按日期", "按模型", "最近 Auto 路由"],
   );
   assert.ok(findText(root, "2026-07-29"));
   assert.ok(findText(root, "sonnet"));
+  assert.ok(findText(root, "fast → strong"));
+  assert.ok(findText(root, "回答 2 / 辅助 1 / 模型切换 1"));
+  assert.ok(findText(root, "计划上限 $0.030126 / 已预留 $0.0155"));
 });
 
 test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
   const root = installFakeDOM(t);
   const filters = [];
+  const traceFilters = [];
 
   await renderStatsPage(root, {
     profiles: [
@@ -185,6 +192,10 @@ test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
     loadStats: async (current) => {
       filters.push(current);
       return statsFixture();
+    },
+    loadRoutingTraces: async (current) => {
+      traceFilters.push(current);
+      return [];
     },
     onUnauthorized: () => {},
   });
@@ -203,6 +214,11 @@ test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
     protocol: "anthropic",
     kind: "vision",
     from: "2026-07-29T10:30:00.000Z",
+  });
+  assert.deepEqual(traceFilters[1], {
+    profile_id: "7",
+    from: "2026-07-29T10:30:00.000Z",
+    limit: 100,
   });
 });
 
@@ -566,6 +582,35 @@ function emptyStatsFixture() {
     by_day: [],
     by_model: [],
   };
+}
+
+function routingTraceFixture() {
+  return [{
+    id: 1,
+    created_at: "2026-07-29T02:30:00Z",
+    profile_id: 7,
+    profile_slug: "coding",
+    protocol: "anthropic",
+    path: "/v1/messages",
+    strategy: "20260802-001",
+    route: "balanced",
+    task_type: "simple",
+    risk: "normal",
+    classification_source: "rule",
+    initial_model: "fast",
+    final_model: "strong",
+    vision_mode: "native",
+    status_code: 200,
+    client_committed: true,
+    answer_attempts: 2,
+    auxiliary_calls: 1,
+    total_outbound_calls: 3,
+    model_switches: 1,
+    target_switches: 0,
+    planned_worst_case_cost_micro_usd: 30126,
+    reserved_cost_micro_usd: 15500,
+    elapsed_ms: 42,
+  }];
 }
 
 function systemFixture() {

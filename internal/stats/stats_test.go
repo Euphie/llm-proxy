@@ -151,6 +151,19 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		got.ReservedCostMicroUSD != 15500 || got.ElapsedMilliseconds != 42 {
 		t.Fatalf("trace=%+v", got)
 	}
+
+	rows, err := store.QueryRoutingTraces(context.Background(), RoutingTraceFilter{
+		ProfileID: &got.ProfileID,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID <= 0 || rows[0].ProfileSlug != "coding" ||
+		rows[0].Strategy != "20260802-001" || rows[0].FinalModel != "strong" ||
+		rows[0].ReservedCostMicroUSD != 15500 {
+		t.Fatalf("queried traces=%+v", rows)
+	}
 }
 
 func TestRecordAsyncSkipsUnparseableUsage(t *testing.T) {
