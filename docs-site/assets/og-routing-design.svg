@@ -15,6 +15,10 @@
       <stop offset="0" stop-color="#087e88"/>
       <stop offset="1" stop-color="#23b7b4"/>
     </linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ec5a45"/>
+      <stop offset="1" stop-color="#f9ad43"/>
+    </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
       <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#173a5e" flood-opacity="0.16"/>
     </filter>
@@ -30,15 +34,10 @@
   <circle cx="70" cy="560" r="210" fill="#169da6" opacity="0.15" filter="url(#soft)"/>
 
   <g transform="translate(72 62)">
-    <g transform="translate(35 35)">
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#05345f"/>
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#ec5a45" transform="rotate(45)"/>
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#087e88" transform="rotate(90)"/>
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#0b6fc2" transform="rotate(135)"/>
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#05345f" transform="rotate(180)"/>
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#ec5a45" transform="rotate(225)"/>
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#087e88" transform="rotate(270)"/>
-      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#0b6fc2" transform="rotate(315)"/>
+    <g transform="translate(35 35)" fill="none" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+      <path class="brand-arm" d="M0-29v14c0 7 5 11 12 11" stroke="url(#navy)"/>
+      <path class="brand-arm" d="M0-29v14c0 7 5 11 12 11" stroke="url(#teal)" transform="rotate(120)"/>
+      <path class="brand-arm" d="M0-29v14c0 7 5 11 12 11" stroke="url(#warm)" transform="rotate(240)"/>
     </g>
     <text x="88" y="28" fill="#082f57" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800" letter-spacing="5">MESOTES</text>
     <text x="88" y="55" fill="#46637e" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="1.4">INTELLIGENT ROUTING DESIGN</text>

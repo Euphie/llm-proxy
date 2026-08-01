@@ -402,20 +402,17 @@ test("requires chapter Markdown and diagram sources without aborting on missing 
 });
 
 test("preserves Mesotes marks and binds social assets to the Profile-local design", async () => {
-  assert.equal(
-    await sha256(path.join(siteRoot, "public", "brand", "mesotes-mark.png")),
-    "1346c64b3e922da4fca558d13f8d1f41c355af620c083e95ba52c014de60cff7",
-  );
-  assert.equal(
-    await sha256(path.join(siteRoot, "public", "brand", "mesotes-mark-256.png")),
-    "d21f8f30a820d5cd1a35ee877c6fc048354da92f6d4c03d2597373b7bbf072cf",
-  );
-
-  const [ogPng, ogSource, favicon] = await Promise.all([
+  const [markPng, compactMarkPng, ogPng, ogSource, favicon] = await Promise.all([
+    readFile(path.join(siteRoot, "public", "brand", "mesotes-mark.png")),
+    readFile(path.join(siteRoot, "public", "brand", "mesotes-mark-256.png")),
     readFile(path.join(siteRoot, "public", "og-routing-design.png")),
     readFile(path.join(siteRoot, "assets", "og-routing-design.svg"), "utf8"),
     readFile(path.join(siteRoot, "public", "favicon.svg"), "utf8"),
   ]);
+  assert.equal(markPng.readUInt32BE(16), 1254, "Primary mark must remain 1254px square.");
+  assert.equal(markPng.readUInt32BE(20), 1254, "Primary mark must remain 1254px square.");
+  assert.equal(compactMarkPng.readUInt32BE(16), 256, "Compact mark must remain 256px square.");
+  assert.equal(compactMarkPng.readUInt32BE(20), 256, "Compact mark must remain 256px square.");
   assert.equal(ogPng.readUInt32BE(16), 1200, "OG image must be 1200px wide.");
   assert.equal(ogPng.readUInt32BE(20), 630, "OG image must be 630px high.");
   assert.notEqual(
@@ -424,6 +421,7 @@ test("preserves Mesotes marks and binds social assets to the Profile-local desig
     "OG image must not retain the legacy llm-proxy artwork.",
   );
   assert.match(ogSource, /MESOTES/);
+  assert.equal((ogSource.match(/class="brand-arm"/g) ?? []).length, 3);
   assert.match(ogSource, /Profile-local intelligent routing/);
   assert.match(ogSource, /Resolve Profile[\s\S]*Rules \+ Analyzer[\s\S]*Quality Gate[\s\S]*Execution Plan/);
   assert.doesNotMatch(ogSource, /llm-proxy|provider_kind|provider_id|cross-Profile/i);
@@ -450,14 +448,33 @@ test("preserves Mesotes marks and binds social assets to the Profile-local desig
 
   assert.match(favicon, /<svg\b[^>]*aria-labelledby="title"/);
   assert.match(favicon, /<title id="title">Mesotes<\/title>/);
-  assert.equal((favicon.match(/<rect x="-5" y="-27"/g) ?? []).length, 8);
+  assert.equal((favicon.match(/class="route-arm"/g) ?? []).length, 3);
+  assert.doesNotMatch(favicon, /<rect x="-5" y="-27"/);
   for (const color of ["#05345f", "#ec5a45", "#087e88", "#0b6fc2"]) {
     assert.match(favicon, new RegExp(color, "i"));
   }
   assert.doesNotMatch(
     favicon,
-    /llm-proxy|<script|<foreignObject|\son[a-z]+\s*=|javascript:|\b(?:href|src)\s*=|url\s*\(/i,
+    /llm-proxy|<script|<foreignObject|\son[a-z]+\s*=|javascript:|\b(?:href|src)\s*=/i,
   );
+  const paintReferences = [...favicon.matchAll(/url\(([^)]+)\)/gi)].map(([, reference]) => reference.trim());
+  assert.ok(paintReferences.length > 0);
+  assert.ok(paintReferences.every((reference) => /^#[a-z0-9_-]+$/i.test(reference)));
+
+  const renderMark = (size) => sharp(Buffer.from(favicon), { density: 384 })
+    .resize(size, size, { fit: "fill" })
+    .ensureAlpha()
+    .raw()
+    .toBuffer();
+  const readMark = (input) => sharp(input).ensureAlpha().raw().toBuffer();
+  const [expectedMark, actualMark, expectedCompactMark, actualCompactMark] = await Promise.all([
+    renderMark(1254),
+    readMark(markPng),
+    renderMark(256),
+    readMark(compactMarkPng),
+  ]);
+  assert.deepEqual(actualMark, expectedMark, "Primary PNG must be rendered from the canonical favicon mark.");
+  assert.deepEqual(actualCompactMark, expectedCompactMark, "Compact PNG must be rendered from the canonical favicon mark.");
 });
 
 test("keeps light-theme links and compact status labels above WCAG AA contrast", async () => {
