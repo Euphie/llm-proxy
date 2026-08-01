@@ -1,0 +1,52 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#f4f9fc"
+    fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"
+    primaryColor: "#f7fbfd"
+    primaryTextColor: "#172229"
+    primaryBorderColor: "#7ea1b4"
+    lineColor: "#5d7990"
+    clusterBkg: "#edf6fb"
+    clusterBorder: "#7fafcf"
+  flowchart:
+    curve: basis
+    htmlLabels: true
+---
+flowchart LR
+  accTitle: Profile 内在线路由流水线
+  accDescr: 已解析的 ProfileScope 依次经过本地事实、不可变配置、编译规则、硬约束、逻辑模型选择，以及同一 ProfileRuntime 提供的请求级只读健康与容量视图，形成不可变执行计划并在该运行时内执行。
+
+  subgraph PROFILE["当前 Profile（已解析且不再选择）"]
+    direction LR
+    REQUEST["ProfileScope<br/>+ InferenceRequest"]
+    FACTS["Facts · 本地 signals<br/>typed projections"]
+    RULES["编译后的 rules"]
+    ROUTER["Model Router<br/>硬约束 → 逻辑模型"]
+    ELIGIBLE["Target eligibility<br/>同一逻辑模型"]
+    SCHEDULER["Target Scheduler<br/>有界且确定性"]
+    PLAN["不可变 ExecutionPlan<br/>本地 ID / revision + AttemptBudget"]
+    EXECUTOR["Executor"]
+    TRACE["Decision · Attempt · Outcome<br/>同 scope Trace"]
+    SNAPSHOT["ProfileSnapshot · 仅配置<br/>策略 · catalog · adapter · price · envelope"]
+    RUNTIME["ProfileRuntime · 可变状态<br/>health · circuit · cooldown · capacity<br/>reserve / dispatch"]
+
+    REQUEST --> FACTS --> RULES --> ROUTER --> ELIGIBLE --> SCHEDULER --> PLAN --> EXECUTOR --> TRACE
+    SNAPSHOT -.->|"不可变配置"| RULES
+    SNAPSHOT -.->|"Target 配置"| ELIGIBLE
+    RUNTIME -.->|"请求级只读视图"| ELIGIBLE
+    RUNTIME -->|"reserve / dispatch"| EXECUTOR
+  end
+
+  classDef scope fill:#0067c5,color:#ffffff,stroke:#075daf,stroke-width:2px;
+  classDef primary fill:#f7fbfd,color:#172229,stroke:#526f7e,stroke-width:1.5px;
+  classDef decision fill:#e8f2ff,color:#172229,stroke:#3f75a3,stroke-width:1.5px;
+  classDef runtime fill:#e7f7f6,color:#172229,stroke:#2d7774,stroke-width:1.5px;
+  classDef evidence fill:#eef0ff,color:#172229,stroke:#625eb5,stroke-width:1.5px;
+  class REQUEST scope;
+  class FACTS,RULES,PLAN primary;
+  class ROUTER,ELIGIBLE,SCHEDULER decision;
+  class SNAPSHOT,RUNTIME,EXECUTOR runtime;
+  class TRACE evidence;
+  style PROFILE fill:#edf6fb,stroke:#4a758f,stroke-width:2px,color:#172229

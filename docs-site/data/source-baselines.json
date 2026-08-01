@@ -1,0 +1,56 @@
+{
+  "runtime_baseline": {
+    "repository": "https://github.com/Euphie/llm-proxy",
+    "commit": "ea13e527647cb701376c152f71086f01e68789ea",
+    "timestamp": "2026-07-31T14:25:03+08:00",
+    "drift_state": "固定源码快照；相对 main 可能漂移",
+    "implementation_status": "已实现",
+    "evidence_level": "本项目源码验证",
+    "verified_runtime_facts": [
+      {
+        "fact": "Profile 通过 URL slug/default 选择",
+        "conclusion": "当前只完成入口到 Profile 的选择",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/gateway/router.go"
+      },
+      {
+        "fact": "每个 Profile 只有一个 protocol 和一个 upstream",
+        "conclusion": "当前没有 Target pool；Profile 已天然适合作为路由与隔离边界",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/profile/model.go#L59-L66"
+      },
+      {
+        "fact": "Registry 使用原子快照替换",
+        "conclusion": "可复用为编译后运行时快照发布机制",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/gateway/registry.go"
+      },
+      {
+        "fact": "重试耗尽后会在循环外再请求一次",
+        "conclusion": "当前没有统一尝试预算，且存在额外调用缺陷",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/proxy/proxy.go#L153-L163"
+      },
+      {
+        "fact": "成功响应写头后立即流式转发",
+        "conclusion": "尚无首个合法协议事件前的安全回退边界",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/proxy/proxy.go#L119-L133"
+      },
+      {
+        "fact": "Stats 主要记录成功响应 Token",
+        "conclusion": "没有 decision、attempt、错误、延迟、成本或健康数据",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/stats/stats.go"
+      },
+      {
+        "fact": "数据库只有账户、会话、Profile、设置和 usage",
+        "conclusion": "没有 Route、Target、Policy、Deployment 或 Evaluation 数据模型",
+        "permalink": "https://github.com/Euphie/llm-proxy/blob/ea13e527647cb701376c152f71086f01e68789ea/internal/database/migrations.go"
+      }
+    ]
+  },
+  "documentation_baseline": {
+    "repository": "codex/intelligent-routing-docs-site",
+    "commit": "039a060e502eca69f8c9da3b8fc1c0e42b503365",
+    "timestamp": "2026-08-01T00:34:01+08:00",
+    "drift_state": "implementation working tree",
+    "implementation_status": "已实现",
+    "evidence_level": "本项目源码验证",
+    "verified_runtime_facts": []
+  }
+}

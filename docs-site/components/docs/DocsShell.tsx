@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,95 +10,198 @@ import {
   PanelLeft,
   Sun,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Chapter } from "@/lib/chapters";
+import type { ChapterNavigationItem } from "@/lib/chapter-model";
 import { ChapterIcon } from "./ChapterIcon";
 import { MarkdownArticle } from "./MarkdownArticle";
+import { MobileTableOfContents } from "./MobileTableOfContents";
+import { RouteTraceExplorer } from "./RouteTraceExplorer";
 import { Sidebar } from "./Sidebar";
 
 interface DocsShellProps {
-  chapters: Chapter[];
+  currentChapter: Chapter;
+  chapters: ChapterNavigationItem[];
+  searchIndexVersion: string;
 }
 
 type Theme = "light" | "dark";
+const themeChangeEvent = "mesotes-docs-theme-change";
+const themeStorageKey = "llm-proxy-docs-theme";
+const darkSchemeQuery = "(prefers-color-scheme: dark)";
 
-function chapterFromHash(chapters: Chapter[]): Chapter | undefined {
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-  const slug = window.location.hash.replace(/^#\/?/, "").split("/")[0];
-  return chapters.find((chapter) => chapter.slug === slug);
+function systemTheme(): Theme {
+  return window.matchMedia(darkSchemeQuery).matches ? "dark" : "light";
 }
 
-export function DocsShell({ chapters }: DocsShellProps) {
-  const [activeSlug, setActiveSlug] = useState(chapters[0]?.slug ?? "");
+function preferredTheme(): Theme {
+  try {
+    const saved = window.localStorage.getItem(themeStorageKey);
+    return saved === "dark" || saved === "light" ? saved : systemTheme();
+  } catch {
+    return systemTheme();
+  }
+}
+
+function subscribeTheme(listener: () => void) {
+  const media = window.matchMedia(darkSchemeQuery);
+  const syncTheme = () => {
+    document.documentElement.dataset.docsTheme = preferredTheme();
+    listener();
+  };
+  const syncStoredTheme = (event: StorageEvent) => {
+    if (event.key === themeStorageKey || event.key === null) {
+      syncTheme();
+    }
+  };
+  window.addEventListener(themeChangeEvent, listener);
+  window.addEventListener("storage", syncStoredTheme);
+  media.addEventListener("change", syncTheme);
+  return () => {
+    window.removeEventListener(themeChangeEvent, listener);
+    window.removeEventListener("storage", syncStoredTheme);
+    media.removeEventListener("change", syncTheme);
+  };
+}
+
+function getThemeSnapshot(): Theme {
+  return document.documentElement.dataset.docsTheme === "dark" ? "dark" : "light";
+}
+
+function getServerThemeSnapshot(): Theme {
+  return "light";
+}
+
+function implementationBadgeClass(chapter: Chapter): string {
+  if (chapter.implementationStatus === "已实现") {
+    return "status-badge--implemented";
+  }
+  if (chapter.implementationStatus === "后续方向") {
+    return "status-badge--future";
+  }
+  return "status-badge--target";
+}
+
+export function DocsShell({ currentChapter, chapters, searchIndexVersion }: DocsShellProps) {
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [theme, setTheme] = useState<Theme>("light");
+  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerThemeSnapshot);
   const [progress, setProgress] = useState(0);
   const [activeHeading, setActiveHeading] = useState(
-    chapters[0]?.tableOfContents[0]?.id ?? "",
+    currentChapter.tableOfContents[0]?.id ?? "",
   );
+  const [isNarrow, setIsNarrow] = useState(false);
   const scrollRef = useRef<HTMLElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const chapterHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previousChapterSlug = useRef(currentChapter.slug);
+  const currentIndex = chapters.findIndex(({ slug }) => slug === currentChapter.slug);
+  const previousChapter = chapters[currentIndex - 1];
+  const nextChapter = chapters[currentIndex + 1];
+  const sidebarModalOpen = isNarrow && sidebarOpen;
 
-  const activeIndex = Math.max(0, chapters.findIndex((chapter) => chapter.slug === activeSlug));
-  const activeChapter = chapters[activeIndex] ?? chapters[0];
-  const previousChapter = chapters[activeIndex - 1];
-  const nextChapter = chapters[activeIndex + 1];
-
-  const chapterLookup = useMemo(
-    () => new Set(chapters.map((chapter) => chapter.slug)),
-    [chapters],
-  );
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const initial = chapterFromHash(chapters);
-      if (initial) {
-        setActiveSlug(initial.slug);
-        setActiveHeading(initial.tableOfContents[0]?.id ?? "");
-      }
-      const saved = window.localStorage.getItem("llm-proxy-docs-theme");
-      if (saved === "dark" || saved === "light") {
-        setTheme(saved);
-      } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-        setTheme("dark");
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [chapters]);
-
-  useEffect(() => {
-    function handleHashChange() {
-      const chapter = chapterFromHash(chapters);
-      if (chapter) {
-        setActiveSlug(chapter.slug);
-        setActiveHeading(chapter.tableOfContents[0]?.id ?? "");
-      }
+  const closeSidebar = useCallback(() => {
+    setSidebarOpen(false);
+    if (isNarrow) {
+      window.requestAnimationFrame(() => menuButtonRef.current?.focus());
     }
-    window.addEventListener("hashchange", handleHashChange);
-    return () => window.removeEventListener("hashchange", handleHashChange);
-  }, [chapters]);
+  }, [isNarrow]);
+
+  const focusCurrentDestination = useCallback((headingId?: string) => {
+    setSidebarOpen(false);
+    window.requestAnimationFrame(() => {
+      if (headingId) {
+        const element = document.getElementById(headingId);
+        element?.scrollIntoView({ block: "start" });
+        element?.focus({ preventScroll: true });
+        setActiveHeading(headingId);
+        return;
+      }
+      scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+      chapterHeadingRef.current?.focus({ preventScroll: true });
+      setActiveHeading(currentChapter.tableOfContents[0]?.id ?? "");
+    });
+  }, [currentChapter]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 900px)");
+    const update = () => {
+      if (media.matches && !sidebarOpen) {
+        const sidebar = document.getElementById("docs-sidebar");
+        if (sidebar?.contains(document.activeElement)) {
+          menuButtonRef.current?.focus();
+        }
+      }
+      setIsNarrow(media.matches);
+      if (!media.matches) {
+        setSidebarOpen(false);
+      }
+    };
+    const timer = window.setTimeout(update, 0);
+    media.addEventListener("change", update);
+    return () => {
+      window.clearTimeout(timer);
+      media.removeEventListener("change", update);
+    };
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    const chapterChanged = previousChapterSlug.current !== currentChapter.slug;
+    if (chapterChanged) {
+      previousChapterSlug.current = currentChapter.slug;
+    }
+    let frame = 0;
+    const syncHash = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const hash = window.location.hash;
+        const encodedFragment = hash.slice(1);
+        let fragment: string | undefined;
+        try {
+          fragment = encodedFragment ? decodeURIComponent(encodedFragment) : undefined;
+        } catch {
+          fragment = undefined;
+        }
+        const heading = fragment
+          ? currentChapter.tableOfContents.find(({ id }) => id === fragment)
+          : undefined;
+        setActiveHeading(heading?.id ?? currentChapter.tableOfContents[0]?.id ?? "");
+        setProgress(0);
+        if (heading) {
+          const element = document.getElementById(heading.id);
+          element?.scrollIntoView({ block: "start" });
+          element?.focus({ preventScroll: true });
+          return;
+        }
+        if (!hash) {
+          scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+        }
+        if (chapterChanged) {
+          chapterHeadingRef.current?.focus({ preventScroll: true });
+        }
+      });
+    };
+    syncHash();
+    window.addEventListener("hashchange", syncHash);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("hashchange", syncHash);
+    };
+  }, [currentChapter]);
 
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) {
       return;
     }
-    const targets = activeChapter.tableOfContents
-      .map((item) => document.getElementById(item.id))
+    const targets = currentChapter.tableOfContents
+      .map(({ id }) => document.getElementById(id))
       .filter((item): item is HTMLElement => Boolean(item));
     const observer = new IntersectionObserver(
       (entries) => {
         const visible = entries
           .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+          .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)[0];
         if (visible) {
           setActiveHeading(visible.target.id);
         }
@@ -106,42 +210,71 @@ export function DocsShell({ chapters }: DocsShellProps) {
     );
     targets.forEach((target) => observer.observe(target));
     return () => observer.disconnect();
-  }, [activeChapter]);
-
-  const selectChapter = useCallback((slug: string) => {
-    if (!chapterLookup.has(slug)) {
-      return;
-    }
-    const chapter = chapters.find((item) => item.slug === slug);
-    setActiveSlug(slug);
-    setActiveHeading(chapter?.tableOfContents[0]?.id ?? "");
-    setSidebarOpen(false);
-    window.history.pushState(null, "", `#${slug}`);
-    scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
-    setProgress(0);
-  }, [chapterLookup, chapters]);
+  }, [currentChapter]);
 
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        document.getElementById("docs-search")?.focus();
-      }
-      if (event.altKey && event.key === "ArrowLeft" && previousChapter) {
-        selectChapter(previousChapter.slug);
-      }
-      if (event.altKey && event.key === "ArrowRight" && nextChapter) {
-        selectChapter(nextChapter.slug);
+        if (isNarrow) {
+          setSidebarOpen(true);
+        } else {
+          document.getElementById("docs-search")?.focus();
+        }
       }
     }
     window.addEventListener("keydown", handleKeyboard);
     return () => window.removeEventListener("keydown", handleKeyboard);
-  }, [nextChapter, previousChapter, selectChapter]);
+  }, [isNarrow]);
+
+  useEffect(() => {
+    if (!isNarrow || !sidebarOpen) {
+      return;
+    }
+    const drawer = document.getElementById("docs-sidebar");
+    const search = document.getElementById("docs-search");
+    search?.focus();
+
+    function trapFocus(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSidebar();
+        return;
+      }
+      if (event.key !== "Tab" || !drawer) {
+        return;
+      }
+      const focusable = [...drawer.querySelectorAll<HTMLElement>(
+        "a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      )].filter((element) => !element.hidden);
+      if (focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener("keydown", trapFocus);
+    return () => window.removeEventListener("keydown", trapFocus);
+  }, [closeSidebar, isNarrow, sidebarOpen]);
 
   function toggleTheme() {
     const nextTheme: Theme = theme === "light" ? "dark" : "light";
-    setTheme(nextTheme);
-    window.localStorage.setItem("llm-proxy-docs-theme", nextTheme);
+    document.documentElement.dataset.docsTheme = nextTheme;
+    try {
+      window.localStorage.setItem(themeStorageKey, nextTheme);
+    } catch {
+      // The active document still adopts the requested theme when storage is unavailable.
+    } finally {
+      window.dispatchEvent(new Event(themeChangeEvent));
+    }
   }
 
   function updateProgress() {
@@ -153,29 +286,28 @@ export function DocsShell({ chapters }: DocsShellProps) {
     setProgress(maximum <= 0 ? 100 : Math.min(100, (element.scrollTop / maximum) * 100));
   }
 
-  function scrollToHeading(id: string) {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  if (!activeChapter) {
-    return null;
-  }
-
   return (
     <div className="docs-app" data-theme={theme}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="mac-window">
-        <header className="mac-titlebar">
+        <header
+          className="mac-titlebar"
+          aria-hidden={sidebarModalOpen || undefined}
+          inert={sidebarModalOpen}
+        >
           <div className="traffic-lights" aria-hidden="true">
             <span className="traffic-red" />
             <span className="traffic-yellow" />
             <span className="traffic-green" />
           </div>
           <button
+            ref={menuButtonRef}
             className="icon-button mobile-menu"
             onClick={() => setSidebarOpen(true)}
             aria-label="打开章节导航"
+            aria-expanded={isNarrow && sidebarOpen}
+            aria-controls="docs-sidebar"
           >
             <Menu />
           </button>
@@ -183,12 +315,12 @@ export function DocsShell({ chapters }: DocsShellProps) {
             <PanelLeft aria-hidden="true" />
             <span>Mesotes</span>
             <i>/</i>
-            <strong>{activeChapter.shortTitle}</strong>
+            <strong>{currentChapter.shortTitle}</strong>
           </div>
           <div className="titlebar-actions">
             <span className="baseline-pill">
               <i />
-              基线：main · ea13e52
+              基线：固定快照 · ea13e52
             </span>
             <button className="icon-button" onClick={toggleTheme} aria-label="切换明暗主题">
               {theme === "light" ? <Moon /> : <Sun />}
@@ -203,69 +335,83 @@ export function DocsShell({ chapters }: DocsShellProps) {
         <div className="docs-frame">
           <Sidebar
             chapters={chapters}
-            activeSlug={activeChapter.slug}
+            currentSlug={currentChapter.slug}
+            searchIndexVersion={searchIndexVersion}
             query={query}
             open={sidebarOpen}
+            isNarrow={isNarrow}
             onQueryChange={setQuery}
-            onSelect={selectChapter}
-            onClose={() => setSidebarOpen(false)}
+            onClose={closeSidebar}
+            onNavigate={() => setSidebarOpen(false)}
+            onCurrentDestinationNavigate={focusCurrentDestination}
           />
-          {sidebarOpen && (
-            <button
+          {sidebarModalOpen && (
+            <div
               className="sidebar-backdrop"
-              onClick={() => setSidebarOpen(false)}
-              aria-label="关闭章节导航"
+              onClick={closeSidebar}
+              aria-hidden="true"
             />
           )}
 
-          <main className="docs-scroll-region" ref={scrollRef} onScroll={updateProgress}>
+          <main
+            className="docs-scroll-region"
+            ref={scrollRef}
+            onScroll={updateProgress}
+            aria-hidden={sidebarModalOpen || undefined}
+            inert={sidebarModalOpen}
+          >
             <div className="document-layout">
               <div className="article-column">
-                <section className={`chapter-hero chapter-hero--${activeChapter.accent}`}>
+                <section className={`chapter-hero chapter-hero--${currentChapter.accent}`}>
                   <div className="chapter-kicker">
-                    <span>Chapter {String(activeChapter.index).padStart(2, "0")}</span>
-                    <span className={`status-badge status-badge--${activeChapter.status === "现状与目标" ? "mixed" : activeChapter.status === "总览" ? "overview" : "target"}`}>
-                      {activeChapter.status}
+                    <span>Chapter {String(currentChapter.index).padStart(2, "0")}</span>
+                    <span className={`status-badge ${implementationBadgeClass(currentChapter)}`}>
+                      {currentChapter.implementationStatus}
+                    </span>
+                    <span className="status-badge status-badge--evidence">
+                      {currentChapter.evidenceLevel}
                     </span>
                   </div>
                   <div className="chapter-heading">
                     <ChapterIcon
-                      name={activeChapter.icon}
-                      accent={activeChapter.accent}
+                      name={currentChapter.icon}
+                      accent={currentChapter.accent}
                       size="large"
                     />
                     <div>
-                      <h1>{activeChapter.title}</h1>
-                      <p>{activeChapter.summary}</p>
+                      <h1 ref={chapterHeadingRef} tabIndex={-1}>{currentChapter.title}</h1>
+                      <p>{currentChapter.summary}</p>
                     </div>
                   </div>
                   <div className="chapter-meta">
-                    <span><Clock3 />约 {activeChapter.readingMinutes} 分钟</span>
-                    <span>设计日期 · 2026-07-31</span>
-                    <span>适用 · `model=auto`</span>
+                    <span><Clock3 />约 {currentChapter.readingMinutes} 分钟</span>
+                    <span>固定基线 · 2026-07-31</span>
+                    <span>范围 · {currentChapter.group}</span>
                   </div>
                 </section>
 
-                <MarkdownArticle key={activeChapter.slug} content={activeChapter.content} />
+                <MobileTableOfContents items={currentChapter.tableOfContents} />
+                <MarkdownArticle content={currentChapter.content} headings={currentChapter.tableOfContents} />
+                {currentChapter.slug === "online-routing" && <RouteTraceExplorer />}
 
                 <nav className="chapter-pagination" aria-label="章节翻页">
                   {previousChapter ? (
-                    <button onClick={() => selectChapter(previousChapter.slug)}>
+                    <Link href={`/docs/${previousChapter.slug}`}>
                       <ArrowLeft />
                       <span>
                         <small>上一章</small>
                         <strong>{previousChapter.shortTitle}</strong>
                       </span>
-                    </button>
+                    </Link>
                   ) : <span />}
                   {nextChapter ? (
-                    <button className="next" onClick={() => selectChapter(nextChapter.slug)}>
+                    <Link className="next" href={`/docs/${nextChapter.slug}`}>
                       <span>
                         <small>下一章</small>
                         <strong>{nextChapter.shortTitle}</strong>
                       </span>
                       <ArrowRight />
-                    </button>
+                    </Link>
                   ) : <span />}
                 </nav>
               </div>
@@ -273,25 +419,23 @@ export function DocsShell({ chapters }: DocsShellProps) {
               <aside className="page-outline" aria-label="本页目录">
                 <div className="outline-sticky">
                   <p className="outline-title">本页目录</p>
-                  <nav>
-                    {activeChapter.tableOfContents.map((item) => (
-                      <button
+                  <nav aria-label="本页章节">
+                    {currentChapter.tableOfContents.map((item) => (
+                      <a
                         key={item.id}
                         className={`${item.level === 3 ? "is-nested" : ""} ${activeHeading === item.id ? "is-active" : ""}`}
-                        onClick={() => scrollToHeading(item.id)}
+                        href={`#${item.id}`}
                       >
                         {item.title}
-                      </button>
+                      </a>
                     ))}
                   </nav>
                   <div className="scope-card">
                     <span>阅读边界</span>
-                    <strong>目标设计 ≠ 已经实现</strong>
-                    <p>除明确标注“当前 main”的内容外，其余均为待实施方案。</p>
+                    <strong>文档目标 ≠ 运行时已实现</strong>
+                    <p>固定源码事实与待验证目标设计分别标注，不能互相替代。</p>
                   </div>
                   <div className="keyboard-hint">
-                    <span><kbd>⌥</kbd><kbd>←</kbd></span>
-                    <span>切换章节</span>
                     <span><kbd>⌘</kbd><kbd>K</kbd></span>
                     <span>搜索</span>
                   </div>

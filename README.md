@@ -51,3 +51,4 @@ docker compose up -d --build
 | [管理控制台](docs/admin.md) | 登录、Profile 操作、配置生成、统计和系统管理 |
 | [图片预处理](docs/vision.md) | 图片来源、缓存、并发、失败与日志 |
 | [Token 用量统计](docs/statistics.md) | 控制台筛选、统计口径和协议限制 |
+| [Mesotes 智能路由设计站](docs-site/README.md) | 固定证据支持的 Profile-local 目标设计；不代表 Go 运行时已实现 |

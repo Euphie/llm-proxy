@@ -1,0 +1,124 @@
+{
+  "chapters": [
+    {
+      "slug": "overview",
+      "title": "产品目标与非目标",
+      "summary": "以单一 Profile 边界组织模型选择、Target 调度和受控学习。",
+      "group": "理解方案",
+      "icon": "compass",
+      "accent": "blue",
+      "implementation_status": "本版目标",
+      "evidence_level": "本项目源码验证"
+    },
+    {
+      "slug": "source-baseline",
+      "title": "源码基线与现状差距",
+      "summary": "用固定提交区分当前运行时事实、缺口与本版目标。",
+      "group": "理解方案",
+      "icon": "layers",
+      "accent": "cyan",
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码验证"
+    },
+    {
+      "slug": "competitor-evidence",
+      "title": "竞品源码证据矩阵",
+      "summary": "从固定源码提炼可采用机制，并明确拒绝跨 Profile 编排。",
+      "group": "理解方案",
+      "icon": "activity",
+      "accent": "orange",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "core-model",
+      "title": "核心对象与配置模型",
+      "summary": "定义全部归属单一 Profile 的路由、策略、计划与证据对象。",
+      "group": "理解方案",
+      "icon": "sliders",
+      "accent": "indigo",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "profile-isolation",
+      "title": "Profile 隔离与协议边界",
+      "summary": "把 Profile 固化为 Provider 实例、信任域和唯一运行时隔离边界。",
+      "group": "运行时",
+      "icon": "shield",
+      "accent": "red",
+      "implementation_status": "本版目标",
+      "evidence_level": "本项目源码验证"
+    },
+    {
+      "slug": "online-routing",
+      "title": "在线决策流水线",
+      "summary": "通过本地事实、硬约束、模型选择和 Target 调度生成不可变计划。",
+      "group": "运行时",
+      "icon": "route",
+      "accent": "green",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "quality-and-cost",
+      "title": "质量目标与模型选择",
+      "summary": "先通过 Route 级质量门禁，再按条件优化成本与延迟。",
+      "group": "运行时",
+      "icon": "scale",
+      "accent": "yellow",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "target-reliability",
+      "title": "Target 调度、容量与健康",
+      "summary": "在同一 Profile、同一逻辑模型内完成准入、健康过滤和负载调度。",
+      "group": "运行时",
+      "icon": "activity",
+      "accent": "teal",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "runtime-reliability",
+      "title": "尝试预算、流式与会话",
+      "summary": "用统一 AttemptBudget 和 ClientCommit 建立有界可靠性。",
+      "group": "运行时",
+      "icon": "shield",
+      "accent": "slate",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "evaluation-feedback",
+      "title": "评测、反馈与稳定实验",
+      "summary": "用 Profile-scoped 评测、强类型反馈和稳定分桶积累证据。",
+      "group": "控制面",
+      "icon": "activity",
+      "accent": "orange",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "strategy-lifecycle",
+      "title": "策略生命周期、观测与重放",
+      "summary": "以不可变版本、CAS、灰度、LKG 和授权重放治理发布。",
+      "group": "控制面",
+      "icon": "git-branch",
+      "accent": "indigo",
+      "implementation_status": "本版目标",
+      "evidence_level": "竞品源码验证"
+    },
+    {
+      "slug": "engineering-and-delivery",
+      "title": "API、迁移与交付验收",
+      "summary": "明确破坏性迁移、五个子项目和双重验收门。",
+      "group": "交付",
+      "icon": "database",
+      "accent": "slate",
+      "implementation_status": "本版目标",
+      "evidence_level": "本项目源码验证"
+    }
+  ]
+}

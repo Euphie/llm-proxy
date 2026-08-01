@@ -7,10 +7,15 @@
   },
   "scripts": {
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
-    "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "build": "node --experimental-strip-types scripts/validate-site-origin.mjs && WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "test": "NEXT_PUBLIC_SITE_URL=https://docs.example.test npm run build && node --test tests/rendered-html.test.mjs",
+    "test:content": "node --experimental-strip-types --test tests/content-contract.test.mjs tests/content-model.test.mjs",
+    "test:routes": "NEXT_PUBLIC_SITE_URL=https://docs.example.test npm run build && node --test tests/routes.test.mjs",
+    "test:e2e": "NEXT_PUBLIC_SITE_URL=https://docs.example.test npm run build && playwright test",
+    "typecheck": "tsc --noEmit --incremental false",
+    "verify": "npm run test:content && npm run lint && npm run typecheck && NEXT_PUBLIC_SITE_URL=https://docs.example.test npm run build && node --test tests/routes.test.mjs tests/rendered-html.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern test-results --ignore-pattern playwright-report"
   },
   "dependencies": {
     "lucide-react": "0.468.0",
@@ -22,6 +27,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@playwright/test": "1.62.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
@@ -31,6 +37,7 @@
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
+    "sharp": "0.35.3",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vinext": "0.0.50",

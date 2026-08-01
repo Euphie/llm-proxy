@@ -1,0 +1,99 @@
+{
+  "example_kind": "precomputed",
+  "projection_kind": "sanitized_review_projection",
+  "label": "预计算示例",
+  "scope": {
+    "profile_id": "profile_acme_primary",
+    "generation": 42,
+    "envelope_sha": "sha256:8bb490e5d6c4"
+  },
+  "route": {
+    "route_id": "route_support_auto",
+    "policy_id": "policy_support_v7"
+  },
+  "hard_filter": {
+    "eligible": [
+      {
+        "model_id": "model_balanced",
+        "reason": "满足工具、地域与成本硬约束"
+      }
+    ],
+    "excluded": [
+      {
+        "model_id": "model_economy",
+        "reason": "缺少所需工具能力"
+      }
+    ]
+  },
+  "model_selection": {
+    "selected_model_id": "model_balanced",
+    "reason": "在通过硬约束的候选中满足 Route 质量门禁"
+  },
+  "target_scheduling": {
+    "model_id": "model_balanced",
+    "ordered_target_ids": ["target_balanced_a", "target_balanced_b"],
+    "reason": "容量准入后按稳定调度顺序排列"
+  },
+  "attempt_budget": {
+    "max_answer_attempts": 2,
+    "max_auxiliary_calls": 0,
+    "max_total_outbound_calls": 2,
+    "max_retries_per_target": 0,
+    "max_target_switches": 1,
+    "max_model_switches": 0,
+    "deadline_ms": 3200,
+    "max_worst_case_cost_micro_usd": 9000
+  },
+  "execution_plan": {
+    "profile_scope": {
+      "profile_id": "profile_acme_primary",
+      "generation": 42,
+      "envelope_sha": "sha256:8bb490e5d6c4"
+    },
+    "snapshot_refs": {
+      "policy_version_id": "policy_support_v7",
+      "catalog_sha": "sha256:4b17c945ab20",
+      "deployment_revision": 7,
+      "adapter_sha": "sha256:94387e1c650a",
+      "price_sha": "sha256:1cc282d0eaa1",
+      "selection_metrics_sha": "sha256:f17d713519c2"
+    },
+    "logical_model_transitions": [],
+    "attempts": [
+      {
+        "order": 1,
+        "model_id": "model_balanced",
+        "target_id": "target_balanced_a",
+        "target_config_revision": "rev_a17",
+        "purpose": "answer",
+        "budget_owner": "answer"
+      },
+      {
+        "order": 2,
+        "model_id": "model_balanced",
+        "target_id": "target_balanced_b",
+        "target_config_revision": "rev_b09",
+        "purpose": "answer",
+        "budget_owner": "answer"
+      }
+    ],
+    "auxiliary_attempts": []
+  },
+  "attempts": [
+    {
+      "order": 1,
+      "model_id": "model_balanced",
+      "target_id": "target_balanced_a",
+      "outcome": "retryable_pre_commit_failure",
+      "elapsed_ms": 180
+    },
+    {
+      "order": 2,
+      "model_id": "model_balanced",
+      "target_id": "target_balanced_b",
+      "outcome": "ClientCommit",
+      "commit_event": "first_legal_response_event",
+      "elapsed_ms": 420
+    }
+  ]
+}

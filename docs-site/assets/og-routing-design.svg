@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">Mesotes Profile-local intelligent routing</title>
+  <desc id="description">A resolved Profile contains the Model Router, Target Scheduler, and same-Profile Targets inside one trust boundary.</desc>
+  <defs>
+    <linearGradient id="wallpaper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e8f2ff"/>
+      <stop offset="0.52" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#fff0da"/>
+    </linearGradient>
+    <linearGradient id="navy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#05345f"/>
+      <stop offset="1" stop-color="#0b6fc2"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#087e88"/>
+      <stop offset="1" stop-color="#23b7b4"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#173a5e" flood-opacity="0.16"/>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="38"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="#176fb6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="630" fill="url(#wallpaper)"/>
+  <circle cx="1050" cy="80" r="180" fill="#f9ad43" opacity="0.18" filter="url(#soft)"/>
+  <circle cx="70" cy="560" r="210" fill="#169da6" opacity="0.15" filter="url(#soft)"/>
+
+  <g transform="translate(72 62)">
+    <g transform="translate(35 35)">
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#05345f"/>
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#ec5a45" transform="rotate(45)"/>
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#087e88" transform="rotate(90)"/>
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#0b6fc2" transform="rotate(135)"/>
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#05345f" transform="rotate(180)"/>
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#ec5a45" transform="rotate(225)"/>
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#087e88" transform="rotate(270)"/>
+      <rect x="-6" y="-31" width="12" height="22" rx="5" fill="#0b6fc2" transform="rotate(315)"/>
+    </g>
+    <text x="88" y="28" fill="#082f57" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800" letter-spacing="5">MESOTES</text>
+    <text x="88" y="55" fill="#46637e" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="1.4">INTELLIGENT ROUTING DESIGN</text>
+  </g>
+
+  <text x="72" y="186" fill="#082f57" font-family="Inter, Arial, sans-serif" font-size="52" font-weight="760">Profile-local intelligent routing</text>
+  <text x="74" y="222" fill="#496781" font-family="Inter, Arial, sans-serif" font-size="20">Resolve once. Plan immutably. Execute only inside one Profile.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="260" width="1060" height="306" rx="30" fill="#fff" fill-opacity="0.72" stroke="#fff" stroke-width="2"/>
+    <rect x="86" y="276" width="1028" height="274" rx="22" fill="none" stroke="#8bb8dc" stroke-width="1.5" stroke-dasharray="8 8"/>
+  </g>
+
+  <g font-family="Inter, Arial, sans-serif">
+    <rect x="104" y="292" width="230" height="32" rx="16" fill="#e4f1fb"/>
+    <circle cx="123" cy="308" r="5" fill="#159f87"/>
+    <text x="138" y="314" fill="#315675" font-size="13" font-weight="700" letter-spacing="0.7">ONE PROFILE · ONE TRUST DOMAIN</text>
+
+    <g>
+      <rect x="105" y="355" width="190" height="112" rx="18" fill="#f8fbff" stroke="#a8c9e4"/>
+      <circle cx="133" cy="384" r="13" fill="url(#navy)"/>
+      <path d="M127 384h12M133 378v12" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      <text x="158" y="390" fill="#123f66" font-size="18" font-weight="750">Resolve Profile</text>
+      <text x="126" y="422" fill="#58728a" font-size="13">URL / default selection</text>
+      <rect x="126" y="438" width="125" height="18" rx="9" fill="#e6f4ee"/>
+      <text x="139" y="451" fill="#17765e" font-size="11" font-weight="700">RESOLVED ONCE</text>
+    </g>
+
+    <path d="M307 411H342" fill="none" stroke="#176fb6" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <g>
+      <rect x="355" y="355" width="190" height="112" rx="18" fill="#f8fbff" stroke="#8ec3e7"/>
+      <circle cx="383" cy="384" r="13" fill="#0b6fc2"/>
+      <path d="M377 380h12M377 384h8M377 388h5" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      <text x="408" y="390" fill="#123f66" font-size="18" font-weight="750">Model Router</text>
+      <text x="376" y="422" fill="#58728a" font-size="13">Hard constraints first</text>
+      <text x="376" y="445" fill="#58728a" font-size="13">then conditional choice</text>
+    </g>
+
+    <path d="M557 411H592" fill="none" stroke="#176fb6" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <g>
+      <rect x="605" y="355" width="190" height="112" rx="18" fill="#f8fbff" stroke="#7bc8c6"/>
+      <circle cx="633" cy="384" r="13" fill="url(#teal)"/>
+      <path d="M627 379h12M627 384h8M627 389h4" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      <text x="658" y="390" fill="#123f66" font-size="18" font-weight="750">Target Scheduler</text>
+      <text x="626" y="422" fill="#58728a" font-size="13">Eligibility · health</text>
+      <text x="626" y="445" fill="#58728a" font-size="13">capacity · ordered plan</text>
+    </g>
+
+    <path d="M807 411H842" fill="none" stroke="#176fb6" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <g>
+      <rect x="855" y="342" width="235" height="138" rx="18" fill="#f8fbff" stroke="#f0b278"/>
+      <text x="878" y="374" fill="#123f66" font-size="18" font-weight="750">Same-Profile Targets</text>
+      <g transform="translate(878 393)">
+        <rect width="88" height="55" rx="12" fill="#fff5e9" stroke="#f1bb83"/>
+        <circle cx="18" cy="18" r="6" fill="#ec5a45"/>
+        <text x="31" y="23" fill="#76513b" font-size="13" font-weight="700">Target A</text>
+        <text x="13" y="43" fill="#8b6c56" font-size="10">eligible</text>
+      </g>
+      <g transform="translate(978 393)">
+        <rect width="88" height="55" rx="12" fill="#edf8f7" stroke="#8fcac8"/>
+        <circle cx="18" cy="18" r="6" fill="#159f87"/>
+        <text x="31" y="23" fill="#315e5d" font-size="13" font-weight="700">Target B</text>
+        <text x="13" y="43" fill="#527a78" font-size="10">standby</text>
+      </g>
+    </g>
+
+    <rect x="105" y="505" width="985" height="28" rx="14" fill="#eaf2fa"/>
+    <text x="126" y="524" fill="#3e607d" font-size="12" font-weight="650">ProfileScope = profile_id + generation + envelope_sha · immutable ExecutionPlan · bounded AttemptBudget</text>
+  </g>
+</svg>

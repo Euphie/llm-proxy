@@ -12,3 +12,9 @@ config copy.yaml
 **/*.db-wal
 **/*.db-shm
 .DS_Store
+docs-site/node_modules
+docs-site/dist
+docs-site/.next
+docs-site/.wrangler
+docs-site/test-results
+docs-site/playwright-report

@@ -1,48 +1,50 @@
 # Mesotes 智能路由设计站
 
-Mesotes 是产品品牌；在单独的迁移获得批准前，`llm-proxy` 仍是当前仓库与运行时标识。
+这是 Mesotes 的 Profile-local 智能路由工程规范。Mesotes 是产品品牌；`llm-proxy` 仍是当前仓库与运行时标识。文档把固定源码事实、目标契约和后续方向分开标注，不表示目标能力已经在 Go 运行时中实现。
 
-这是一份基于 `main` 提交 `ea13e52` 整理的交互式设计文档。页面明确区分当前实现与目标方案，覆盖：
+## 真实路由
 
-- 现有程序架构与模块边界；
-- `model=auto` 在线路由；
-- 模型能力、价格、质量与风险约束；
-- 视觉执行方案、会话固定、缓存和容错；
-- 异步动态优化、策略灰度、热加载与回滚；
-- 数据模型、安全边界和分阶段交付。
+站点包含 12 个可独立刷新、分享和生成 metadata 的页面：
 
-## 本地预览
+- `/docs/overview`
+- `/docs/source-baseline`
+- `/docs/competitor-evidence`
+- `/docs/core-model`
+- `/docs/profile-isolation`
+- `/docs/online-routing`
+- `/docs/quality-and-cost`
+- `/docs/target-reliability`
+- `/docs/runtime-reliability`
+- `/docs/evaluation-feedback`
+- `/docs/strategy-lifecycle`
+- `/docs/engineering-and-delivery`
 
-要求 Node.js `>=22.13.0`：
+标题深链使用 `/docs/<slug>#<heading>`。旧版 `/#...` 单页 hash 地址不会保留兼容映射，这是有意的破坏性迁移；外部书签需要更新到真实页面 URL。
 
-```bash
-npm ci
-npm run dev
+首屏只序列化当前章节与导航摘要；全文索引在首次输入搜索词时从带内容版本的 `/api/search-index?v=<version>` 按需加载。保存的明暗主题会在 hydration 前应用，避免暗色用户看到亮色首帧。
+
+## 证据与验收边界
+
+运行时事实固定在 `ea13e527647cb701376c152f71086f01e68789ea`，采集时间、漂移状态和永久链接集中维护在 `data/source-baselines.json`。竞品证据集中维护在 `data/competitor-evidence.json`：开源实现固定 commit，官方文档与闭源参考使用独立证据等级，不能冒充源码验证。
+
+- `DOC_CONTRACT` 证明页面、证据、示例与内容测试完整表达设计契约。
+- `RUNTIME_PROVEN` 需要后续 Go 运行时的隔离、故障注入、并发和安全套件；本站不声称已经达到该门槛。
+
+## 隔离预览与验证
+
+从仓库根目录运行；显式源码清单通过标准输入送入临时容器，依赖和构建产物只留在容器内：
+
+```sh
+make docs-verify
+make docs-e2e
 ```
 
-打开 `http://localhost:3000/`。
+`docs-verify` 使用 Node 22 执行内容契约、内容模型、lint、TypeScript、生产构建、12 个 SSR 页面、搜索 API 和渲染检查。`docs-e2e` 使用固定的 Playwright `1.62.0` Chromium 容器测试导航、深链、历史、按需搜索、首绘主题、移动端焦点与目录、图表灯箱和 reduced motion。
 
-公网部署时可设置 `NEXT_PUBLIC_SITE_URL=https://docs.example.com`，用于生成可信的
-Open Graph 分享图地址；未配置时，非本机请求不会根据客户端 Host 生成分享图 URL。
+需要交互预览时可使用同样的临时副本：
 
-## 验证
-
-```bash
-npm run lint
-npm test
+```sh
+make docs-preview
 ```
 
-`npm test` 会执行生产构建、服务端渲染检查，以及 9 章 Markdown 和 7 张架构图的完整性检查。
-
-## 目录
-
-```text
-app/                  页面入口与全局样式
-components/docs/      文档导航、Markdown 渲染和交互
-content/              9 个 Markdown 章节
-lib/chapters.ts       章节元数据、目录与搜索索引
-public/diagrams/      Excalidraw 导出的 SVG
-tests/                构建产物与内容完整性测试
-```
-
-当前目录只包含方案站点，不代表智能路由已经在 Go 主程序中实现。
+三个目标都不会挂载宿主工作区，只把构建所需的显式文件清单通过 tar 输入流送入临时容器；本地依赖、构建产物、测试输出与 `.env*` 对容器不可见。归档会剥离扩展属性并排除 macOS AppleDouble 文件，`pipefail` 保证宿主归档失败时整个目标立即失败。打开 `http://localhost:3000/docs/overview`。公网构建必须设置裸 HTTPS origin，例如 `NEXT_PUBLIC_SITE_URL=https://docs.example.com npm run build`，用于生成可信 canonical 与分享图地址；缺失、HTTP、凭据、path、query 或 fragment 会使生产构建失败。

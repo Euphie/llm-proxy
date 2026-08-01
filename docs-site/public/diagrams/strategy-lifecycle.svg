@@ -1,2 +1,488 @@
-<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1530 852" width="1530" height="852"><!-- svg-source:excalidraw --><metadata></metadata><defs><style class="style-fonts">
-      </style></defs><rect x="0" y="0" width="1530" height="852" fill="#ffffff"></rect><g transform="translate(20 10) rotate(0 750 20)"><text x="0" y="25.060546875" font-family="Helvetica, Segoe UI Emoji" font-size="28px" fill="#1e293b" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">策略生命周期、灰度发布与原子热加载</text></g><g transform="translate(20 54) rotate(0 750 12)"><text x="0" y="12.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#64748b" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">版本发布后不可变；验证或 CAS 失败保留 last-known-good；在途请求继续使用旧快照</text></g><g stroke-opacity="0.3" fill-opacity="0.3" stroke-linecap="round" transform="translate(10 107) rotate(0 755 140)"><path d="M32 0 C321.42 0, 610.84 0, 1478 0 C1499.33 0, 1510 10.67, 1510 32 C1510 85.28, 1510 138.56, 1510 248 C1510 269.33, 1499.33 280, 1478 280 C952.36 280, 426.72 280, 32 280 C10.67 280, 0 269.33, 0 248 C0 166.58, 0 85.16, 0 32 C0 10.67, 10.67 0, 32 0" stroke="none" stroke-width="0" fill="#f1f5f9"></path><path d="M32 0 C394.92 0, 757.83 0, 1478 0 M1478 0 C1499.33 0, 1510 10.67, 1510 32 M1510 32 C1510 104.66, 1510 177.32, 1510 248 M1510 248 C1510 269.33, 1499.33 280, 1478 280 M1478 280 C955.47 280, 432.95 280, 32 280 M32 280 C10.67 280, 0 269.33, 0 248 M0 248 C0 164.08, 0 80.15, 0 32 M0 32 C0 10.67, 10.67 0, 32 0" stroke="#475569" stroke-width="1.5" fill="none" stroke-dasharray="8 9"></path></g><g transform="translate(30 121) rotate(0 735 15)"><text x="0" y="17.900390625" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e293b" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">不可变策略版本生命周期</text></g><g stroke-linecap="round" transform="translate(45 187) rotate(0 82.5 32.5)"><path d="M16.25 0 C43.22 0, 70.2 0, 148.75 0 C159.58 0, 165 5.42, 165 16.25 C165 24.34, 165 32.43, 165 48.75 C165 59.58, 159.58 65, 148.75 65 C114.04 65, 79.33 65, 16.25 65 C5.42 65, 0 59.58, 0 48.75 C0 42.05, 0 35.35, 0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="none" stroke-width="0" fill="#fed7aa"></path><path d="M16.25 0 C49.51 0, 82.76 0, 148.75 0 M16.25 0 C52.77 0, 89.29 0, 148.75 0 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M165 16.25 C165 29.13, 165 42.01, 165 48.75 M165 16.25 C165 25.06, 165 33.87, 165 48.75 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M148.75 65 C118.08 65, 87.4 65, 16.25 65 M148.75 65 C113.78 65, 78.81 65, 16.25 65 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M0 48.75 C0 37.79, 0 26.84, 0 16.25 M0 48.75 C0 36.81, 0 24.87, 0 16.25 M0 16.25 C0 5.42, 5.42 0, 16.25 0 M0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="#c2410c" stroke-width="2" fill="none"></path></g><g transform="translate(55 195) rotate(0 72.5 24.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">draft</text></g><g stroke-linecap="round" transform="translate(260 187) rotate(0 82.5 32.5)"><path d="M16.25 0 C48.52 0, 80.79 0, 148.75 0 C159.58 0, 165 5.42, 165 16.25 C165 25.99, 165 35.73, 165 48.75 C165 59.58, 159.58 65, 148.75 65 C104.65 65, 60.55 65, 16.25 65 C5.42 65, 0 59.58, 0 48.75 C0 39.24, 0 29.73, 0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="none" stroke-width="0" fill="#e0f2fe"></path><path d="M16.25 0 C49.51 0, 82.76 0, 148.75 0 M16.25 0 C45.35 0, 74.45 0, 148.75 0 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M165 16.25 C165 23.77, 165 31.29, 165 48.75 M165 16.25 C165 24.38, 165 32.51, 165 48.75 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M148.75 65 C113.92 65, 79.1 65, 16.25 65 M148.75 65 C109.59 65, 70.43 65, 16.25 65 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M0 48.75 C0 38.65, 0 28.55, 0 16.25 M0 48.75 C0 38.34, 0 27.94, 0 16.25 M0 16.25 C0 5.42, 5.42 0, 16.25 0 M0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="#0369a1" stroke-width="2" fill="none"></path></g><g transform="translate(270 195) rotate(0 72.5 24.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">evaluating</text></g><g stroke-linecap="round" transform="translate(490 187) rotate(0 82.5 32.5)"><path d="M16.25 0 C53.82 0, 91.38 0, 148.75 0 C159.58 0, 165 5.42, 165 16.25 C165 27.64, 165 39.02, 165 48.75 C165 59.58, 159.58 65, 148.75 65 C121.76 65, 94.78 65, 16.25 65 C5.42 65, 0 59.58, 0 48.75 C0 36.43, 0 24.11, 0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="none" stroke-width="0" fill="#dcfce7"></path><path d="M16.25 0 C49.51 0, 82.77 0, 148.75 0 M16.25 0 C64.43 0, 112.61 0, 148.75 0 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M165 16.25 C165 24.91, 165 33.56, 165 48.75 M165 16.25 C165 23.7, 165 31.15, 165 48.75 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M148.75 65 C109.77 65, 70.79 65, 16.25 65 M148.75 65 C105.4 65, 62.04 65, 16.25 65 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M0 48.75 C0 39.51, 0 30.27, 0 16.25 M0 48.75 C0 39.88, 0 31, 0 16.25 M0 16.25 C0 5.42, 5.42 0, 16.25 0 M0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="#166534" stroke-width="2" fill="none"></path></g><g transform="translate(500 195) rotate(0 72.5 24.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">ready</text></g><g stroke-linecap="round" transform="translate(705 187) rotate(0 82.5 32.5)"><path d="M16.25 0 C59.11 0, 101.97 0, 148.75 0 C159.58 0, 165 5.42, 165 16.25 C165 22.78, 165 29.32, 165 48.75 C165 59.58, 159.58 65, 148.75 65 C112.38 65, 76.01 65, 16.25 65 C5.42 65, 0 59.58, 0 48.75 C0 40.12, 0 31.49, 0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="none" stroke-width="0" fill="#fef9c3"></path><path d="M16.25 0 C49.51 0, 82.77 0, 148.75 0 M16.25 0 C57.01 0, 97.76 0, 148.75 0 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M165 16.25 C165 26.04, 165 35.84, 165 48.75 M165 16.25 C165 23.02, 165 29.79, 165 48.75 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M148.75 65 C105.62 65, 62.48 65, 16.25 65 M148.75 65 C101.2 65, 53.66 65, 16.25 65 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M0 48.75 C0 40.37, 0 31.98, 0 16.25 M0 48.75 C0 41.41, 0 34.07, 0 16.25 M0 16.25 C0 5.42, 5.42 0, 16.25 0 M0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="#854d0e" stroke-width="2" fill="none"></path></g><g transform="translate(715 195) rotate(0 72.5 24.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">canary</text></g><g stroke-linecap="round" transform="translate(920 187) rotate(0 82.5 32.5)"><path d="M16.25 0 C64.41 0, 112.57 0, 148.75 0 C159.58 0, 165 5.42, 165 16.25 C165 24.43, 165 32.62, 165 48.75 C165 59.58, 159.58 65, 148.75 65 C102.99 65, 57.23 65, 16.25 65 C5.42 65, 0 59.58, 0 48.75 C0 37.31, 0 25.87, 0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="none" stroke-width="0" fill="#dcfce7"></path><path d="M16.25 0 C49.51 0, 82.77 0, 148.75 0 M16.25 0 C49.58 0, 82.92 0, 148.75 0 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M165 16.25 C165 27.18, 165 38.11, 165 48.75 M165 16.25 C165 28.84, 165 41.42, 165 48.75 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M148.75 65 C101.46 65, 54.18 65, 16.25 65 M148.75 65 C97.01 65, 45.27 65, 16.25 65 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M0 48.75 C0 41.22, 0 33.7, 0 16.25 M0 48.75 C0 36.44, 0 24.14, 0 16.25 M0 16.25 C0 5.42, 5.42 0, 16.25 0 M0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="#166534" stroke-width="2" fill="none"></path></g><g transform="translate(930 195) rotate(0 72.5 24.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">active</text></g><g stroke-linecap="round" transform="translate(1140 187) rotate(0 82.5 32.5)"><path d="M16.25 0 C43.2 0, 70.16 0, 148.75 0 C159.58 0, 165 5.42, 165 16.25 C165 26.08, 165 35.91, 165 48.75 C165 59.58, 159.58 65, 148.75 65 C120.1 65, 91.46 65, 16.25 65 C5.42 65, 0 59.58, 0 48.75 C0 41, 0 33.25, 0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="none" stroke-width="0" fill="#f1f5f9"></path><path d="M16.25 0 C49.51 0, 82.77 0, 148.75 0 M16.25 0 C68.66 0, 121.08 0, 148.75 0 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M148.75 0 C159.58 0, 165 5.42, 165 16.25 M165 16.25 C165 28.32, 165 40.39, 165 48.75 M165 16.25 C165 28.16, 165 40.06, 165 48.75 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M165 48.75 C165 59.58, 159.58 65, 148.75 65 M148.75 65 C97.31 65, 45.87 65, 16.25 65 M148.75 65 C119.32 65, 89.89 65, 16.25 65 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M16.25 65 C5.42 65, 0 59.58, 0 48.75 M0 48.75 C0 42.08, 0 35.41, 0 16.25 M0 48.75 C0 37.98, 0 27.2, 0 16.25 M0 16.25 C0 5.42, 5.42 0, 16.25 0 M0 16.25 C0 5.42, 5.42 0, 16.25 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(1150 195) rotate(0 72.5 24.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">superseded</text></g><g stroke-linecap="round"><g transform="translate(210 219.5) rotate(0 25 0)"><path d="M0 0 C12.55 0, 25.1 0, 50 0 M0 0 C16.98 0, 33.96 0, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(210 219.5) rotate(0 25 0)"><path d="M26.51 8.55 C32.41 6.4, 38.3 4.26, 50 0 M26.51 8.55 C34.48 5.65, 42.46 2.74, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(210 219.5) rotate(0 25 0)"><path d="M26.51 -8.55 C32.41 -6.4, 38.3 -4.26, 50 0 M26.51 -8.55 C34.48 -5.65, 42.46 -2.74, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(425 219.5) rotate(0 32.5 0)"><path d="M0 0 C16.32 0, 32.64 0, 65 0 M0 0 C13.75 0, 27.5 0, 65 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(425 219.5) rotate(0 32.5 0)"><path d="M41.51 8.55 C47.41 6.4, 53.3 4.26, 65 0 M41.51 8.55 C46.48 6.74, 51.45 4.93, 65 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(425 219.5) rotate(0 32.5 0)"><path d="M41.51 -8.55 C47.41 -6.4, 53.3 -4.26, 65 0 M41.51 -8.55 C46.48 -6.74, 51.45 -4.93, 65 0" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(655 219.5) rotate(0 25 0)"><path d="M0 0 C12.55 0, 25.11 0, 50 0 M0 0 C14.18 0, 28.35 0, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(655 219.5) rotate(0 25 0)"><path d="M26.51 8.55 C32.41 6.4, 38.3 4.26, 50 0 M26.51 8.55 C33.17 6.13, 39.83 3.7, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(655 219.5) rotate(0 25 0)"><path d="M26.51 -8.55 C32.41 -6.4, 38.3 -4.26, 50 0 M26.51 -8.55 C33.17 -6.13, 39.83 -3.7, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(870 219.5) rotate(0 25 0)"><path d="M0 0 C12.55 0, 25.11 0, 50 0 M0 0 C17.78 0, 35.55 0, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(870 219.5) rotate(0 25 0)"><path d="M26.51 8.55 C32.41 6.4, 38.3 4.26, 50 0 M26.51 8.55 C34.86 5.51, 43.21 2.47, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(870 219.5) rotate(0 25 0)"><path d="M26.51 -8.55 C32.41 -6.4, 38.3 -4.26, 50 0 M26.51 -8.55 C34.86 -5.51, 43.21 -2.47, 50 0" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(1085 219.5) rotate(0 27.5 0)"><path d="M0 0 C13.81 0, 27.62 0, 55 0 M0 0 C12.51 0, 25.03 0, 55 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(1085 219.5) rotate(0 27.5 0)"><path d="M31.51 8.55 C37.41 6.4, 43.3 4.26, 55 0 M31.51 8.55 C36.85 6.6, 42.2 4.66, 55 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(1085 219.5) rotate(0 27.5 0)"><path d="M31.51 -8.55 C37.41 -6.4, 43.3 -4.26, 55 0 M31.51 -8.55 C36.85 -6.6, 42.2 -4.66, 55 0" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round" transform="translate(490 297) rotate(0 82.5 27.5)"><path d="M13.75 0 C60.96 0, 108.16 0, 151.25 0 C160.42 0, 165 4.58, 165 13.75 C165 24.2, 165 34.65, 165 41.25 C165 50.42, 160.42 55, 151.25 55 C101.18 55, 51.11 55, 13.75 55 C4.58 55, 0 50.42, 0 41.25 C0 31.87, 0 22.48, 0 13.75 C0 4.58, 4.58 0, 13.75 0" stroke="none" stroke-width="0" fill="#fee2e2"></path><path d="M13.75 0 C48.27 0, 82.79 0, 151.25 0 M13.75 0 C54.94 0, 96.12 0, 151.25 0 M151.25 0 C160.42 0, 165 4.58, 165 13.75 M151.25 0 C160.42 0, 165 4.58, 165 13.75 M165 13.75 C165 21.83, 165 29.91, 165 41.25 M165 13.75 C165 21.81, 165 29.86, 165 41.25 M165 41.25 C165 50.42, 160.42 55, 151.25 55 M165 41.25 C165 50.42, 160.42 55, 151.25 55 M151.25 55 C110.28 55, 69.32 55, 13.75 55 M151.25 55 C105.48 55, 59.71 55, 13.75 55 M13.75 55 C4.58 55, 0 50.42, 0 41.25 M13.75 55 C4.58 55, 0 50.42, 0 41.25 M0 41.25 C0 35.4, 0 29.54, 0 13.75 M0 41.25 C0 33.92, 0 26.6, 0 13.75 M0 13.75 C0 4.58, 4.58 0, 13.75 0 M0 13.75 C0 4.58, 4.58 0, 13.75 0" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(500 305) rotate(0 72.5 19.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">failed</text></g><g stroke-linecap="round" transform="translate(920 297) rotate(0 82.5 27.5)"><path d="M13.75 0 C66.45 0, 119.15 0, 151.25 0 C160.42 0, 165 4.58, 165 13.75 C165 20.09, 165 26.44, 165 41.25 C165 50.42, 160.42 55, 151.25 55 C118.94 55, 86.63 55, 13.75 55 C4.58 55, 0 50.42, 0 41.25 C0 34.99, 0 28.73, 0 13.75 C0 4.58, 4.58 0, 13.75 0" stroke="none" stroke-width="0" fill="#fee2e2"></path><path d="M13.75 0 C48.27 0, 82.8 0, 151.25 0 M13.75 0 C47.23 0, 80.72 0, 151.25 0 M151.25 0 C160.42 0, 165 4.58, 165 13.75 M151.25 0 C160.42 0, 165 4.58, 165 13.75 M165 13.75 C165 22.79, 165 31.84, 165 41.25 M165 13.75 C165 21.23, 165 28.71, 165 41.25 M165 41.25 C165 50.42, 160.42 55, 151.25 55 M165 41.25 C165 50.42, 160.42 55, 151.25 55 M151.25 55 C105.97 55, 60.7 55, 13.75 55 M151.25 55 C101.13 55, 51.01 55, 13.75 55 M13.75 55 C4.58 55, 0 50.42, 0 41.25 M13.75 55 C4.58 55, 0 50.42, 0 41.25 M0 41.25 C0 30.62, 0 19.99, 0 13.75 M0 41.25 C0 35.22, 0 29.19, 0 13.75 M0 13.75 C0 4.58, 4.58 0, 13.75 0 M0 13.75 C0 4.58, 4.58 0, 13.75 0" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(930 305) rotate(0 72.5 19.5)"><text x="72.5" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">rolled_back</text></g><g stroke-linecap="round"><g transform="translate(342 252) rotate(0 115 22.5)"><path d="M0 0 C0 2.76, 0 5.52, 0 11 M0 0 C0 4.26, 0 8.53, 0 11 M0 11 C0 18.33, 3.67 22, 11 22 M0 11 C0 18.33, 3.67 22, 11 22 M11 22 C86.51 22, 162.02 22, 218.5 22 M11 22 C63.1 22, 115.2 22, 218.5 22 M218.5 22 C226.17 22, 230 25.83, 230 33.5 M218.5 22 C226.17 22, 230 25.83, 230 33.5 M230 33.5 C230 37.65, 230 41.79, 230 45 M230 33.5 C230 38.06, 230 42.61, 230 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(342 252) rotate(0 115 22.5)"><path d="M226.07 34.19 C227.05 36.91, 228.04 39.62, 230 45 M226.07 34.19 C227.59 38.38, 229.12 42.57, 230 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(342 252) rotate(0 115 22.5)"><path d="M233.93 34.19 C232.95 36.91, 231.96 39.62, 230 45 M233.93 34.19 C232.41 38.38, 230.88 42.57, 230 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(787 252) rotate(0 107.5 22.5)"><path d="M0 0 C0 2.76, 0 5.52, 0 11 M0 0 C0 2.85, 0 5.71, 0 11 M0 11 C0 18.33, 3.67 22, 11 22 M0 11 C0 18.33, 3.67 22, 11 22 M11 22 C84.42 22, 157.84 22, 203.5 22 M11 22 C57.31 22, 103.63 22, 203.5 22 M203.5 22 C211.17 22, 215 25.83, 215 33.5 M203.5 22 C211.17 22, 215 25.83, 215 33.5 M215 33.5 C215 37.83, 215 42.15, 215 45 M215 33.5 C215 35.94, 215 38.38, 215 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(787 252) rotate(0 107.5 22.5)"><path d="M211.07 34.19 C212.05 36.91, 213.04 39.62, 215 45 M211.07 34.19 C212.09 37, 213.11 39.8, 215 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(787 252) rotate(0 107.5 22.5)"><path d="M218.93 34.19 C217.95 36.91, 216.96 39.62, 215 45 M218.93 34.19 C217.91 37, 216.89 39.8, 215 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(1002 252) rotate(0 0 22.5)"><path d="M0 0 C0 11.3, 0 22.6, 0 45 M0 0 C0 14.92, 0 29.83, 0 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(1002 252) rotate(0 0 22.5)"><path d="M-7.7 23.86 C-5.76 29.17, -3.83 34.47, 0 45 M-7.7 23.86 C-5.14 30.87, -2.59 37.87, 0 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(1002 252) rotate(0 0 22.5)"><path d="M7.7 23.86 C5.76 29.17, 3.83 34.47, 0 45 M7.7 23.86 C5.14 30.87, 2.59 37.87, 0 45" stroke="#991b1b" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round" transform="translate(1340 187) rotate(0 70 52.5)"><path d="M26.25 0 C51.03 0, 75.81 0, 113.75 0 C131.25 0, 140 8.75, 140 26.25 C140 39.77, 140 53.28, 140 78.75 C140 96.25, 131.25 105, 113.75 105 C86.44 105, 59.13 105, 26.25 105 C8.75 105, 0 96.25, 0 78.75 C0 65.95, 0 53.14, 0 26.25 C0 8.75, 8.75 0, 26.25 0" stroke="none" stroke-width="0" fill="#f3e8ff"></path><path d="M26.25 0 C48.22 0, 70.19 0, 113.75 0 M26.25 0 C44.05 0, 61.86 0, 113.75 0 M113.75 0 C131.25 0, 140 8.75, 140 26.25 M113.75 0 C131.25 0, 140 8.75, 140 26.25 M140 26.25 C140 37.61, 140 48.97, 140 78.75 M140 26.25 C140 37.78, 140 49.31, 140 78.75 M140 78.75 C140 96.25, 131.25 105, 113.75 105 M140 78.75 C140 96.25, 131.25 105, 113.75 105 M113.75 105 C95.58 105, 77.41 105, 26.25 105 M113.75 105 C92.43 105, 71.12 105, 26.25 105 M26.25 105 C8.75 105, 0 96.25, 0 78.75 M26.25 105 C8.75 105, 0 96.25, 0 78.75 M0 78.75 C0 67.17, 0 55.59, 0 26.25 M0 78.75 C0 68.18, 0 57.61, 0 26.25 M0 26.25 C0 8.75, 8.75 0, 26.25 0 M0 26.25 C0 8.75, 8.75 0, 26.25 0" stroke="#6b21a8" stroke-width="2" fill="none"></path></g><g transform="translate(1350 195) rotate(0 60 44.5)"><text x="60" y="12.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">版本</text><text x="60" y="30.0302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">YYYYMMDD-NNN</text><text x="60" y="47.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">发布后不可变</text><text x="60" y="65.0302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">alias 仅展示</text></g><g stroke-opacity="0.3" fill-opacity="0.3" stroke-linecap="round" transform="translate(10 422) rotate(0 755 210)"><path d="M32 0 C377.57 0, 723.13 0, 1478 0 C1499.33 0, 1510 10.67, 1510 32 C1510 164.51, 1510 297.02, 1510 388 C1510 409.33, 1499.33 420, 1478 420 C908.03 420, 338.05 420, 32 420 C10.67 420, 0 409.33, 0 388 C0 258.99, 0 129.97, 0 32 C0 10.67, 10.67 0, 32 0" stroke="none" stroke-width="0" fill="#f1f5f9"></path><path d="M32 0 C395.1 0, 758.2 0, 1478 0 M1478 0 C1499.33 0, 1510 10.67, 1510 32 M1510 32 C1510 150.99, 1510 269.98, 1510 388 M1510 388 C1510 409.33, 1499.33 420, 1478 420 M1478 420 C1114.44 420, 750.88 420, 32 420 M32 420 C10.67 420, 0 409.33, 0 388 M0 388 C0 279.91, 0 171.82, 0 32 M0 32 C0 10.67, 10.67 0, 32 0" stroke="#475569" stroke-width="1.5" fill="none" stroke-dasharray="8 9"></path></g><g transform="translate(30 436) rotate(0 735 15)"><text x="0" y="17.900390625" font-family="Helvetica, Segoe UI Emoji" font-size="20px" fill="#1e293b" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">发布与热加载泳道</text></g><g transform="translate(40 482) rotate(0 75 12.5)"><text x="0" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#1e293b" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Publisher</text></g><g transform="translate(40 597) rotate(0 75 12.5)"><text x="0" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#1e293b" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">SQLite Store</text></g><g transform="translate(40 717) rotate(0 80 12.5)"><text x="0" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#1e293b" text-anchor="start" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Runtime Instances</text></g><g stroke-linecap="round" transform="translate(210 472) rotate(0 90 35)"><path d="M17.5 0 C49.85 0, 82.2 0, 162.5 0 C174.17 0, 180 5.83, 180 17.5 C180 29.22, 180 40.95, 180 52.5 C180 64.17, 174.17 70, 162.5 70 C124.79 70, 87.08 70, 17.5 70 C5.83 70, 0 64.17, 0 52.5 C0 40.37, 0 28.24, 0 17.5 C0 5.83, 5.83 0, 17.5 0" stroke="none" stroke-width="0" fill="#e0f2fe"></path><path d="M17.5 0 C53.91 0, 90.33 0, 162.5 0 M17.5 0 C62.08 0, 106.66 0, 162.5 0 M162.5 0 C174.17 0, 180 5.83, 180 17.5 M162.5 0 C174.17 0, 180 5.83, 180 17.5 M180 17.5 C180 29.36, 180 41.23, 180 52.5 M180 17.5 C180 29.62, 180 41.74, 180 52.5 M180 52.5 C180 64.17, 174.17 70, 162.5 70 M180 52.5 C180 64.17, 174.17 70, 162.5 70 M162.5 70 C116.49 70, 70.47 70, 17.5 70 M162.5 70 C111.12 70, 59.74 70, 17.5 70 M17.5 70 C5.83 70, 0 64.17, 0 52.5 M17.5 70 C5.83 70, 0 64.17, 0 52.5 M0 52.5 C0 44.51, 0 36.52, 0 17.5 M0 52.5 C0 40.73, 0 28.96, 0 17.5 M0 17.5 C0 5.83, 5.83 0, 17.5 0 M0 17.5 C0 5.83, 5.83 0, 17.5 0" stroke="#0369a1" stroke-width="2" fill="none"></path></g><g transform="translate(220 480) rotate(0 80 27)"><text x="80" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">读取 stable + canary</text></g><g stroke-linecap="round" transform="translate(470 472) rotate(0 90 35)"><path d="M17.5 0 C55.64 0, 93.79 0, 162.5 0 C174.17 0, 180 5.83, 180 17.5 C180 31, 180 44.5, 180 52.5 C180 64.17, 174.17 70, 162.5 70 C114.52 70, 66.54 70, 17.5 70 C5.83 70, 0 64.17, 0 52.5 C0 44.34, 0 36.19, 0 17.5 C0 5.83, 5.83 0, 17.5 0" stroke="none" stroke-width="0" fill="#fef9c3"></path><path d="M17.5 0 C53.91 0, 90.33 0, 162.5 0 M17.5 0 C53.96 0, 90.41 0, 162.5 0 M162.5 0 C174.17 0, 180 5.83, 180 17.5 M162.5 0 C174.17 0, 180 5.83, 180 17.5 M180 17.5 C180 30.59, 180 43.68, 180 52.5 M180 17.5 C180 28.89, 180 40.27, 180 52.5 M180 52.5 C180 64.17, 174.17 70, 162.5 70 M180 52.5 C180 64.17, 174.17 70, 162.5 70 M162.5 70 C111.94 70, 61.38 70, 17.5 70 M162.5 70 C106.53 70, 50.56 70, 17.5 70 M17.5 70 C5.83 70, 0 64.17, 0 52.5 M17.5 70 C5.83 70, 0 64.17, 0 52.5 M0 52.5 C0 45.44, 0 38.37, 0 17.5 M0 52.5 C0 42.38, 0 32.26, 0 17.5 M0 17.5 C0 5.83, 5.83 0, 17.5 0 M0 17.5 C0 5.83, 5.83 0, 17.5 0" stroke="#854d0e" stroke-width="2" fill="none"></path></g><g transform="translate(480 480) rotate(0 80 27)"><text x="80" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">编译并完整验证</text></g><g stroke-linecap="round" transform="translate(1255 472) rotate(0 100 35)"><path d="M17.5 0 C67.5 0, 117.5 0, 182.5 0 C194.17 0, 200 5.83, 200 17.5 C200 25.77, 200 34.05, 200 52.5 C200 64.17, 194.17 70, 182.5 70 C149.21 70, 115.92 70, 17.5 70 C5.83 70, 0 64.17, 0 52.5 C0 41.32, 0 30.13, 0 17.5 C0 5.83, 5.83 0, 17.5 0" stroke="none" stroke-width="0" fill="#dcfce7"></path><path d="M17.5 0 C58.94 0, 100.38 0, 182.5 0 M17.5 0 C82.74 0, 147.99 0, 182.5 0 M182.5 0 C194.17 0, 200 5.83, 200 17.5 M182.5 0 C194.17 0, 200 5.83, 200 17.5 M200 17.5 C200 24.81, 200 32.13, 200 52.5 M200 17.5 C200 28.15, 200 38.81, 200 52.5 M200 52.5 C200 64.17, 194.17 70, 182.5 70 M200 52.5 C200 64.17, 194.17 70, 182.5 70 M182.5 70 C119.79 70, 57.09 70, 17.5 70 M182.5 70 C146.59 70, 110.68 70, 17.5 70 M17.5 70 C5.83 70, 0 64.17, 0 52.5 M17.5 70 C5.83 70, 0 64.17, 0 52.5 M0 52.5 C0 39.36, 0 26.22, 0 17.5 M0 52.5 C0 44.03, 0 35.57, 0 17.5 M0 17.5 C0 5.83, 5.83 0, 17.5 0 M0 17.5 C0 5.83, 5.83 0, 17.5 0" stroke="#166534" stroke-width="2" fill="none"></path></g><g transform="translate(1265 480) rotate(0 90 27)"><text x="90" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">发布成功 / 可回滚</text></g><g stroke-linecap="round"><g transform="translate(390 507) rotate(0 40 0)"><path d="M0 0 C20.09 0, 40.18 0, 80 0 M0 0 C27.15 0, 54.3 0, 80 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(390 507) rotate(0 40 0)"><path d="M56.51 8.55 C62.41 6.4, 68.31 4.26, 80 0 M56.51 8.55 C64.48 5.65, 72.45 2.75, 80 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(390 507) rotate(0 40 0)"><path d="M56.51 -8.55 C62.41 -6.4, 68.31 -4.26, 80 0 M56.51 -8.55 C64.48 -5.65, 72.45 -2.75, 80 0" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round" transform="translate(730 582) rotate(0 115 37.5)"><path d="M18.75 0 C88.63 0, 158.5 0, 211.25 0 C223.75 0, 230 6.25, 230 18.75 C230 26.72, 230 34.68, 230 56.25 C230 68.75, 223.75 75, 211.25 75 C171.21 75, 131.17 75, 18.75 75 C6.25 75, 0 68.75, 0 56.25 C0 46.9, 0 37.56, 0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="none" stroke-width="0" fill="#f3e8ff"></path><path d="M18.75 0 C67.1 0, 115.45 0, 211.25 0 M18.75 0 C59.44 0, 100.14 0, 211.25 0 M211.25 0 C223.75 0, 230 6.25, 230 18.75 M211.25 0 C223.75 0, 230 6.25, 230 18.75 M230 18.75 C230 28.55, 230 38.36, 230 56.25 M230 18.75 C230 28.99, 230 39.22, 230 56.25 M230 56.25 C230 68.75, 223.75 75, 211.25 75 M230 56.25 C230 68.75, 223.75 75, 211.25 75 M211.25 75 C167.54 75, 123.84 75, 18.75 75 M211.25 75 C160.22 75, 109.19 75, 18.75 75 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M0 56.25 C0 47.4, 0 38.56, 0 18.75 M0 56.25 C0 46.08, 0 35.91, 0 18.75 M0 18.75 C0 6.25, 6.25 0, 18.75 0 M0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="#6b21a8" stroke-width="2" fill="none"></path></g><g transform="translate(740 590) rotate(0 105 29.5)"><text x="105" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">事务 CAS revision</text><text x="105" y="34.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">+ audit event</text></g><g stroke-linecap="round" transform="translate(1040 582) rotate(0 95 37.5)"><path d="M18.75 0 C49.7 0, 80.65 0, 171.25 0 C183.75 0, 190 6.25, 190 18.75 C190 28.62, 190 38.49, 190 56.25 C190 68.75, 183.75 75, 171.25 75 C128.72 75, 86.2 75, 18.75 75 C6.25 75, 0 68.75, 0 56.25 C0 43.66, 0 31.07, 0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="none" stroke-width="0" fill="#fee2e2"></path><path d="M18.75 0 C57.05 0, 95.36 0, 171.25 0 M18.75 0 C72.95 0, 127.14 0, 171.25 0 M171.25 0 C183.75 0, 190 6.25, 190 18.75 M171.25 0 C183.75 0, 190 6.25, 190 18.75 M190 18.75 C190 29.87, 190 40.98, 190 56.25 M190 18.75 C190 28.2, 190 37.65, 190 56.25 M190 56.25 C190 68.75, 183.75 75, 171.25 75 M190 56.25 C190 68.75, 183.75 75, 171.25 75 M171.25 75 C131.84 75, 92.44 75, 18.75 75 M171.25 75 C126 75, 80.75 75, 18.75 75 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M0 56.25 C0 48.39, 0 40.54, 0 18.75 M0 56.25 C0 47.85, 0 39.45, 0 18.75 M0 18.75 C0 6.25, 6.25 0, 18.75 0 M0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(1050 590) rotate(0 85 29.5)"><text x="85" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">Last-known-good</text></g><g stroke-linecap="round"><g transform="translate(560 542) rotate(0 142.5 20)"><path d="M0 0 C0 2.51, 0 5.02, 0 10 M0 0 C0 2.99, 0 5.99, 0 10 M0 10 C0 16.67, 3.33 20, 10 20 M0 10 C0 16.67, 3.33 20, 10 20 M10 20 C97.84 20, 185.67 20, 275 20 M10 20 C71.22 20, 132.45 20, 275 20 M275 20 C281.67 20, 285 23.33, 285 30 M275 20 C281.67 20, 285 23.33, 285 30 M285 30 C285 32.9, 285 35.79, 285 40 M285 30 C285 33.28, 285 36.57, 285 40" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(560 542) rotate(0 142.5 20)"><path d="M281.58 30.6 C282.44 32.96, 283.3 35.32, 285 40 M281.58 30.6 C282.6 33.42, 283.63 36.23, 285 40" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(560 542) rotate(0 142.5 20)"><path d="M288.42 30.6 C287.56 32.96, 286.7 35.32, 285 40 M288.42 30.6 C287.4 33.42, 286.37 36.23, 285 40" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(650 507) rotate(0 242.5 37.5)"><path d="M0 0 C3.77 0, 7.54 0, 15 0 M0 0 C5.57 0, 11.14 0, 15 0 M15 0 C25 0, 30 5, 30 15 M15 0 C25 0, 30 5, 30 15 M30 15 C30 25.12, 30 35.24, 30 44 M30 15 C30 21.4, 30 27.79, 30 44 M30 44 C30 54.67, 35.33 60, 46 60 M30 44 C30 54.67, 35.33 60, 46 60 M46 60 C177.79 60, 309.57 60, 477.5 60 M46 60 C194.52 60, 343.03 60, 477.5 60 M477.5 60 C482.5 60, 485 62.5, 485 67.5 M477.5 60 C482.5 60, 485 62.5, 485 67.5 M485 67.5 C485 69.52, 485 71.55, 485 75 M485 67.5 C485 69.4, 485 71.3, 485 75" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(650 507) rotate(0 242.5 37.5)"><path d="M482.43 67.95 C483.08 69.72, 483.72 71.49, 485 75 M482.43 67.95 C483.39 70.57, 484.34 73.19, 485 75" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(650 507) rotate(0 242.5 37.5)"><path d="M487.57 67.95 C486.92 69.72, 486.28 71.49, 485 75 M487.57 67.95 C486.61 70.57, 485.66 73.19, 485 75" stroke="#991b1b" stroke-width="2" fill="none"></path></g></g><mask></mask><g transform="translate(670 522) rotate(0 50 11)"><text x="50" y="12.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#64748b" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">失败</text></g><g stroke-linecap="round"><g transform="translate(960 619.5) rotate(0 40 0)"><path d="M0 0 C20.1 0, 40.19 0, 80 0 M0 0 C25.23 0, 50.46 0, 80 0" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(960 619.5) rotate(0 40 0)"><path d="M56.51 8.55 C62.41 6.4, 68.31 4.25, 80 0 M56.51 8.55 C63.92 5.85, 71.32 3.16, 80 0" stroke="#991b1b" stroke-width="2" fill="none"></path></g><g transform="translate(960 619.5) rotate(0 40 0)"><path d="M56.51 -8.55 C62.41 -6.4, 68.31 -4.25, 80 0 M56.51 -8.55 C63.92 -5.85, 71.32 -3.16, 80 0" stroke="#991b1b" stroke-width="2" fill="none"></path></g></g><mask></mask><g transform="translate(950 597) rotate(0 50 11)"><text x="50" y="12.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#64748b" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">CAS 失败</text></g><g stroke-linecap="round" transform="translate(730 702) rotate(0 115 37.5)"><path d="M18.75 0 C84.75 0, 150.75 0, 211.25 0 C223.75 0, 230 6.25, 230 18.75 C230 31.52, 230 44.3, 230 56.25 C230 68.75, 223.75 75, 211.25 75 C167.59 75, 123.93 75, 18.75 75 C6.25 75, 0 68.75, 0 56.25 C0 47.31, 0 38.37, 0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="none" stroke-width="0" fill="#dcfce7"></path><path d="M18.75 0 C67.11 0, 115.46 0, 211.25 0 M18.75 0 C68.67 0, 118.6 0, 211.25 0 M211.25 0 C223.75 0, 230 6.25, 230 18.75 M211.25 0 C223.75 0, 230 6.25, 230 18.75 M230 18.75 C230 26.96, 230 35.17, 230 56.25 M230 18.75 C230 32.95, 230 47.15, 230 56.25 M230 56.25 C230 68.75, 223.75 75, 211.25 75 M230 56.25 C230 68.75, 223.75 75, 211.25 75 M211.25 75 C140.39 75, 69.53 75, 18.75 75 M211.25 75 C171.31 75, 131.37 75, 18.75 75 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M0 56.25 C0 48.11, 0 39.96, 0 18.75 M0 56.25 C0 42.79, 0 29.33, 0 18.75 M0 18.75 C0 6.25, 6.25 0, 18.75 0 M0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="#166534" stroke-width="2" fill="none"></path></g><g transform="translate(740 710) rotate(0 105 29.5)"><text x="105" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">atomic.Pointer swap</text><text x="105" y="34.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">已验证 Deployment</text></g><g stroke-linecap="round" transform="translate(1040 702) rotate(0 95 37.5)"><path d="M18.75 0 C77.13 0, 135.51 0, 171.25 0 C183.75 0, 190 6.25, 190 18.75 C190 33.43, 190 48.1, 190 56.25 C190 68.75, 183.75 75, 171.25 75 C125.86 75, 80.47 75, 18.75 75 C6.25 75, 0 68.75, 0 56.25 C0 44.07, 0 31.88, 0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="none" stroke-width="0" fill="#dbeafe"></path><path d="M18.75 0 C57.06 0, 95.37 0, 171.25 0 M18.75 0 C49.76 0, 80.77 0, 171.25 0 M171.25 0 C183.75 0, 190 6.25, 190 18.75 M171.25 0 C183.75 0, 190 6.25, 190 18.75 M190 18.75 C190 28.27, 190 37.8, 190 56.25 M190 18.75 C190 32.16, 190 45.58, 190 56.25 M190 56.25 C190 68.75, 183.75 75, 171.25 75 M190 56.25 C190 68.75, 183.75 75, 171.25 75 M171.25 75 C110.33 75, 49.42 75, 18.75 75 M171.25 75 C134.79 75, 98.32 75, 18.75 75 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M0 56.25 C0 41.6, 0 26.94, 0 18.75 M0 56.25 C0 44.56, 0 32.87, 0 18.75 M0 18.75 C0 6.25, 6.25 0, 18.75 0 M0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="#1e40af" stroke-width="2" fill="none"></path></g><g transform="translate(1050 710) rotate(0 85 29.5)"><text x="85" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">新请求读新快照</text></g><g stroke-linecap="round" transform="translate(1255 702) rotate(0 100 37.5)"><path d="M18.75 0 C54.95 0, 91.16 0, 181.25 0 C193.75 0, 200 6.25, 200 18.75 C200 27.83, 200 36.91, 200 56.25 C200 68.75, 193.75 75, 181.25 75 C121.37 75, 61.49 75, 18.75 75 C6.25 75, 0 68.75, 0 56.25 C0 48.32, 0 40.4, 0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="none" stroke-width="0" fill="#f1f5f9"></path><path d="M18.75 0 C59.57 0, 100.4 0, 181.25 0 M18.75 0 C75.19 0, 131.63 0, 181.25 0 M181.25 0 C193.75 0, 200 6.25, 200 18.75 M181.25 0 C193.75 0, 200 6.25, 200 18.75 M200 18.75 C200 29.59, 200 40.42, 200 56.25 M200 18.75 C200 31.38, 200 44.01, 200 56.25 M200 56.25 C200 68.75, 193.75 75, 181.25 75 M200 56.25 C200 68.75, 193.75 75, 181.25 75 M181.25 75 C143.75 75, 106.24 75, 18.75 75 M181.25 75 C137.25 75, 93.26 75, 18.75 75 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M18.75 75 C6.25 75, 0 68.75, 0 56.25 M0 56.25 C0 42.58, 0 28.92, 0 18.75 M0 56.25 C0 46.33, 0 36.41, 0 18.75 M0 18.75 C0 6.25, 6.25 0, 18.75 0 M0 18.75 C0 6.25, 6.25 0, 18.75 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(1265 710) rotate(0 90 29.5)"><text x="90" y="14.3203125" font-family="Helvetica, Segoe UI Emoji" font-size="16px" fill="#334155" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">在途请求持有旧快照</text></g><g stroke-linecap="round"><g transform="translate(845 657) rotate(0 0 22.5)"><path d="M0 0 C0 11.31, 0 22.61, 0 45 M0 0 C0 13.11, 0 26.22, 0 45" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(845 657) rotate(0 0 22.5)"><path d="M-7.7 23.86 C-5.76 29.17, -3.83 34.48, 0 45 M-7.7 23.86 C-5.45 30.02, -3.21 36.18, 0 45" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(845 657) rotate(0 0 22.5)"><path d="M7.7 23.86 C5.76 29.17, 3.83 34.48, 0 45 M7.7 23.86 C5.45 30.02, 3.21 36.18, 0 45" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(960 739.5) rotate(0 40 0)"><path d="M0 0 C20.1 0, 40.2 0, 80 0 M0 0 C29.06 0, 58.13 0, 80 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(960 739.5) rotate(0 40 0)"><path d="M56.51 8.55 C62.41 6.4, 68.31 4.25, 80 0 M56.51 8.55 C65.04 5.44, 73.58 2.34, 80 0" stroke="#475569" stroke-width="2" fill="none"></path></g><g transform="translate(960 739.5) rotate(0 40 0)"><path d="M56.51 -8.55 C62.41 -6.4, 68.31 -4.25, 80 0 M56.51 -8.55 C65.04 -5.44, 73.58 -2.34, 80 0" stroke="#475569" stroke-width="2" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(1135 702) rotate(0 110 -80)"><path d="M0 0 C0 -3.77, 0 -7.54, 0 -15 M0 -15 C0 -25, 5 -30, 15 -30 M15 -30 C81.8 -30, 148.6 -30, 204 -30 M204 -30 C214.67 -30, 220 -35.33, 220 -46 M220 -46 C220 -86.92, 220 -127.85, 220 -160" stroke="#475569" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(1135 702) rotate(0 110 -80)"><path d="M228.55 -136.51 C226.4 -142.41, 224.25 -148.31, 220 -160" stroke="#475569" stroke-width="2.5" fill="none"></path></g><g transform="translate(1135 702) rotate(0 110 -80)"><path d="M211.45 -136.51 C213.6 -142.41, 215.75 -148.31, 220 -160" stroke="#475569" stroke-width="2.5" fill="none"></path></g></g><mask></mask><g stroke-linecap="round"><g transform="translate(845 777) rotate(0 255 15)"><path d="M0 0 C0 3.77, 0 7.54, 0 15 M0 15 C0 25, 5 30, 15 30 M15 30 C194.9 30, 374.8 30, 495 30 M495 30 C505 30, 510 25, 510 15 M510 15 C510 9.35, 510 3.71, 510 0" stroke="#475569" stroke-width="2.5" fill="none" stroke-dasharray="8 10"></path></g><g transform="translate(845 777) rotate(0 255 15)"><path d="M515.13 14.1 C513.84 10.55, 512.55 7.01, 510 0" stroke="#475569" stroke-width="2.5" fill="none"></path></g><g transform="translate(845 777) rotate(0 255 15)"><path d="M504.87 14.1 C506.16 10.55, 507.45 7.01, 510 0" stroke="#475569" stroke-width="2.5" fill="none"></path></g></g><mask></mask><g transform="translate(1050 782) rotate(0 50 11)"><text x="50" y="12.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#64748b" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">旧引用自然完成</text></g><g stroke-linecap="round"><g transform="translate(1135 657) rotate(0 -482.5 -62.5)"><path d="M0 0 C0 3.14, 0 6.28, 0 12.5 M0 12.5 C0 20.83, -4.17 25, -12.5 25 M-12.5 25 C-216.19 25, -419.87 25, -949 25 M-949 25 C-959.67 25, -965 19.67, -965 9 M-965 9 C-965 -21.24, -965 -51.49, -965 -134 M-965 -134 C-965 -144.67, -959.67 -150, -949 -150 M-949 -150 C-920.36 -150, -891.71 -150, -851 -150 M-851 -150 C-840.33 -150, -835 -144.67, -835 -134 M-835 -134 C-835 -127.53, -835 -121.06, -835 -115" stroke="#991b1b" stroke-width="2.5" fill="none" stroke-dasharray="1.5 8"></path></g><g transform="translate(1135 657) rotate(0 -482.5 -62.5)"><path d="M-840.99 -131.44 C-839.48 -127.31, -837.98 -123.18, -835 -115" stroke="#991b1b" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g><g transform="translate(1135 657) rotate(0 -482.5 -62.5)"><path d="M-829.01 -131.44 C-830.52 -127.31, -832.02 -123.18, -835 -115" stroke="#991b1b" stroke-width="2.5" fill="none" stroke-dasharray="1.5 6"></path></g></g><mask></mask><g transform="translate(290 657) rotate(0 50 11)"><text x="50" y="12.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#64748b" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">回滚复用同一流程</text></g><g transform="translate(1030 797) rotate(0 210 12.5)"><text x="420" y="12.5302734375" font-family="Helvetica, Segoe UI Emoji" font-size="14px" fill="#64748b" text-anchor="end" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">其他实例轮询 revision 后各自验证并 swap</text></g></svg>
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="my-svg" width="100%" class="flowchart" style="max-width: 3729.88px; background-color: rgb(244, 249, 252);" viewBox="0 0 3729.875 477" role="graphics-document document" aria-roledescription="flowchart-v2" aria-describedby="chart-desc-my-svg" aria-labelledby="chart-title-my-svg" data-source-sha256="947bf84a78b0bd24cc79a61b34e7bd6848fd3a2803e0d313291463c096df58a7">
+  <title id="chart-title-my-svg">Profile &#x5185;&#x7B56;&#x7565;&#x53D1;&#x5E03;&#x751F;&#x547D;&#x5468;&#x671F;</title>
+  <desc id="chart-desc-my-svg">Profile-scoped Draft &#x901A;&#x8FC7; CAS&#x3001;&#x6821;&#x9A8C;&#x548C;&#x7F16;&#x8BD1;&#x5F62;&#x6210;&#x4E0D;&#x53EF;&#x53D8; PolicyVersion&#xFF0C;&#x7ECF; dry-run&#x3001;&#x65E0;&#x51FA;&#x7AD9; decision shadow &#x548C;&#x7CBE;&#x786E;&#x8BC4;&#x6D4B;&#x8BC1;&#x636E;&#x540E;&#x521B;&#x5EFA; canary&#xFF1B;&#x53EA;&#x6709;&#x4EBA;&#x5DE5;&#x63D0;&#x5347;&#xFF0C;&#x53D7;&#x6743;&#x53EF;&#x9760;&#x6027;&#x95E8;&#x7981;&#x53EF;&#x56DE;&#x6EDA;&#x5230;&#x7CBE;&#x786E; LKG&#x3002;</desc>
+  <style>#my-svg{font-size:16px;fill:#172229;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:hsl(20, 60%, 100%);}#my-svg .error-text{fill:#000000;stroke:#000000;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:#5d7990;stroke:#5d7990;}#my-svg .marker.cross{stroke:#5d7990;}#my-svg svg{font-size:16px;}#my-svg p{margin:0;}#my-svg .label{color:#172229;}#my-svg .cluster-label text{fill:#000000;}#my-svg .cluster-label span{color:#000000;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#172229;color:#172229;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#f7fbfd;stroke:#7ea1b4;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:#5d7990!important;stroke-width:0;stroke:#5d7990;}#my-svg .arrowheadPath{fill:#0b0603;}#my-svg .edgePath .path{stroke:#5d7990;stroke-width:1px;}#my-svg .flowchart-link{stroke:#5d7990;fill:none;}#my-svg .edgeLabel{background-color:hsl(80, 60%, 98.0392156863%);text-align:center;}#my-svg .edgeLabel p{background-color:hsl(80, 60%, 98.0392156863%);}#my-svg .edgeLabel rect{opacity:0.5;background-color:hsl(80, 60%, 98.0392156863%);fill:hsl(80, 60%, 98.0392156863%);}#my-svg .labelBkg{background-color:rgba(251.0000000001, 253, 247.0000000001, 0.5);}#my-svg .cluster rect{fill:#edf6fb;stroke:#7fafcf;stroke-width:1px;}#my-svg .cluster text{fill:#000000;}#my-svg .cluster span{color:#000000;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-size:12px;background:hsl(20, 60%, 100%);border:1px solid hsl(20, 20%, 90%);border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#172229;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:hsl(80, 60%, 98.0392156863%);text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:hsl(80, 60%, 98.0392156863%);padding:2px;}#my-svg .icon-shape .label rect,#my-svg .image-shape .label rect{opacity:0.5;background-color:hsl(80, 60%, 98.0392156863%);fill:hsl(80, 60%, 98.0392156863%);}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg .node .neo-node{stroke:#7ea1b4;}#my-svg [data-look="neo"].node rect,#my-svg [data-look="neo"].cluster rect,#my-svg [data-look="neo"].node polygon{stroke:url(#my-svg-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#my-svg [data-look="neo"].swimlane.cluster rect{filter:none;}#my-svg [data-look="neo"].node path{stroke:url(#my-svg-gradient);stroke-width:1px;}#my-svg [data-look="neo"].node .outer-path{filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#my-svg [data-look="neo"].node .neo-line path{stroke:#7ea1b4;filter:none;}#my-svg [data-look="neo"].node circle{stroke:url(#my-svg-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#my-svg [data-look="neo"].node circle .state-start{fill:#000000;}#my-svg [data-look="neo"].icon-shape .icon{fill:url(#my-svg-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#my-svg [data-look="neo"].icon-shape .icon-neo path{stroke:url(#my-svg-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}#my-svg .scope&gt;*{fill:rgb(0, 103, 197)!important;color:rgb(255, 255, 255)!important;stroke:rgb(7, 93, 175)!important;stroke-width:2px!important;}#my-svg .scope span{fill:rgb(0, 103, 197)!important;color:rgb(255, 255, 255)!important;stroke:rgb(7, 93, 175)!important;stroke-width:2px!important;}#my-svg .scope tspan{fill:rgb(255, 255, 255)!important;}#my-svg .primary&gt;*{fill:rgb(247, 251, 253)!important;color:rgb(23, 34, 41)!important;stroke:rgb(82, 111, 126)!important;stroke-width:1.5px!important;}#my-svg .primary span{fill:rgb(247, 251, 253)!important;color:rgb(23, 34, 41)!important;stroke:rgb(82, 111, 126)!important;stroke-width:1.5px!important;}#my-svg .primary tspan{fill:rgb(23, 34, 41)!important;}#my-svg .evidence&gt;*{fill:rgb(238, 240, 255)!important;color:rgb(23, 34, 41)!important;stroke:rgb(98, 94, 181)!important;stroke-width:1.5px!important;}#my-svg .evidence span{fill:rgb(238, 240, 255)!important;color:rgb(23, 34, 41)!important;stroke:rgb(98, 94, 181)!important;stroke-width:1.5px!important;}#my-svg .evidence tspan{fill:rgb(23, 34, 41)!important;}#my-svg .decision&gt;*{fill:rgb(255, 244, 231)!important;color:rgb(23, 34, 41)!important;stroke:rgb(150, 91, 21)!important;stroke-width:1.5px!important;}#my-svg .decision span{fill:rgb(255, 244, 231)!important;color:rgb(23, 34, 41)!important;stroke:rgb(150, 91, 21)!important;stroke-width:1.5px!important;}#my-svg .decision tspan{fill:rgb(23, 34, 41)!important;}#my-svg .active&gt;*{fill:rgb(234, 246, 238)!important;color:rgb(23, 34, 41)!important;stroke:rgb(52, 121, 75)!important;stroke-width:2px!important;}#my-svg .active span{fill:rgb(234, 246, 238)!important;color:rgb(23, 34, 41)!important;stroke:rgb(52, 121, 75)!important;stroke-width:2px!important;}#my-svg .active tspan{fill:rgb(23, 34, 41)!important;}#my-svg .rollback&gt;*{fill:rgb(255, 240, 241)!important;color:rgb(23, 34, 41)!important;stroke:rgb(163, 71, 82)!important;stroke-width:1.5px!important;}#my-svg .rollback span{fill:rgb(255, 240, 241)!important;color:rgb(23, 34, 41)!important;stroke:rgb(163, 71, 82)!important;stroke-width:1.5px!important;}#my-svg .rollback tspan{fill:rgb(23, 34, 41)!important;}</style>
+  <g>
+    <marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-pointEnd-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="11.5" refY="7" markerUnits="userSpaceOnUse" markerWidth="10.5" markerHeight="14" orient="auto">
+      <path d="M 0 0 L 11.5 7 L 0 14 z" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-pointStart-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="1" refY="7" markerUnits="userSpaceOnUse" markerWidth="11.5" markerHeight="14" orient="auto">
+      <polygon points="0,7 11.5,14 11.5,0" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto">
+      <circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto">
+      <circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-circleEnd-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refY="5" refX="12.25" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto">
+      <circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-circleStart-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-2" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto">
+      <circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto">
+      <path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto">
+      <path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-crossEnd-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="17.7" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto">
+      <path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5;"/>
+    </marker>
+    <marker id="my-svg_flowchart-v2-crossStart-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="-3.5" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto">
+      <path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5; stroke-dasharray: 1, 0;"/>
+    </marker>
+    <g class="root">
+      <g class="clusters"/>
+      <g class="edgePaths"/>
+      <g class="edgeLabels"/>
+      <g class="nodes">
+        <g class="root" transform="translate(0, 0)">
+          <g class="clusters">
+            <g class="cluster" id="my-svg-PROFILE" data-look="classic">
+              <rect style="fill:#edf6fb !important;stroke:#4a758f !important;stroke-width:2px !important" x="8" y="8" width="3713.875" height="461"/>
+              <g class="cluster-label" transform="translate(1776.0390625, 8)">
+                <foreignObject width="177.796875" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5;">
+                    <span class="nodeLabel" style="color:#172229 !important">
+                      <p>&#x5F53;&#x524D; Profile&#xFF08;&#x4E00;&#x81F4;&#x6027;&#x57DF;&#xFF09;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+          </g>
+          <g class="edgePaths">
+            <path d="M221.578,271L227.828,271C234.078,271,246.578,271,258.411,271C270.245,271,281.411,271,286.995,271L292.578,271" id="my-svg-L_SCOPE_DRAFT_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_SCOPE_DRAFT_0" data-points="W3sieCI6MjIxLjU3ODEyNSwieSI6MjcxfSx7IngiOjI1OS4wNzgxMjUsInkiOjI3MX0seyJ4IjoyOTYuNTc4MTI1LCJ5IjoyNzF9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M449.063,271L455.313,271C461.563,271,474.063,271,485.896,271C497.729,271,508.896,271,514.479,271L520.063,271" id="my-svg-L_DRAFT_COMPILE_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_DRAFT_COMPILE_0" data-points="W3sieCI6NDQ5LjA2MjUsInkiOjI3MX0seyJ4Ijo0ODYuNTYyNSwieSI6MjcxfSx7IngiOjUyNC4wNjI1LCJ5IjoyNzF9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M707.688,271L713.938,271C720.188,271,732.688,271,744.521,271C756.354,271,767.521,271,773.104,271L778.688,271" id="my-svg-L_COMPILE_VALID_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_COMPILE_VALID_0" data-points="W3sieCI6NzA3LjY4NzUsInkiOjI3MX0seyJ4Ijo3NDUuMTg3NSwieSI6MjcxfSx7IngiOjc4Mi42ODc1LCJ5IjoyNzF9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M893.896,248.208L905.278,242.34C916.66,236.472,939.424,224.736,957.722,218.868C976.021,213,989.854,213,996.771,213L1003.688,213" id="my-svg-L_VALID_VERSION_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_VALID_VERSION_0" data-points="W3sieCI6ODkzLjg5NTcxMTE0MzY5NSwieSI6MjQ4LjIwODIxMTE0MzY5NTAyfSx7IngiOjk2Mi4xODc1LCJ5IjoyMTN9LHsieCI6MTAwNy42ODc1LCJ5IjoyMTN9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M1216.188,213L1222.438,213C1228.688,213,1241.188,213,1253.021,213C1264.854,213,1276.021,213,1281.604,213L1287.188,213" id="my-svg-L_VERSION_DRYRUN_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_VERSION_DRYRUN_0" data-points="W3sieCI6MTIxNi4xODc1LCJ5IjoyMTN9LHsieCI6MTI1My42ODc1LCJ5IjoyMTN9LHsieCI6MTI5MS4xODc1LCJ5IjoyMTN9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M1465.906,213L1472.156,213C1478.406,213,1490.906,213,1502.74,213C1514.573,213,1525.74,213,1531.323,213L1536.906,213" id="my-svg-L_DRYRUN_SHADOW_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_DRYRUN_SHADOW_0" data-points="W3sieCI6MTQ2NS45MDYyNSwieSI6MjEzfSx7IngiOjE1MDMuNDA2MjUsInkiOjIxM30seyJ4IjoxNTQwLjkwNjI1LCJ5IjoyMTN9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M1723.656,213L1729.906,213C1736.156,213,1748.656,213,1760.49,213C1772.323,213,1783.49,213,1789.073,213L1794.656,213" id="my-svg-L_SHADOW_EVAL_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_SHADOW_EVAL_0" data-points="W3sieCI6MTcyMy42NTYyNSwieSI6MjEzfSx7IngiOjE3NjEuMTU2MjUsInkiOjIxM30seyJ4IjoxNzk4LjY1NjI1LCJ5IjoyMTN9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M1981.406,213L1987.656,213C1993.906,213,2006.406,213,2018.24,213C2030.073,213,2041.24,213,2046.823,213L2052.406,213" id="my-svg-L_EVAL_CANARY_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_EVAL_CANARY_0" data-points="W3sieCI6MTk4MS40MDYyNSwieSI6MjEzfSx7IngiOjIwMTguOTA2MjUsInkiOjIxM30seyJ4IjoyMDU2LjQwNjI1LCJ5IjoyMTN9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M2246.514,186L2261.17,180.333C2275.827,174.667,2305.14,163.333,2325.38,157.667C2345.62,152,2356.786,152,2362.37,152L2367.953,152" id="my-svg-L_CANARY_PROMOTE_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_CANARY_PROMOTE_0" data-points="W3sieCI6MjI0Ni41MTM4MzE5NjcyMTMzLCJ5IjoxODZ9LHsieCI6MjMzNC40NTMxMjUsInkiOjE1Mn0seyJ4IjoyMzcxLjk1MzEyNSwieSI6MTUyfV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M2495.953,152L2502.203,152C2508.453,152,2520.953,152,2532.786,152C2544.62,152,2555.786,152,2561.37,152L2566.953,152" id="my-svg-L_PROMOTE_ACTIVE_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PROMOTE_ACTIVE_0" data-points="W3sieCI6MjQ5NS45NTMxMjUsInkiOjE1Mn0seyJ4IjoyNTMzLjQ1MzEyNSwieSI6MTUyfSx7IngiOjI1NzAuOTUzMTI1LCJ5IjoxNTJ9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M2762.578,152L2774.161,152C2785.745,152,2808.911,152,2831.411,152C2853.911,152,2875.745,152,2886.661,152L2897.578,152" id="my-svg-L_ACTIVE_GATE_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_ACTIVE_GATE_0" data-points="W3sieCI6Mjc2Mi41NzgxMjUsInkiOjE1Mn0seyJ4IjoyODMyLjA3ODEyNSwieSI6MTUyfSx7IngiOjI5MDEuNTc4MTI1LCJ5IjoxNTJ9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M882.674,305.013L895.927,318.678C909.179,332.342,935.683,359.671,959.855,373.336C984.026,387,1005.865,387,1016.784,387L1027.703,387" id="my-svg-L_VALID_PRESERVE_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_VALID_PRESERVE_0" data-points="W3sieCI6ODgyLjY3NDM3MDg5NzE1NTMsInkiOjMwNS4wMTMxMjkxMDI4NDQ2M30seyJ4Ijo5NjIuMTg3NSwieSI6Mzg3fSx7IngiOjEwMzEuNzAzMTI1LCJ5IjozODd9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M3051.058,127.48L3062.728,122.9C3074.398,118.32,3097.738,109.16,3123.883,104.58C3150.029,100,3178.979,100,3193.454,100L3207.93,100" id="my-svg-L_GATE_KEEP_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_GATE_KEEP_0" data-points="W3sieCI6MzA1MS4wNTc3OTk3OTY3NDgsInkiOjEyNy40Nzk2NzQ3OTY3NDc5N30seyJ4IjozMTIxLjA3ODEyNSwieSI6MTAwfSx7IngiOjMyMTEuOTI5Njg3NSwieSI6MTAwfV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M3051.058,176.52L3062.728,181.1C3074.398,185.68,3097.738,194.84,3116.325,199.42C3134.911,204,3148.745,204,3155.661,204L3162.578,204" id="my-svg-L_GATE_ROLLBACK_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_GATE_ROLLBACK_0" data-points="W3sieCI6MzA1MS4wNTc3OTk3OTY3NDgsInkiOjE3Ni41MjAzMjUyMDMyNTIwNH0seyJ4IjozMTIxLjA3ODEyNSwieSI6MjA0fSx7IngiOjMxNjYuNTc4MTI1LCJ5IjoyMDR9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M3395.531,204L3401.781,204C3408.031,204,3420.531,204,3439.583,209.407C3458.635,214.815,3484.24,225.629,3497.042,231.036L3509.844,236.444" id="my-svg-L_ROLLBACK_LKG_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_ROLLBACK_LKG_0" data-points="W3sieCI6MzM5NS41MzEyNSwieSI6MjA0fSx7IngiOjM0MzMuMDMxMjUsInkiOjIwNH0seyJ4IjozNTEzLjUyODY4ODUyNDU5LCJ5IjoyMzh9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M3304.238,231L3325.703,256C3347.169,281,3390.1,331,3419.817,356C3449.534,381,3466.036,381,3474.288,381L3482.539,381" id="my-svg-L_ROLLBACK_ROLLED_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_ROLLBACK_ROLLED_0" data-points="W3sieCI6MzMwNC4yMzc1NTI5NjYxMDE3LCJ5IjoyMzF9LHsieCI6MzQzMy4wMzEyNSwieSI6MzgxfSx7IngiOjM0ODYuNTM5MDYyNSwieSI6MzgxfV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+            <path d="M3496.216,292L3485.685,295.5C3475.154,299,3454.093,306,3418.233,309.5C3382.372,313,3331.714,313,3279.721,313C3227.729,313,3174.404,313,3125.658,313C3076.911,313,3032.745,313,2984.578,313C2936.411,313,2884.245,313,2830.609,313C2776.974,313,2721.87,313,2672.099,313C2622.328,313,2577.891,313,2539.089,313C2500.286,313,2467.12,313,2433.953,313C2400.786,313,2367.62,313,2332.404,301.19C2297.188,289.38,2259.922,265.761,2241.29,253.951L2222.657,242.141" id="my-svg-L_LKG_CANARY_0" class="edge-thickness-normal edge-pattern-dotted edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_LKG_CANARY_0" data-points="W3sieCI6MzQ5Ni4yMTU4MjAzMTI1LCJ5IjoyOTJ9LHsieCI6MzQzMy4wMzEyNSwieSI6MzEzfSx7IngiOjMyODEuMDU0Njg3NSwieSI6MzEzfSx7IngiOjMxMjEuMDc4MTI1LCJ5IjozMTN9LHsieCI6Mjk4OC41NzgxMjUsInkiOjMxM30seyJ4IjoyODMyLjA3ODEyNSwieSI6MzEzfSx7IngiOjI2NjYuNzY1NjI1LCJ5IjozMTN9LHsieCI6MjUzMy40NTMxMjUsInkiOjMxM30seyJ4IjoyNDMzLjk1MzEyNSwieSI6MzEzfSx7IngiOjIzMzQuNDUzMTI1LCJ5IjozMTN9LHsieCI6MjIxOS4yNzg1MTU2MjUsInkiOjI0MH1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/>
+          </g>
+          <g class="edgeLabels">
+            <g class="edgeLabel">
+              <g class="label" data-id="L_SCOPE_DRAFT_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_DRAFT_COMPILE_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_COMPILE_VALID_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel" transform="translate(962.1875, 213)">
+              <g class="label" data-id="L_VALID_VERSION_0" transform="translate(-8, -12)">
+                <foreignObject width="16" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel">
+                      <p>&#x662F;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_VERSION_DRYRUN_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_DRYRUN_SHADOW_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_SHADOW_EVAL_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_EVAL_CANARY_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_CANARY_PROMOTE_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_PROMOTE_ACTIVE_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_ACTIVE_GATE_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel" transform="translate(962.1875, 387)">
+              <g class="label" data-id="L_VALID_PRESERVE_0" transform="translate(-8, -12)">
+                <foreignObject width="16" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel">
+                      <p>&#x5426;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel" transform="translate(3121.078125, 100)">
+              <g class="label" data-id="L_GATE_KEEP_0" transform="translate(-8, -12)">
+                <foreignObject width="16" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel">
+                      <p>&#x5426;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel" transform="translate(3121.078125, 204)">
+              <g class="label" data-id="L_GATE_ROLLBACK_0" transform="translate(-8, -12)">
+                <foreignObject width="16" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel">
+                      <p>&#x662F;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_ROLLBACK_LKG_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel">
+              <g class="label" data-id="L_ROLLBACK_ROLLED_0" transform="translate(0, 0)">
+                <foreignObject width="0" height="0">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel"/>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="edgeLabel" transform="translate(2832.078125, 313)">
+              <g class="label" data-id="L_LKG_CANARY_0" transform="translate(-32, -12)">
+                <foreignObject width="64" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span class="edgeLabel">
+                      <p>&#x7CBE;&#x786E;&#x7ED1;&#x5B9A;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+          </g>
+          <g class="nodes">
+            <g class="node default scope" id="my-svg-flowchart-SCOPE-0" data-look="classic" transform="translate(133.5390625, 271)">
+              <rect class="basic label-container" style="fill:#0067c5 !important;stroke:#075daf !important;stroke-width:2px !important" x="-88.0390625" y="-39" width="176.078125" height="78"/>
+              <g class="label" style="color:#ffffff !important" transform="translate(-58.0390625, -24)">
+                <rect/>
+                <foreignObject width="116.078125" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(255, 255, 255) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#ffffff !important" class="nodeLabel">
+                      <p>ProfileScope<br/>+ snapshot SHA</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default primary" id="my-svg-flowchart-DRAFT-1" data-look="classic" transform="translate(372.8203125, 271)">
+              <rect class="basic label-container" style="fill:#f7fbfd !important;stroke:#526f7e !important;stroke-width:1.5px !important" x="-76.2421875" y="-39" width="152.484375" height="78"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-46.2421875, -24)">
+                <rect/>
+                <foreignObject width="92.484375" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>PolicyDraft<br/>revision CAS</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default primary" id="my-svg-flowchart-COMPILE-2" data-look="classic" transform="translate(615.875, 271)">
+              <rect class="basic label-container" style="fill:#f7fbfd !important;stroke:#526f7e !important;stroke-width:1.5px !important" x="-91.8125" y="-27" width="183.625" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-61.8125, -12)">
+                <rect/>
+                <foreignObject width="123.625" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>validate / compile</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default decision" id="my-svg-flowchart-VALID-3" data-look="classic" transform="translate(849.6875, 271)">
+              <polygon points="67,0 134,-67 67,-134 0,-67" class="label-container" transform="translate(-66.5, 67)" style="fill:#fff4e7 !important;stroke:#965b15 !important;stroke-width:1.5px !important"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-40, -12)">
+                <rect/>
+                <foreignObject width="80" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x6821;&#x9A8C;&#x901A;&#x8FC7;&#xFF1F;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default primary" id="my-svg-flowchart-VERSION-4" data-look="classic" transform="translate(1111.9375, 213)">
+              <rect class="basic label-container" style="fill:#f7fbfd !important;stroke:#526f7e !important;stroke-width:1.5px !important" x="-104.25" y="-39" width="208.5" height="78"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-74.25, -24)">
+                <rect/>
+                <foreignObject width="148.5" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x4E0D;&#x53EF;&#x53D8; PolicyVersion<br/>&#x7CBE;&#x786E; snapshot &#x5F15;&#x7528;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default primary" id="my-svg-flowchart-DRYRUN-5" data-look="classic" transform="translate(1378.546875, 213)">
+              <rect class="basic label-container" style="fill:#f7fbfd !important;stroke:#526f7e !important;stroke-width:1.5px !important" x="-87.359375" y="-39" width="174.71875" height="78"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-57.359375, -24)">
+                <rect/>
+                <foreignObject width="114.71875" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>dry-run / explain<br/>&#x4E0D;&#x53D1;&#x9001;&#x751F;&#x4EA7;&#x6D41;&#x91CF;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default primary" id="my-svg-flowchart-SHADOW-6" data-look="classic" transform="translate(1632.28125, 213)">
+              <rect class="basic label-container" style="fill:#f7fbfd !important;stroke:#526f7e !important;stroke-width:1.5px !important" x="-91.375" y="-39" width="182.75" height="78"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-61.375, -24)">
+                <rect/>
+                <foreignObject width="122.75" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>decision_shadow<br/>&#x672C;&#x5730;&#x4E14;&#x65E0;&#x51FA;&#x7AD9;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default evidence" id="my-svg-flowchart-EVAL-7" data-look="classic" transform="translate(1890.03125, 213)">
+              <rect class="basic label-container" style="fill:#eef0ff !important;stroke:#625eb5 !important;stroke-width:1.5px !important" x="-91.375" y="-39" width="182.75" height="78"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-61.375, -24)">
+                <rect/>
+                <foreignObject width="122.75" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>EvaluationReport<br/>&#x7ED1;&#x5B9A;&#x7CBE;&#x786E; SHA</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default primary" id="my-svg-flowchart-CANARY-8" data-look="classic" transform="translate(2176.6796875, 213)">
+              <rect class="basic label-container" style="fill:#f7fbfd !important;stroke:#526f7e !important;stroke-width:1.5px !important" x="-120.2734375" y="-27" width="240.546875" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-90.2734375, -12)">
+                <rect/>
+                <foreignObject width="180.546875" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>canary RouteDeployment</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default primary" id="my-svg-flowchart-PROMOTE-9" data-look="classic" transform="translate(2433.953125, 152)">
+              <rect class="basic label-container" style="fill:#f7fbfd !important;stroke:#526f7e !important;stroke-width:1.5px !important" x="-62" y="-27" width="124" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-32, -12)">
+                <rect/>
+                <foreignObject width="64" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x4EBA;&#x5DE5;&#x63D0;&#x5347;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default active" id="my-svg-flowchart-ACTIVE-10" data-look="classic" transform="translate(2666.765625, 152)">
+              <rect class="basic label-container" style="fill:#eaf6ee !important;stroke:#34794b !important;stroke-width:2px !important" x="-95.8125" y="-27" width="191.625" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-65.8125, -12)">
+                <rect/>
+                <foreignObject width="131.625" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>active Deployment</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default decision" id="my-svg-flowchart-GATE-11" data-look="classic" transform="translate(2988.578125, 152)">
+              <polygon points="87,0 174,-87 87,-174 0,-87" class="label-container" transform="translate(-86.5, 87)" style="fill:#fff4e7 !important;stroke:#965b15 !important;stroke-width:1.5px !important"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-48, -24)">
+                <rect/>
+                <foreignObject width="96" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x53D7;&#x6743;&#x53EF;&#x9760;&#x6027;<br/>&#x786C;&#x95E8;&#x7981;&#x5931;&#x8D25;&#xFF1F;</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default evidence" id="my-svg-flowchart-PRESERVE-16" data-look="classic" transform="translate(1111.9375, 387)">
+              <rect class="basic label-container" style="fill:#eef0ff !important;stroke:#625eb5 !important;stroke-width:1.5px !important" x="-80.234375" y="-27" width="160.46875" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-50.234375, -12)">
+                <rect/>
+                <foreignObject width="100.46875" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x4FDD;&#x7559;&#x5F53;&#x524D; LKG</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default active" id="my-svg-flowchart-KEEP-12" data-look="classic" transform="translate(3281.0546875, 100)">
+              <rect class="basic label-container" style="fill:#eaf6ee !important;stroke:#34794b !important;stroke-width:2px !important" x="-69.125" y="-27" width="138.25" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-39.125, -12)">
+                <rect/>
+                <foreignObject width="78.25" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x4FDD;&#x6301; active</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default rollback" id="my-svg-flowchart-ROLLBACK-13" data-look="classic" transform="translate(3281.0546875, 204)">
+              <rect class="basic label-container" style="fill:#fff0f1 !important;stroke:#a34752 !important;stroke-width:1.5px !important" x="-114.4765625" y="-27" width="228.953125" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-84.4765625, -12)">
+                <rect/>
+                <foreignObject width="168.953125" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>CAS &#x56DE;&#x6EDA; active pointer</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default evidence" id="my-svg-flowchart-LKG-14" data-look="classic" transform="translate(3577.453125, 265)">
+              <rect class="basic label-container" style="fill:#eef0ff !important;stroke:#625eb5 !important;stroke-width:1.5px !important" x="-106.921875" y="-27" width="213.84375" height="54"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-76.921875, -12)">
+                <rect/>
+                <foreignObject width="153.84375" height="24">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x7CBE;&#x786E; last-known-good</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+            <g class="node default rollback" id="my-svg-flowchart-ROLLED-15" data-look="classic" transform="translate(3577.453125, 381)">
+              <rect class="basic label-container" style="fill:#fff0f1 !important;stroke:#a34752 !important;stroke-width:1.5px !important" x="-90.9140625" y="-39" width="181.828125" height="78"/>
+              <g class="label" style="color:#172229 !important" transform="translate(-60.9140625, -24)">
+                <rect/>
+                <foreignObject width="121.828125" height="48">
+                  <div xmlns="http://www.w3.org/1999/xhtml" style="color: rgb(23, 34, 41) !important; display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;">
+                    <span style="color:#172229 !important" class="nodeLabel">
+                      <p>&#x5931;&#x8D25; Deployment<br/>rolled_back</p>
+                    </span>
+                  </div>
+                </foreignObject>
+              </g>
+            </g>
+          </g>
+        </g>
+      </g>
+    </g>
+  </g>
+  <defs>
+    <filter id="my-svg-drop-shadow" height="130%" width="130%">
+      <feDropShadow dx="4" dy="4" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"/>
+    </filter>
+  </defs>
+  <defs>
+    <filter id="my-svg-drop-shadow-small" height="150%" width="150%">
+      <feDropShadow dx="2" dy="2" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"/>
+    </filter>
+  </defs>
+  <linearGradient id="my-svg-gradient" gradientUnits="objectBoundingBox" x1="0%" y1="0%" x2="100%" y2="0%">
+    <stop offset="0%" stop-color="#7ea1b4" stop-opacity="1"/>
+    <stop offset="100%" stop-color="hsl(80, 20%, 88.0392156863%)" stop-opacity="1"/>
+  </linearGradient>
+</svg>

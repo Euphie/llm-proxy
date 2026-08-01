@@ -1,0 +1,57 @@
+name: Documentation site
+
+on:
+  push:
+    paths:
+      - "docs-site/**"
+      - "docs/superpowers/specs/2026-08-01-intelligent-routing-design.md"
+      - "Makefile"
+      - ".dockerignore"
+      - "README.md"
+      - ".github/workflows/docs-site.yml"
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - "docs/superpowers/specs/2026-08-01-intelligent-routing-design.md"
+      - "Makefile"
+      - ".dockerignore"
+      - "README.md"
+      - ".github/workflows/docs-site.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-site-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - run: npm ci
+      - run: npm run verify
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.0-noble
+      options: --ipc=host
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm run test:e2e

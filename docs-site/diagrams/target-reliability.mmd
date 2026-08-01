@@ -1,0 +1,57 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#f4f9fc"
+    fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"
+    primaryColor: "#f7fbfd"
+    primaryTextColor: "#172229"
+    primaryBorderColor: "#7ea1b4"
+    lineColor: "#5d7990"
+    clusterBkg: "#edf6fb"
+    clusterBorder: "#7fafcf"
+  flowchart:
+    curve: basis
+    htmlLabels: true
+---
+flowchart LR
+  accTitle: Target 资格、调度与可靠性
+  accDescr: 当前 Profile 中同一逻辑模型的 Target 先经硬约束和运行时资格过滤，再形成有序计划；预留或提交前失败只能在预算内前进到计划中的下一 Target。
+
+  subgraph PROFILE["当前 Profile · 同一逻辑模型"]
+    direction LR
+    TARGETS["Target candidates<br/>ModelCard ∩ Target"]
+    HARD["硬约束<br/>能力 · 隐私 · 地域 · 价格"]
+    STATE["ProfileRuntime 资格快照<br/>health · circuit · credential<br/>cooldown · capacity"]
+    ELIGIBLE["Eligible Targets"]
+    SCHEDULER["有界 Scheduler"]
+    PLAN["有序 PlannedAttempt[]"]
+    RESERVE["AdmissionController.reserve()"]
+    RESERVED{"预留成功？"}
+    DISPATCH["dispatch"]
+    RECOVERABLE{"ClientCommit 前<br/>可恢复失败？"}
+    ADVANCE["消费 deadline / switch 预算<br/>下一计划内 Target"]
+    OUTCOME["成功 · 入口协议失败<br/>或 ClientCommit 后终止"]
+
+    TARGETS --> HARD --> ELIGIBLE
+    STATE --> ELIGIBLE
+    ELIGIBLE --> SCHEDULER --> PLAN --> RESERVE --> RESERVED
+    RESERVED -->|"是"| DISPATCH --> RECOVERABLE
+    RESERVED -->|"否"| ADVANCE
+    RECOVERABLE -->|"是"| ADVANCE
+    RECOVERABLE -->|"否"| OUTCOME
+    ADVANCE -->|"预算仍允许"| RESERVE
+    ADVANCE -->|"预算耗尽"| OUTCOME
+  end
+
+  classDef primary fill:#f7fbfd,color:#172229,stroke:#526f7e,stroke-width:1.5px;
+  classDef filter fill:#e8f2ff,color:#172229,stroke:#3f75a3,stroke-width:1.5px;
+  classDef runtime fill:#e7f7f6,color:#172229,stroke:#2d7774,stroke-width:1.5px;
+  classDef decision fill:#fff4e7,color:#172229,stroke:#965b15,stroke-width:1.5px;
+  classDef terminal fill:#eef0ff,color:#172229,stroke:#625eb5,stroke-width:1.5px;
+  class TARGETS,PLAN primary;
+  class HARD,ELIGIBLE,SCHEDULER filter;
+  class STATE,RESERVE,DISPATCH runtime;
+  class RESERVED,RECOVERABLE,ADVANCE decision;
+  class OUTCOME terminal;
+  style PROFILE fill:#edf6fb,stroke:#4a758f,stroke-width:2px,color:#172229

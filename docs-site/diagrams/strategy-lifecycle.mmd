@@ -1,0 +1,62 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#f4f9fc"
+    fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"
+    primaryColor: "#f7fbfd"
+    primaryTextColor: "#172229"
+    primaryBorderColor: "#7ea1b4"
+    lineColor: "#5d7990"
+    clusterBkg: "#edf6fb"
+    clusterBorder: "#7fafcf"
+  flowchart:
+    curve: basis
+    htmlLabels: true
+---
+flowchart LR
+  accTitle: Profile 内策略发布生命周期
+  accDescr: Profile-scoped Draft 通过 CAS、校验和编译形成不可变 PolicyVersion，经 dry-run、无出站 decision shadow 和精确评测证据后创建 canary；只有人工提升，受权可靠性门禁可回滚到精确 LKG。
+
+  subgraph PROFILE["当前 Profile（一致性域）"]
+    direction LR
+    SCOPE["ProfileScope<br/>+ snapshot SHA"]
+    DRAFT["PolicyDraft<br/>revision CAS"]
+    COMPILE["validate / compile"]
+    VALID{"校验通过？"}
+    VERSION["不可变 PolicyVersion<br/>精确 snapshot 引用"]
+    DRYRUN["dry-run / explain<br/>不发送生产流量"]
+    SHADOW["decision_shadow<br/>本地且无出站"]
+    EVAL["EvaluationReport<br/>绑定精确 SHA"]
+    CANARY["canary RouteDeployment"]
+    PROMOTE["人工提升"]
+    ACTIVE["active Deployment"]
+    GATE{"受权可靠性<br/>硬门禁失败？"}
+    KEEP["保持 active"]
+    ROLLBACK["CAS 回滚 active pointer"]
+    LKG["精确 last-known-good"]
+    ROLLED["失败 Deployment<br/>rolled_back"]
+    PRESERVE["保留当前 LKG"]
+
+    SCOPE --> DRAFT --> COMPILE --> VALID
+    VALID -->|"是"| VERSION --> DRYRUN --> SHADOW --> EVAL --> CANARY --> PROMOTE --> ACTIVE --> GATE
+    VALID -->|"否"| PRESERVE
+    GATE -->|"否"| KEEP
+    GATE -->|"是"| ROLLBACK --> LKG
+    ROLLBACK --> ROLLED
+    LKG -.->|"精确绑定"| CANARY
+  end
+
+  classDef scope fill:#0067c5,color:#ffffff,stroke:#075daf,stroke-width:2px;
+  classDef primary fill:#f7fbfd,color:#172229,stroke:#526f7e,stroke-width:1.5px;
+  classDef evidence fill:#eef0ff,color:#172229,stroke:#625eb5,stroke-width:1.5px;
+  classDef decision fill:#fff4e7,color:#172229,stroke:#965b15,stroke-width:1.5px;
+  classDef active fill:#eaf6ee,color:#172229,stroke:#34794b,stroke-width:2px;
+  classDef rollback fill:#fff0f1,color:#172229,stroke:#a34752,stroke-width:1.5px;
+  class SCOPE scope;
+  class DRAFT,COMPILE,VERSION,DRYRUN,SHADOW,CANARY,PROMOTE primary;
+  class EVAL,LKG,PRESERVE evidence;
+  class VALID,GATE decision;
+  class ACTIVE,KEEP active;
+  class ROLLBACK,ROLLED rollback;
+  style PROFILE fill:#edf6fb,stroke:#4a758f,stroke-width:2px,color:#172229

@@ -1,0 +1,56 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#f4f9fc"
+    fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"
+    primaryColor: "#f7fbfd"
+    primaryTextColor: "#172229"
+    primaryBorderColor: "#7ea1b4"
+    lineColor: "#5d7990"
+    clusterBkg: "#edf6fb"
+    clusterBorder: "#7fafcf"
+  flowchart:
+    curve: basis
+    htmlLabels: true
+---
+flowchart LR
+  accTitle: Profile 隔离与运行时边界
+  accDescr: URL 或默认配置只解析一次 Profile，形成 ProfileScope；入口适配、快照、路由对象、执行、响应和运行时状态始终留在当前 Profile 内。
+
+  URL["URL slug / default"] --> REG["Registry<br/>仅做入口映射"]
+
+  subgraph PROFILE["当前 Profile（唯一边界）"]
+    direction LR
+    SCOPE["ProfileScope<br/>profile_id + generation + envelope_sha"]
+    INGRESS["Profile-owned<br/>Ingress adapter"]
+    REQUEST["InferenceRequest<br/>可信身份"]
+    ROUTING["Route · Target<br/>不可变 ExecutionPlan"]
+    EXECUTOR["Executor"]
+    RESPONSE["Profile-owned<br/>Response adapter"]
+    SNAPSHOT["不可变 ProfileSnapshot"]
+    RUNTIME["ProfileRuntime<br/>协议 · credential · transport<br/>health · capacity · session"]
+    EVIDENCE["Trace · Evaluation evidence"]
+
+    SCOPE --> INGRESS --> REQUEST --> ROUTING --> EXECUTOR --> RESPONSE
+    SNAPSHOT -.->|"只读输入"| ROUTING
+    RUNTIME -->|"reserve / dispatch"| EXECUTOR
+    EXECUTOR --> EVIDENCE
+    SCOPE -.->|"同一 scope"| SNAPSHOT
+    SCOPE -.->|"同一 scope"| RUNTIME
+    SCOPE -.->|"同一 scope"| EVIDENCE
+  end
+
+  REG -->|"解析一次"| SCOPE
+
+  classDef scope fill:#0067c5,color:#ffffff,stroke:#075daf,stroke-width:2px;
+  classDef primary fill:#f7fbfd,color:#172229,stroke:#526f7e,stroke-width:1.5px;
+  classDef runtime fill:#e7f7f6,color:#172229,stroke:#2d7774,stroke-width:1.5px;
+  classDef evidence fill:#eef0ff,color:#172229,stroke:#625eb5,stroke-width:1.5px;
+  classDef entry fill:#fff4e7,color:#172229,stroke:#965b15,stroke-width:1.5px;
+  class SCOPE scope;
+  class INGRESS,REQUEST,ROUTING,EXECUTOR,RESPONSE,SNAPSHOT primary;
+  class RUNTIME runtime;
+  class EVIDENCE evidence;
+  class URL,REG entry;
+  style PROFILE fill:#edf6fb,stroke:#4a758f,stroke-width:2px,color:#172229
