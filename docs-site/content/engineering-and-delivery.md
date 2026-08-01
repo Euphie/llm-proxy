@@ -1,13 +1,14 @@
 # 实施范围与交付
 
 > [!TARGET]
-> Phase 1、Session 连续性、独立策略生命周期、异步对比学习和有序多 Target 容错已完成。
+> Phase 1、Session 连续性、独立策略生命周期、异步对比学习和带结构化信任边界的有序多 Target 容错已完成。
 
 ## v1 边界
 
 - 单进程、单副本部署，SQLite 保存 Profile、模型目录、策略和统计。
 - Profile 是永久边界，禁止跨 Profile 路由、回退、评测或部署。
-- Upstream 是 primary；备用 Target 只在当前 Profile 内按模型和静态顺序使用。
+- Upstream 是 primary；备用 Target 只有在供应商、凭据范围与 Profile 协议兼容后，才在当前 Profile
+  内按模型和静态顺序使用。
 - 项目不管理密钥；凭据只透传，异步任务最多在内存保留 10 分钟。
 - 不持久化原始 prompt、图片、完整响应或凭据。
 - 不做分布式协调、自动发布、强化学习或 Bandit。

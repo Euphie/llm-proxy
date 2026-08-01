@@ -570,9 +570,17 @@ func TestRecordResolveBuildsOrderedModelTargets(t *testing.T) {
 		{ID: "fast", SupportsVision: &supportsVision},
 		{ID: "strong", SupportsVision: &supportsVision},
 	}
+	record.Config.ProviderID = "acme-ai"
+	record.Config.CredentialScope = "team-a"
 	record.Config.Targets = []TargetConfig{
-		{ID: "region_b", Upstream: "https://region-b.example/v1/", Models: []string{"fast", "strong"}},
-		{ID: "strong_backup", Upstream: "https://strong.example/v1", Models: []string{"strong"}},
+		{
+			ID: "region_b", Upstream: "https://region-b.example/v1/",
+			ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"fast", "strong"},
+		},
+		{
+			ID: "strong_backup", Upstream: "https://strong.example/v1",
+			ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"strong"},
+		},
 	}
 
 	runtime, err := record.Resolve()
@@ -596,6 +604,67 @@ func TestRecordResolveBuildsOrderedModelTargets(t *testing.T) {
 	}
 }
 
+func TestRecordResolveEnforcesTargetTrustCompatibility(t *testing.T) {
+	const compatibleConfig = `{
+		"version":1,
+		"protocol":"anthropic",
+		"upstream":"https://primary.example/v1",
+		"provider_id":"acme-ai",
+		"credential_scope":"team-a",
+		"models":[{"id":"fast","supports_vision":true}],
+		"targets":[{
+			"id":"region_b",
+			"upstream":"https://region-b.example/v1",
+			"provider_id":"acme-ai",
+			"credential_scope":"team-a",
+			"models":["fast"]
+		}],
+		"vision":{
+			"enabled":false,
+			"model":"sonnet",
+			"max_tokens":2048,
+			"timeout":"2m",
+			"max_concurrency":4,
+			"cache_ttl":"30m",
+			"cache_max_entries":512
+		}
+	}`
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+	}{
+		{name: "missing primary provider", old: `"provider_id":"acme-ai",`, replacement: ""},
+		{name: "blank primary provider", old: `"provider_id":"acme-ai"`, replacement: `"provider_id":" "`},
+		{name: "malformed primary provider", old: `"provider_id":"acme-ai"`, replacement: `"provider_id":"Acme AI"`},
+		{name: "missing primary credential scope", old: `"credential_scope":"team-a",`, replacement: ""},
+		{name: "malformed primary credential scope", old: `"credential_scope":"team-a"`, replacement: `"credential_scope":"team a"`},
+		{name: "missing Target provider", old: "\n\t\t\t\"provider_id\":\"acme-ai\",", replacement: ""},
+		{name: "missing Target credential scope", old: "\n\t\t\t\"credential_scope\":\"team-a\",", replacement: ""},
+		{name: "foreign provider", old: "\n\t\t\t\"provider_id\":\"acme-ai\"", replacement: "\n\t\t\t\"provider_id\":\"foreign-ai\""},
+		{name: "foreign credential scope", old: "\n\t\t\t\"credential_scope\":\"team-a\"", replacement: "\n\t\t\t\"credential_scope\":\"team-b\""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var config Config
+			raw := strings.Replace(compatibleConfig, tt.old, tt.replacement, 1)
+			if raw == compatibleConfig {
+				t.Fatal("test fixture mutation did not apply")
+			}
+			if err := json.Unmarshal([]byte(raw), &config); err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := (Record{
+				Slug: "coding", DisplayName: "Coding", Enabled: true, Config: config,
+			}).Resolve()
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Resolve() runtime=%+v error=%v, want ErrInvalidConfig", runtime, err)
+			}
+		})
+	}
+}
+
 func TestRecordResolveRejectsInvalidTargets(t *testing.T) {
 	supportsVision := true
 	base := Record{
@@ -603,26 +672,34 @@ func TestRecordResolveRejectsInvalidTargets(t *testing.T) {
 		Config: NewConfig(ProtocolAnthropic, "https://primary.example/v1"),
 	}
 	base.Config.Models = []ModelCapabilityConfig{{ID: "fast", SupportsVision: &supportsVision}}
+	base.Config.ProviderID = "acme-ai"
+	base.Config.CredentialScope = "team-a"
+	target := func(id, upstream string, models []string) TargetConfig {
+		return TargetConfig{
+			ID: id, Upstream: upstream, ProviderID: "acme-ai",
+			CredentialScope: "team-a", Models: models,
+		}
+	}
 	tests := []struct {
 		name    string
 		targets []TargetConfig
 	}{
-		{name: "reserved ID", targets: []TargetConfig{{ID: PrimaryTargetID, Upstream: "https://b.example", Models: []string{"fast"}}}},
-		{name: "invalid ID", targets: []TargetConfig{{ID: "Region B", Upstream: "https://b.example", Models: []string{"fast"}}}},
+		{name: "reserved ID", targets: []TargetConfig{target(PrimaryTargetID, "https://b.example", []string{"fast"})}},
+		{name: "invalid ID", targets: []TargetConfig{target("Region B", "https://b.example", []string{"fast"})}},
 		{name: "duplicate ID", targets: []TargetConfig{
-			{ID: "b", Upstream: "https://b.example", Models: []string{"fast"}},
-			{ID: "b", Upstream: "https://c.example", Models: []string{"fast"}},
+			target("b", "https://b.example", []string{"fast"}),
+			target("b", "https://c.example", []string{"fast"}),
 		}},
-		{name: "primary URL", targets: []TargetConfig{{ID: "b", Upstream: "https://primary.example/v1/", Models: []string{"fast"}}}},
+		{name: "primary URL", targets: []TargetConfig{target("b", "https://primary.example/v1/", []string{"fast"})}},
 		{name: "duplicate URL", targets: []TargetConfig{
-			{ID: "b", Upstream: "https://b.example", Models: []string{"fast"}},
-			{ID: "c", Upstream: "https://b.example/", Models: []string{"fast"}},
+			target("b", "https://b.example", []string{"fast"}),
+			target("c", "https://b.example/", []string{"fast"}),
 		}},
-		{name: "unsafe URL", targets: []TargetConfig{{ID: "b", Upstream: "https://user:secret@b.example", Models: []string{"fast"}}}},
-		{name: "no models", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example"}}},
-		{name: "unknown model", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example", Models: []string{"other"}}}},
-		{name: "duplicate model", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example", Models: []string{"fast", "fast"}}}},
-		{name: "model whitespace", targets: []TargetConfig{{ID: "b", Upstream: "https://b.example", Models: []string{" fast"}}}},
+		{name: "unsafe URL", targets: []TargetConfig{target("b", "https://user:secret@b.example", []string{"fast"})}},
+		{name: "no models", targets: []TargetConfig{target("b", "https://b.example", nil)}},
+		{name: "unknown model", targets: []TargetConfig{target("b", "https://b.example", []string{"other"})}},
+		{name: "duplicate model", targets: []TargetConfig{target("b", "https://b.example", []string{"fast", "fast"})}},
+		{name: "model whitespace", targets: []TargetConfig{target("b", "https://b.example", []string{" fast"})}},
 	}
 
 	for _, tt := range tests {

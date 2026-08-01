@@ -117,6 +117,7 @@ type EvaluationPairSnapshot struct {
 type TargetPlan struct {
 	id       string
 	upstream string
+	protocol profile.Protocol
 }
 
 func NewPlanner(runtime profile.Runtime) (*Planner, error) {
@@ -570,7 +571,7 @@ func buildTargetPlans(runtime profile.Runtime) map[string][]TargetPlan {
 	for model := range runtime.Models {
 		for _, target := range runtime.RoutingTargets(model) {
 			targets[model] = append(targets[model], TargetPlan{
-				id: target.ID, upstream: target.Upstream,
+				id: target.ID, upstream: target.Upstream, protocol: runtime.Protocol,
 			})
 		}
 	}
@@ -643,8 +644,9 @@ func (p ModelAttemptPlan) Snapshot() ModelAttemptSnapshot {
 	}
 }
 
-func (p TargetPlan) ID() string       { return p.id }
-func (p TargetPlan) Upstream() string { return p.upstream }
+func (p TargetPlan) ID() string                 { return p.id }
+func (p TargetPlan) Upstream() string           { return p.upstream }
+func (p TargetPlan) Protocol() profile.Protocol { return p.protocol }
 
 func (p EvaluationPair) Snapshot() EvaluationPairSnapshot {
 	return EvaluationPairSnapshot{

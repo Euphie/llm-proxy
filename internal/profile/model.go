@@ -57,14 +57,16 @@ type RetryRule struct {
 }
 
 type Config struct {
-	Version       int                     `json:"version"`
-	Protocol      Protocol                `json:"protocol"`
-	Upstream      string                  `json:"upstream"`
-	Targets       []TargetConfig          `json:"targets,omitempty"`
-	Models        []ModelCapabilityConfig `json:"models,omitempty"`
-	AutoRouting   AutoRoutingConfig       `json:"auto_routing,omitempty"`
-	Vision        VisionConfig            `json:"vision"`
-	OverloadRules []RetryRule             `json:"overload_rules"`
+	Version         int                     `json:"version"`
+	Protocol        Protocol                `json:"protocol"`
+	Upstream        string                  `json:"upstream"`
+	ProviderID      string                  `json:"provider_id,omitempty"`
+	CredentialScope string                  `json:"credential_scope,omitempty"`
+	Targets         []TargetConfig          `json:"targets,omitempty"`
+	Models          []ModelCapabilityConfig `json:"models,omitempty"`
+	AutoRouting     AutoRoutingConfig       `json:"auto_routing,omitempty"`
+	Vision          VisionConfig            `json:"vision"`
+	OverloadRules   []RetryRule             `json:"overload_rules"`
 }
 
 type Record struct {
@@ -152,7 +154,13 @@ func (r Record) Resolve() (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
-	targets, err := resolveTargets(upstream, r.Config.Targets, models)
+	targets, err := resolveTargets(
+		upstream,
+		r.Config.ProviderID,
+		r.Config.CredentialScope,
+		r.Config.Targets,
+		models,
+	)
 	if err != nil {
 		return Runtime{}, err
 	}

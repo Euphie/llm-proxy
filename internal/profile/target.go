@@ -12,11 +12,14 @@ const (
 )
 
 var targetIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+var targetTrustIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]{0,127}$`)
 
 type TargetConfig struct {
-	ID       string   `json:"id"`
-	Upstream string   `json:"upstream"`
-	Models   []string `json:"models"`
+	ID              string   `json:"id"`
+	Upstream        string   `json:"upstream"`
+	ProviderID      string   `json:"provider_id"`
+	CredentialScope string   `json:"credential_scope"`
+	Models          []string `json:"models"`
 }
 
 type TargetRuntime struct {
@@ -59,11 +62,21 @@ func (r Runtime) RoutingTargets(model string) []TargetRuntime {
 
 func resolveTargets(
 	primaryUpstream string,
+	primaryProviderID string,
+	primaryCredentialScope string,
 	configured []TargetConfig,
 	models ModelCatalog,
 ) ([]TargetRuntime, error) {
 	if len(configured) > maxBackupTargets {
 		return nil, fmt.Errorf("%w: at most %d backup Targets are allowed", ErrInvalidConfig, maxBackupTargets)
+	}
+	if len(configured) > 0 {
+		if !targetTrustIDPattern.MatchString(primaryProviderID) {
+			return nil, fmt.Errorf("%w: primary provider_id must be a valid trust identifier", ErrInvalidConfig)
+		}
+		if !targetTrustIDPattern.MatchString(primaryCredentialScope) {
+			return nil, fmt.Errorf("%w: primary credential_scope must be a valid trust identifier", ErrInvalidConfig)
+		}
 	}
 	targets := []TargetRuntime{{ID: PrimaryTargetID, Upstream: primaryUpstream}}
 	seenIDs := map[string]struct{}{PrimaryTargetID: {}}
@@ -74,6 +87,18 @@ func resolveTargets(
 		}
 		if _, duplicate := seenIDs[target.ID]; duplicate {
 			return nil, fmt.Errorf("%w: duplicate Target ID %q", ErrInvalidConfig, target.ID)
+		}
+		if !targetTrustIDPattern.MatchString(target.ProviderID) {
+			return nil, fmt.Errorf("%w: Target %q provider_id must be a valid trust identifier", ErrInvalidConfig, target.ID)
+		}
+		if target.ProviderID != primaryProviderID {
+			return nil, fmt.Errorf("%w: Target %q provider_id does not match primary", ErrInvalidConfig, target.ID)
+		}
+		if !targetTrustIDPattern.MatchString(target.CredentialScope) {
+			return nil, fmt.Errorf("%w: Target %q credential_scope must be a valid trust identifier", ErrInvalidConfig, target.ID)
+		}
+		if target.CredentialScope != primaryCredentialScope {
+			return nil, fmt.Errorf("%w: Target %q credential_scope does not match primary", ErrInvalidConfig, target.ID)
 		}
 		upstream, err := resolveUpstream(target.Upstream)
 		if err != nil {

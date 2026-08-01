@@ -34,18 +34,32 @@ fragment。末尾斜杠会被规范化，Profile 路由后的请求 URI 追加�
 
 Upstream 同时是 ID 为 `primary` 的主 Target。可选的 `targets` 按配置顺序保存，每项包含：
 
+配置备用 Target 前，还要在 Profile 主配置中填写：
+
+| 字段 | 说明 |
+|---|---|
+| `provider_id` | 管理员确认的逻辑供应商 ID，不从 Upstream 主机名推断 |
+| `credential_scope` | 当前请求凭据可原样复用的逻辑范围，不是凭据值 |
+
 | 字段 | 说明 |
 |---|---|
 | `id` | 小写安全标识，不能使用保留值 `primary` |
 | `upstream` | 备用基础地址；不能与主地址或其他备用地址重复 |
+| `provider_id` | 必须与主 Target 的值精确一致 |
+| `credential_scope` | 必须与主 Target 的值精确一致 |
 | `models` | 该端点实际支持的精确模型 ID，必须已录入模型能力目录 |
 
 最多配置 16 个备用 Target。它们只用于 `model=auto`：执行计划为每个模型冻结 primary 与匹配的
 备用项，遇到可重试故障时先耗尽当前 Target 的重试，再在 `max_target_switches`、回答次数、总调用
 数、费用和 deadline 都允许时按顺序切换。显式模型始终只走 primary。
 
-备用端点必须属于同一供应商，并能原样使用当前请求的协议和凭据。代理无法仅凭 URL 证明供应商
-身份，不会转换鉴权；填入不同供应商会在运行时失败，也不属于受支持配置。
+两个信任标识必须匹配 `^[a-z0-9][a-z0-9._:/-]{0,127}$`。存在备用 Target 时，主 Target 或任一
+备用项缺失、格式错误或不精确匹配都会使 Profile 保存/发布失败；代理不会把不匹配值改写成兼容。
+Profile 的 `protocol` 由所有 Target 继承，备用项不能另选协议；代理也不转换请求或鉴权。
+这些字段只记录运维确认结果，不能包含密钥。没有备用 Target 时它们可省略，显式模型仍只走 primary。
+
+**破坏性配置变更：**已有备用 Target 的旧 Profile 必须先补齐主 Target 和全部备用项的两个信任
+标识才能再次保存或发布；不提供旧配置兼容层。没有备用 Target 的现有 Profile 不受影响。
 
 ## 启用、默认项与热更新
 

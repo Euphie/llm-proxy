@@ -98,6 +98,8 @@ export function defaultProfileDraft(protocol = "anthropic") {
       version: 1,
       protocol,
       upstream: "",
+      provider_id: "",
+      credential_scope: "",
       targets: [],
       models: [],
       auto_routing: newDefaultAutoRouting(),
@@ -116,6 +118,10 @@ export function profilePayload(draft) {
   const vision = draft.vision || config.vision || {};
   const models = draft.models || config.models || [];
   const targets = draft.targets || config.targets || [];
+  const providerID = String(draft.provider_id ?? config.provider_id ?? "");
+  const credentialScope = String(
+    draft.credential_scope ?? config.credential_scope ?? "",
+  );
   const autoRouting = draft.auto_routing || config.auto_routing ||
     newDefaultAutoRouting();
   const rules = draft.overload_rules || config.overload_rules || [];
@@ -135,7 +141,11 @@ export function profilePayload(draft) {
       version: Number(draft.version ?? config.version ?? 1),
       protocol,
       upstream: String(draft.upstream ?? config.upstream ?? ""),
-      ...(targets.length > 0 ? { targets: targetsPayload(targets) } : {}),
+      ...(providerID !== "" ? { provider_id: providerID } : {}),
+      ...(credentialScope !== "" ? { credential_scope: credentialScope } : {}),
+      ...(targets.length > 0 ? {
+        targets: targetsPayload(targets, providerID, credentialScope),
+      } : {}),
       models: modelCapabilitiesPayload(models),
       auto_routing: autoRoutingPayload(autoRouting),
       vision: {
@@ -182,7 +192,9 @@ export function removeModelCapability(models, index) {
 }
 
 export function addTarget(targets) {
-  return [...targets, { id: "", upstream: "", models: [] }];
+  return [...targets, {
+    id: "", upstream: "", provider_id: "", credential_scope: "", models: [],
+  }];
 }
 
 export function removeTarget(targets, index) {
@@ -245,9 +257,13 @@ export function profileDraft(profile, defaultProfileID = 0) {
         profile?.config?.protocol ?? draft.config.protocol,
       ),
       upstream: String(profile?.config?.upstream ?? ""),
+      provider_id: String(profile?.config?.provider_id ?? ""),
+      credential_scope: String(profile?.config?.credential_scope ?? ""),
       targets: (profile?.config?.targets || []).map((target) => ({
         id: String(target?.id ?? ""),
         upstream: String(target?.upstream ?? ""),
+        provider_id: String(target?.provider_id ?? ""),
+        credential_scope: String(target?.credential_scope ?? ""),
         models: (target?.models || []).map((model) => String(model)),
       })),
       models: (profile?.config?.models || []).map((model) => ({
@@ -490,6 +506,24 @@ export function renderProfileEditor(root, source, actions = {}) {
       description: "请求转发的基础地址；不要填写调用方密钥或具体接口路径。",
     },
   );
+  const providerID = fieldInput(
+    basicGrid,
+    "供应商 ID",
+    "provider_id",
+    working.config.provider_id,
+    {
+      description: "主 Target 的逻辑供应商标识；配置备用 Target 时必填，不是密钥。",
+    },
+  );
+  const credentialScope = fieldInput(
+    basicGrid,
+    "凭据范围",
+    "credential_scope",
+    working.config.credential_scope,
+    {
+      description: "主 Target 可原样复用的逻辑凭据范围；配置备用 Target 时必填，不填写凭据值。",
+    },
+  );
   const version = fieldInput(
     basicGrid,
     "配置版本",
@@ -562,6 +596,8 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.targets = targetRows.map((row) => ({
       id: row.id.value,
       upstream: row.upstream.value,
+      provider_id: row.providerID.value,
+      credential_scope: row.credentialScope.value,
       models: row.models.value
         .split(",")
         .map((model) => model.trim())
@@ -600,7 +636,33 @@ export function renderProfileEditor(root, source, actions = {}) {
           description: "填写模型能力中已录入的精确 ID，多个模型用英文逗号分隔。",
         },
       );
-      targetRows.push({ id, upstream: targetUpstream, models: targetModels });
+      const targetProviderID = fieldInput(
+        fields,
+        "供应商 ID",
+        `target-${index}-provider-id`,
+        target.provider_id,
+        {
+          required: true,
+          description: "必须与主 Target 的供应商 ID 精确一致。",
+        },
+      );
+      const targetCredentialScope = fieldInput(
+        fields,
+        "凭据范围",
+        `target-${index}-credential-scope`,
+        target.credential_scope,
+        {
+          required: true,
+          description: "必须与主 Target 的凭据范围精确一致；不要填写密钥。",
+        },
+      );
+      targetRows.push({
+        id,
+        upstream: targetUpstream,
+        providerID: targetProviderID,
+        credentialScope: targetCredentialScope,
+        models: targetModels,
+      });
 
       const controls = element("div", "cluster target-actions");
       const up = actionButton("上移 Target", "button-secondary");
@@ -2122,6 +2184,8 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.version = version.value;
     working.config.protocol = protocol.value;
     working.config.upstream = upstream.value;
+    working.config.provider_id = providerID.value;
+    working.config.credential_scope = credentialScope.value;
     if (!autoEnabled.checked) {
       working.config.auto_routing = {
         ...working.config.auto_routing,
@@ -2240,13 +2304,17 @@ export function renderProfileEditor(root, source, actions = {}) {
   root.replaceChildren(form);
 }
 
-function targetsPayload(targets) {
+function targetsPayload(targets, primaryProviderID, primaryCredentialScope) {
+  assertTargetTrustID(primaryProviderID, "主 Target 供应商 ID");
+  assertTargetTrustID(primaryCredentialScope, "主 Target 凭据范围");
   const ids = new Set();
   const upstreams = new Set();
   return targets.map((target, index) => {
     const label = `备用 Target ${index + 1}`;
     const id = String(target?.id ?? "");
     const upstream = String(target?.upstream ?? "");
+    const providerID = String(target?.provider_id ?? "");
+    const credentialScope = String(target?.credential_scope ?? "");
     if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(id) || id === "primary") {
       throw new Error(`${label}：ID 必须是小写字母或数字开头的安全标识，且不能使用 primary。`);
     }
@@ -2267,10 +2335,26 @@ function targetsPayload(targets) {
     if (new Set(models).size !== models.length) {
       throw new Error(`${label}：模型 ID 不能重复。`);
     }
+    assertTargetTrustID(providerID, `${label} 供应商 ID`);
+    if (providerID !== primaryProviderID) {
+      throw new Error(`${label}：供应商 ID 必须与主 Target 精确一致。`);
+    }
+    assertTargetTrustID(credentialScope, `${label} 凭据范围`);
+    if (credentialScope !== primaryCredentialScope) {
+      throw new Error(`${label}：凭据范围必须与主 Target 精确一致。`);
+    }
     ids.add(id);
     upstreams.add(normalizedUpstream);
-    return { id, upstream, models };
+    return {
+      id, upstream, provider_id: providerID, credential_scope: credentialScope, models,
+    };
   });
+}
+
+function assertTargetTrustID(value, label) {
+  if (!/^[a-z0-9][a-z0-9._:/-]{0,127}$/.test(value)) {
+    throw new Error(`${label}必须是小写字母或数字开头的安全标识。`);
+  }
 }
 
 function modelCapabilitiesPayload(models) {

@@ -117,27 +117,59 @@ test("Target helpers and payload preserve explicit failover order", () => {
   const first = {
     id: "region_b",
     upstream: "https://region-b.example/v1",
+    provider_id: "acme-ai",
+    credential_scope: "team-a",
     models: ["fast", "strong"],
   };
   const second = {
     id: "strong_backup",
     upstream: "https://strong.example/v1",
+    provider_id: "acme-ai",
+    credential_scope: "team-a",
     models: ["strong"],
   };
   const added = addTarget([first, second]);
   assert.deepEqual(added.slice(0, 2), [first, second]);
-  assert.deepEqual(added[2], { id: "", upstream: "", models: [] });
+  assert.deepEqual(added[2], {
+    id: "",
+    upstream: "",
+    provider_id: "",
+    credential_scope: "",
+    models: [],
+  });
   assert.deepEqual(removeTarget([first, second], 0), [second]);
   assert.deepEqual(moveTarget([first, second], 1, -1), [second, first]);
 
   const draft = defaultProfileDraft();
+  draft.config.provider_id = "acme-ai";
+  draft.config.credential_scope = "team-a";
   draft.config.targets = [first, second];
   const payload = profilePayload(draft);
+  assert.equal(payload.config.provider_id, "acme-ai");
+  assert.equal(payload.config.credential_scope, "team-a");
   assert.deepEqual(payload.config.targets, [first, second]);
   assert.deepEqual(profileDraft({
     enabled: true,
     config: { ...draft.config, targets: [first, second] },
   }).config.targets, [first, second]);
+});
+
+test("Target payload rejects malformed or incompatible trust identifiers", () => {
+  const draft = defaultProfileDraft();
+  draft.config.provider_id = "acme-ai";
+  draft.config.credential_scope = "team-a";
+  draft.config.targets = [{
+    id: "region_b",
+    upstream: "https://region-b.example/v1",
+    provider_id: "foreign-ai",
+    credential_scope: "team-a",
+    models: ["fast"],
+  }];
+
+  assert.throws(() => profilePayload(draft), /供应商.*主 Target/);
+  draft.config.targets[0].provider_id = "acme-ai";
+  draft.config.targets[0].credential_scope = "team b";
+  assert.throws(() => profilePayload(draft), /凭据范围.*安全标识/);
 });
 
 test("payload preserves optional routing capabilities and integer micro-USD prices", () => {
@@ -820,9 +852,18 @@ test("Target editor preserves visible failover order and exact model IDs", async
     { id: "strong", supports_vision: true },
   ];
   draft.config.targets = [
-    { id: "region_b", upstream: "https://b.example", models: ["fast", "strong"] },
-    { id: "region_c", upstream: "https://c.example", models: ["strong"] },
+    {
+      id: "region_b", upstream: "https://b.example", provider_id: "acme-ai",
+      credential_scope: "team-a", models: ["fast", "strong"],
+    },
+    {
+      id: "region_c", upstream: "https://c.example", provider_id: "acme-ai",
+      credential_scope: "team-a", models: ["strong"],
+    },
   ];
+
+  draft.config.provider_id = "acme-ai";
+  draft.config.credential_scope = "team-a";
   let saved;
   renderProfileEditor(root, draft, {
     save: async (payload) => { saved = payload; },
@@ -831,7 +872,15 @@ test("Target editor preserves visible failover order and exact model IDs", async
   });
 
   assert.match(findText(root, "Upstream 是主 Target").textContent, /仅供 model=auto/);
+  assert.equal(controlByName(root, "provider_id").value, "acme-ai");
+  assert.match(fieldDescription(root, controlByName(root, "provider_id")), /供应商/);
+  assert.equal(controlByName(root, "credential_scope").value, "team-a");
+  assert.match(fieldDescription(root, controlByName(root, "credential_scope")), /凭据/);
   assert.equal(controlByName(root, "target-0-id").value, "region_b");
+  assert.equal(controlByName(root, "target-0-provider-id").value, "acme-ai");
+  assert.match(fieldDescription(root, controlByName(root, "target-0-provider-id")), /主 Target/);
+  assert.equal(controlByName(root, "target-0-credential-scope").value, "team-a");
+  assert.match(fieldDescription(root, controlByName(root, "target-0-credential-scope")), /主 Target/);
   assert.equal(controlByName(root, "target-0-models").value, "fast, strong");
   assert.match(fieldDescription(root, controlByName(root, "target-0-models")), /精确 ID/);
 

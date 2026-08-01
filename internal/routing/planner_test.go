@@ -108,9 +108,17 @@ func TestPlannerFreezesPrimaryAndStrongFallbackAttempts(t *testing.T) {
 
 func TestPlannerFreezesOrderedTargetsForEveryModelAttempt(t *testing.T) {
 	config := routingConfig(false)
+	config.ProviderID = "acme-ai"
+	config.CredentialScope = "team-a"
 	config.Targets = []profile.TargetConfig{
-		{ID: "region_b", Upstream: "https://region-b.example", Models: []string{"fast", "strong"}},
-		{ID: "strong_backup", Upstream: "https://strong.example", Models: []string{"strong"}},
+		{
+			ID: "region_b", Upstream: "https://region-b.example",
+			ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"fast", "strong"},
+		},
+		{
+			ID: "strong_backup", Upstream: "https://strong.example",
+			ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"strong"},
+		},
 	}
 	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
 	if err != nil {
@@ -133,6 +141,9 @@ func TestPlannerFreezesOrderedTargetsForEveryModelAttempt(t *testing.T) {
 		fastTargets[1].ID() != "region_b" || len(strongTargets) != 3 ||
 		strongTargets[1].ID() != "region_b" || strongTargets[2].ID() != "strong_backup" {
 		t.Fatalf("fast=%+v strong=%+v", fastTargets, strongTargets)
+	}
+	if fastTargets[1].Protocol() != profile.ProtocolAnthropic {
+		t.Fatalf("backup Target protocol=%q, want inherited anthropic protocol", fastTargets[1].Protocol())
 	}
 	fastTargets[0] = TargetPlan{}
 	if got := plan.ModelAttempts()[0].Targets()[0].ID(); got != profile.PrimaryTargetID {
