@@ -137,6 +137,84 @@ func TestPreprocessorStopsBeforeVisionCallWhenBudgetReservationFails(t *testing.
 	}
 }
 
+func TestPreprocessorReservesEveryRetriedVisionCall(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"description"}]}`)
+	}))
+	defer server.Close()
+
+	p := budgetedRetryPreprocessor(server)
+	var reservations atomic.Int32
+	_, err := p.ProcessTargetWithBudget(
+		context.Background(),
+		nil,
+		imageRequest("retry-budget"),
+		server.URL+"/v1/messages",
+		func(context.Context) error {
+			reservations.Add(1)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || reservations.Load() != 2 {
+		t.Fatalf("calls=%d reservations=%d, want 2 each", calls.Load(), reservations.Load())
+	}
+}
+
+func TestPreprocessorStopsBeforeUnbudgetedVisionRetry(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+	}))
+	defer server.Close()
+
+	p := budgetedRetryPreprocessor(server)
+	want := errors.New("vision retry budget exhausted")
+	var reservations atomic.Int32
+	_, err := p.ProcessTargetWithBudget(
+		context.Background(),
+		nil,
+		imageRequest("blocked-retry-budget"),
+		server.URL+"/v1/messages",
+		func(context.Context) error {
+			if reservations.Add(1) > 1 {
+				return want
+			}
+			return nil
+		},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("error=%v, want retry budget error", err)
+	}
+	if calls.Load() != 1 || reservations.Load() != 2 {
+		t.Fatalf("calls=%d reservations=%d, want 1 call and 2 reservations", calls.Load(), reservations.Load())
+	}
+}
+
+func budgetedRetryPreprocessor(server *httptest.Server) *Preprocessor {
+	cfg := testVisionConfig(server.URL)
+	cfg.Models = profile.ModelCatalog{
+		"main": {ID: "main", SupportsVision: false},
+	}
+	cfg.Vision.MaxConcurrency = 1
+	p := New(cfg, server.Client(), nil)
+	p.cache = newResultCache(8, time.Minute)
+	p.describer.(*visionClient).sleep = func(context.Context, time.Duration) error {
+		return nil
+	}
+	return p
+}
+
 func TestPreprocessorRejectsIncompleteRewrite(t *testing.T) {
 	body := imageRequest("unhandled")
 	fake := &fakeDescriber{describe: func(imageRef) (string, error) {

@@ -291,6 +291,7 @@ func (p *Preprocessor) ProcessTargetWithBudget(
 							cancel()
 							return "", err
 						}
+						operationCtx = withVisionRetryReservation(operationCtx, reserveCall)
 					}
 					description, err := p.describer.DescribeTarget(
 						operationCtx,

@@ -46,6 +46,23 @@ type describer interface {
 	DescribeTarget(context.Context, http.Header, string, imageRef) (string, error)
 }
 
+type visionRetryReservationKey struct{}
+
+func withVisionRetryReservation(
+	ctx context.Context,
+	reserve func(context.Context) error,
+) context.Context {
+	return context.WithValue(ctx, visionRetryReservationKey{}, reserve)
+}
+
+func reserveVisionRetry(ctx context.Context) error {
+	reserve, _ := ctx.Value(visionRetryReservationKey{}).(func(context.Context) error)
+	if reserve == nil {
+		return nil
+	}
+	return reserve(ctx)
+}
+
 type visionClient struct {
 	profileSlug string
 	protocol    profile.Protocol
@@ -145,6 +162,9 @@ func (c *visionClient) DescribeTarget(
 			wait := retryRule.RetryDelay + time.Duration(attempt)*retryRule.RetryJitter
 			if err := c.sleep(ctx, wait); err != nil {
 				return "", safeClientError{"vision request canceled", err}
+			}
+			if err := reserveVisionRetry(ctx); err != nil {
+				return "", safeClientError{"vision retry budget exhausted", err}
 			}
 		}
 
