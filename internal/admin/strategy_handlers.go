@@ -50,6 +50,20 @@ func (a *API) createStrategy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, version)
 }
 
+func (a *API) generateStrategyCandidate(w http.ResponseWriter, r *http.Request) {
+	profileID, err := profileIDFromPath(r)
+	if err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	version, err := a.strategies.GenerateCandidate(r.Context(), profileID)
+	if err != nil {
+		a.writeDomainError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, version)
+}
+
 func (a *API) updateStrategy(w http.ResponseWriter, r *http.Request) {
 	profileID, strategyID, err := strategyPathIDs(r)
 	if err != nil {

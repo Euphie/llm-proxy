@@ -172,7 +172,7 @@ func TestSystemAPIUsesConfiguredDataDirectoryAndVersion(t *testing.T) {
 		body["data_dir"] != dataDir ||
 		body["database_file"] != "llm-proxy.db" ||
 		body["database_bytes"] != float64(databaseInfo.Size()) ||
-		body["schema_version"] != float64(4) ||
+		body["schema_version"] != float64(5) ||
 		body["default_profile_id"] != float64(0) ||
 		body["password_must_change"] != false {
 		t.Fatalf("system=%+v", body)
@@ -769,12 +769,18 @@ func TestCloseStopsRequestsThenDrainsUsageBeforeClosingDatabase(t *testing.T) {
 	waitForSignal(t, parserEntered, "usage parser")
 
 	usageCloseStarted := make(chan struct{})
+	evaluationCloseStarted := make(chan struct{})
 	databaseCloseStarted := make(chan struct{})
+	closeEvaluation := application.closeEvaluation
 	closeUsage := application.closeUsage
 	closeDatabase := application.closeDatabase
 	application.closeUsage = func() error {
 		close(usageCloseStarted)
 		return closeUsage()
+	}
+	application.closeEvaluation = func() error {
+		close(evaluationCloseStarted)
+		return closeEvaluation()
 	}
 	application.closeDatabase = func() error {
 		close(databaseCloseStarted)
@@ -785,6 +791,7 @@ func TestCloseStopsRequestsThenDrainsUsageBeforeClosingDatabase(t *testing.T) {
 	go func() {
 		closeResult <- application.Close()
 	}()
+	waitForSignal(t, evaluationCloseStarted, "evaluation shutdown")
 	waitForSignal(t, usageCloseStarted, "usage drain")
 
 	login := request(application, http.MethodPost, "/_admin/api/login",

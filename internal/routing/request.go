@@ -92,6 +92,14 @@ func ParseAutoRequest(
 }
 
 func (r Request) WithModel(model string) ([]byte, error) {
+	return r.withModel(model, false)
+}
+
+func (r Request) WithModelNonStreaming(model string) ([]byte, error) {
+	return r.withModel(model, true)
+}
+
+func (r Request) withModel(model string, nonStreaming bool) ([]byte, error) {
 	if model == "" || strings.TrimSpace(model) != model || model == AutoModel {
 		return nil, fmt.Errorf("%w: selected model is invalid", ErrInvalidRequest)
 	}
@@ -101,11 +109,18 @@ func (r Request) WithModel(model string) ([]byte, error) {
 		return nil, fmt.Errorf("encode selected model: %w", err)
 	}
 	root["model"] = encoded
+	if nonStreaming {
+		root["stream"] = json.RawMessage("false")
+	}
 	rewritten, err := json.Marshal(root)
 	if err != nil {
 		return nil, fmt.Errorf("encode routed request: %w", err)
 	}
 	return rewritten, nil
+}
+
+func (r Request) EvaluationText() string {
+	return r.routingText()
 }
 
 func supportedOperation(protocol profile.Protocol, method, path string) (Operation, bool) {

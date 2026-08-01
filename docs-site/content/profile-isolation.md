@@ -35,4 +35,5 @@
 Profile 固定入口协议，后面的 API 路径由 Agent 请求决定。适配器可以转换受支持的请求和响应格式，但不能借协议转换跳到另一个 Profile。Header 透传必须使用允许列表，调试日志不得记录 Authorization、Cookie 或完整请求正文。
 
 > [!CURRENT]
-> 当前源码已对 URL、模型候选、策略、视觉缓存、HMAC Session 绑定和路由轨迹实施 Profile-local 约束。异步评测尚未实现；上线时仍必须沿用同一隔离合同。
+> 当前源码已对 URL、模型候选、策略、视觉缓存、HMAC Session 绑定、路由轨迹、评测队列、预算和
+> 质量证据实施 Profile-local 约束。

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/routing"
 	"github.com/Euphie/llm-proxy/internal/stats"
@@ -162,6 +163,151 @@ func TestAutoRoutingAnalyzesUncertainRequestAndRewritesModel(t *testing.T) {
 	if analyzerCalls.Load() != 1 || answerCalls.Load() != 1 || answerModel != "fast" {
 		t.Fatalf("analyzer=%d answer=%d model=%q", analyzerCalls.Load(), answerCalls.Load(), answerModel)
 	}
+}
+
+func TestSuccessfulAutoRequestOnlyEnqueuesAsyncBlindComparison(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "caller-secret" {
+			t.Errorf("async request lost forwarded credential")
+		}
+		body, _ := io.ReadAll(r.Body)
+		var root struct {
+			Model  string          `json:"model"`
+			Stream bool            `json:"stream"`
+			System json.RawMessage `json:"system"`
+		}
+		_ = json.Unmarshal(body, &root)
+		calls.Add(1)
+		switch {
+		case len(root.System) > 0:
+			if bytes.Contains(body, []byte("fast")) {
+				t.Errorf("blind review leaked candidate model: %s", body)
+			}
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"winner\":\"tie\",\"severe_a\":false,\"severe_b\":false}"}]}`)
+		case root.Model == "fast":
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`)
+		case root.Model == "strong":
+			if root.Stream {
+				t.Error("comparison request unexpectedly enabled streaming")
+			}
+			_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"reference answer"}]}`)
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	handler := NewWithEvaluation(runtime, server.Client(), nil, nil, submitter)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Api-Key", "caller-secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || calls.Load() != 1 || submitter.calls != 1 {
+		t.Fatalf("status=%d upstream_calls=%d submissions=%d body=%q",
+			response.Code, calls.Load(), submitter.calls, response.Body.String())
+	}
+	result, err := submitter.job.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 3 || result.Evidence == nil || result.Evidence.Outcome != evaluation.OutcomeTie ||
+		result.Evidence.CandidateModel != "fast" || result.Evidence.ReferenceModel != "strong" ||
+		result.Evidence.ReviewerModel != "strong" || result.SpentMicroUSD <= 0 ||
+		result.SpentMicroUSD > submitter.job.EstimatedCostMicroUSD {
+		t.Fatalf("upstream_calls=%d job=%+v result=%+v evidence=%+v",
+			calls.Load(), submitter.job, result, result.Evidence)
+	}
+}
+
+func TestFailedAsyncComparisonStillChargesItsPlannedAttemptCost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`)
+	}))
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	NewWithEvaluation(runtime, server.Client(), nil, nil, submitter).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || submitter.calls != 1 {
+		t.Fatalf("status=%d submissions=%d body=%q", response.Code, submitter.calls, response.Body.String())
+	}
+	server.Close()
+
+	result, err := submitter.job.Run(context.Background())
+	if err == nil || result.SpentMicroUSD <= 0 {
+		t.Fatalf("err=%v spent=%d estimated=%d", err, result.SpentMicroUSD, submitter.job.EstimatedCostMicroUSD)
+	}
+}
+
+func TestAsyncComparisonIsNotSubmittedWhenDisabledOrHighRisk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+	for _, tt := range []struct {
+		name    string
+		enabled bool
+		body    string
+	}{
+		{name: "disabled", body: `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`},
+		{name: "high risk", enabled: true, body: `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":"edit the file"}]}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := autoProxyRuntime(t, server.URL, false)
+			if tt.enabled {
+				runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+					Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+					ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+					TaskTimeout: time.Minute,
+				}
+			}
+			submitter := &capturingEvaluationSubmitter{}
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			NewWithEvaluation(runtime, server.Client(), nil, nil, submitter).ServeHTTP(response, request)
+			if response.Code != http.StatusOK || submitter.calls != 0 {
+				t.Fatalf("status=%d submissions=%d body=%q", response.Code, submitter.calls, response.Body.String())
+			}
+		})
+	}
+}
+
+type capturingEvaluationSubmitter struct {
+	job   evaluation.Job
+	calls int
+}
+
+func (s *capturingEvaluationSubmitter) Submit(job evaluation.Job) evaluation.SubmitResult {
+	s.calls++
+	s.job = job
+	return evaluation.SubmitAccepted
 }
 
 func TestAutoRoutingSessionStaysOnItsModelAndOnlyUpgrades(t *testing.T) {

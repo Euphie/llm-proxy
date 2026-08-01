@@ -26,6 +26,10 @@ test("new Anthropic Profile contains explicit defaults", () => {
   assert.equal(draft.config.vision.unlisted_model_policy, "bypass");
   assert.deepEqual(draft.config.models, []);
   assert.equal(draft.config.auto_routing.enabled, false);
+	assert.equal(
+		draft.config.auto_routing.dynamic_optimization.enabled,
+		false,
+	);
   assert.deepEqual(draft.config.overload_rules, []);
 });
 
@@ -159,6 +163,15 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: "7000",
     session_ttl: "24h",
+		dynamic_optimization: {
+			enabled: true,
+			sample_rate_bps: "1250",
+			daily_budget_micro_usd: "250000",
+			reviewer_model: "strong",
+			max_concurrency: "2",
+			queue_capacity: "128",
+			task_timeout: "90s",
+		},
     strategy: {
       name: "20260802-001",
       alias: "均衡",
@@ -192,6 +205,15 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
   assert.deepEqual(auto.participants, ["fast", "strong"]);
   assert.equal(auto.analyzer_min_confidence_bps, 7000);
   assert.equal(auto.session_ttl, "24h");
+	assert.deepEqual(auto.dynamic_optimization, {
+		enabled: true,
+		sample_rate_bps: 1250,
+		daily_budget_micro_usd: 250000,
+		reviewer_model: "strong",
+		max_concurrency: 2,
+		queue_capacity: 128,
+		task_timeout: "90s",
+	});
   assert.equal(auto.strategy.routes[0].min_quality_bps, 9000);
   assert.equal(auto.strategy.routes[0].candidates[0].quality_score_bps, 9200);
   assert.equal(auto.strategy.budget.max_worst_case_cost_micro_usd, 500000);
@@ -438,6 +460,7 @@ test("Profile API methods use exact routes, methods, JSON, and CSRF", async (t) 
 	await api.cancelStrategyCanary(7, 5);
 	await api.promoteStrategy(7, 6);
 	await api.rollbackStrategy(7, 7);
+	await api.generateStrategyCandidate(7);
 
   assert.deepEqual(calls, [
     {
@@ -534,6 +557,12 @@ test("Profile API methods use exact routes, methods, JSON, and CSRF", async (t) 
 			path: "/_admin/api/profiles/7/strategies/rollback",
 			method: "POST",
 			body: { expected_revision: 7 },
+			csrf: "csrf-token",
+		},
+		{
+			path: "/_admin/api/profiles/7/strategies/generate-candidate",
+			method: "POST",
+			body: {},
 			csrf: "csrf-token",
 		},
   ]);
@@ -844,6 +873,15 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
     session_ttl: "48h",
+		dynamic_optimization: {
+			enabled: true,
+			sample_rate_bps: 1000,
+			daily_budget_micro_usd: 250000,
+			reviewer_model: "strong",
+			max_concurrency: 2,
+			queue_capacity: 128,
+			task_timeout: "90s",
+		},
     strategy: {
       name: "20260802-001",
       alias: "均衡",
@@ -881,6 +919,13 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.equal(controlByName(root, "auto_routing_enabled").checked, true);
   assert.equal(controlByName(root, "auto_analyzer_confidence").value, "70");
   assert.equal(controlByName(root, "auto_session_ttl").value, "48h");
+	assert.equal(controlByName(root, "auto_dynamic_enabled").checked, true);
+	assert.equal(controlByName(root, "auto_dynamic_sample_rate").value, "10");
+	assert.equal(controlByName(root, "auto_dynamic_reviewer_model").value, "strong");
+	assert.match(
+		fieldDescription(root, controlByName(root, "auto_dynamic_enabled")),
+		/当前回答|不影响/,
+	);
   assert.match(
     fieldDescription(root, controlByName(root, "auto_session_ttl")),
     /X-LLM-Proxy-Session-ID/,
@@ -897,12 +942,21 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
 
   controlByName(root, "auto_analyzer_confidence").value = "72.5";
   controlByName(root, "auto_session_ttl").value = "72h";
+	controlByName(root, "auto_dynamic_sample_rate").value = "12.5";
   controlByName(root, "auto-route-0-min-quality").value = "91.25";
   await findTag(root, "FORM").dispatch("submit");
 
   assert.equal(saves.length, 1);
   assert.equal(saves[0].config.auto_routing.analyzer_min_confidence_bps, 7250);
   assert.equal(saves[0].config.auto_routing.session_ttl, "72h");
+	assert.equal(
+		saves[0].config.auto_routing.dynamic_optimization.sample_rate_bps,
+		1250,
+	);
+	assert.equal(
+		saves[0].config.auto_routing.dynamic_optimization.daily_budget_micro_usd,
+		250000,
+	);
   assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_quality_bps, 9125);
   assert.deepEqual(saves[0].config.auto_routing.participants, ["fast", "strong"]);
 
@@ -1011,6 +1065,60 @@ test("strategy lifecycle UI creates drafts and exposes only valid publication ac
 	});
 	await buttonByText(rollbackRoot, "回滚到上一正式策略").dispatch("click");
 	assert.equal(rollbackRevision, 6);
+});
+
+test("strategy lifecycle shows conservative evidence and generates only a draft", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const active = {
+		id: 1,
+		profile_id: 7,
+		state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	draft.config.auto_routing.dynamic_optimization = {
+		enabled: true,
+		sample_rate_bps: 1000,
+		daily_budget_micro_usd: 250000,
+		reviewer_model: "strong",
+		max_concurrency: 2,
+		queue_capacity: 128,
+		task_timeout: "90s",
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [active],
+		evaluation_budget: {
+			day: "2026-08-02",
+			reserved_micro_usd: 1000,
+			spent_micro_usd: 5000,
+		},
+		quality_estimates: [{
+			strategy: "20260802-001",
+			route: "balanced",
+			candidate_model: "fast",
+			reference_model: "strong",
+			raw_samples: 30,
+			effective_samples: 29.5,
+			reliable: true,
+			quality_mean_bps: 9500,
+			quality_lower_bps: 9134,
+			severe_error_mean_bps: 120,
+			severe_error_upper_bps: 364,
+		}],
+	};
+	let generated = 0;
+	renderProfileEditor(root, draft, {
+		generateStrategyCandidate: async () => { generated++; },
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+
+	assert.ok(findText(root, "今日评测：5,000 / 250,000 微美元"));
+	assert.ok(findText(root, "fast ↔ strong"));
+	assert.ok(findText(root, "保守质量 91.34%"));
+	assert.ok(findText(root, "严重错误上界 3.64%"));
+	await buttonByText(root, "生成学习候选").dispatch("click");
+	assert.equal(generated, 1);
 });
 
 test("saved model rows retain empty optional limits while still showing catalog provenance", async (t) => {

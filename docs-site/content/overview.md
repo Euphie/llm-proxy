@@ -1,7 +1,7 @@
 # 智能路由概览
 
 > [!TARGET]
-> Phase 1 已在不改变 Agent 路径的前提下实现 `model=auto`：简单任务可选择低成本模型，复杂、高风险或判断不可靠的任务使用强模型，并保留视觉增强和现有容错能力。Session 连续性和独立策略生命周期也已实现；动态策略优化与多 Target 属于后续路线图。
+> Phase 1 已在不改变 Agent 路径的前提下实现 `model=auto`：简单任务可选择低成本模型，复杂、高风险或判断不可靠的任务使用强模型，并保留视觉增强和现有容错能力。Session 连续性、独立策略生命周期和异步对比学习也已实现；多 Target 属于后续路线图。
 
 ## 一句话理解
 
@@ -39,7 +39,7 @@
 - v1 不做多副本协调、强化学习或 Bandit。
 
 > [!CURRENT]
-> 当前运行时已经实现 Profile-local `model=auto`、统一 AttemptBudget、不可变 ExecutionPlan、ClientCommit 前的计划内模型切换、Session 选模连续性、结构化路由轨迹，以及不可变策略版本、CAS 灰度/发布和 LKG 回滚。动态策略优化尚未实现。
+> 当前运行时已经实现 Profile-local `model=auto`、统一 AttemptBudget、不可变 ExecutionPlan、ClientCommit 前的计划内模型切换、Session 选模连续性、结构化路由轨迹、策略版本生命周期，以及异步对比学习和候选草稿生成。
 
 > [!FUTURE]
 > 首版稳定后，可在不突破 Profile 边界的前提下增加同供应商多 Target 调度和更丰富的离线策略生成算法。

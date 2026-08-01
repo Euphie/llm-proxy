@@ -16,6 +16,7 @@ import (
 	"github.com/Euphie/llm-proxy/internal/admin"
 	adminui "github.com/Euphie/llm-proxy/internal/admin/ui"
 	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/proxy"
@@ -30,15 +31,17 @@ type Options struct {
 }
 
 type App struct {
-	db      *sql.DB
-	handler http.Handler
-	usage   *stats.DB
-	gate    *requestGate
+	db         *sql.DB
+	handler    http.Handler
+	usage      *stats.DB
+	evaluation *evaluation.Service
+	gate       *requestGate
 
-	closeOnce     sync.Once
-	closeErr      error
-	closeUsage    func() error
-	closeDatabase func() error
+	closeOnce       sync.Once
+	closeErr        error
+	closeEvaluation func() error
+	closeUsage      func() error
+	closeDatabase   func() error
 }
 
 func New(options Options) (*App, error) {
@@ -52,10 +55,21 @@ func New(options Options) (*App, error) {
 		return nil, err
 	}
 	usage := stats.New(db)
-	fail := func(cause error) (*App, error) {
+	evaluationStore := evaluation.NewStore(db, time.Now)
+	evaluations, err := evaluation.NewService(
+		evaluationStore,
+		evaluation.ServiceOptions{},
+	)
+	if err != nil {
 		usageErr := usage.Close()
 		databaseErr := db.Close()
-		return nil, errors.Join(cause, usageErr, databaseErr)
+		return nil, errors.Join(err, usageErr, databaseErr)
+	}
+	fail := func(cause error) (*App, error) {
+		evaluationErr := evaluations.Close()
+		usageErr := usage.Close()
+		databaseErr := db.Close()
+		return nil, errors.Join(cause, evaluationErr, usageErr, databaseErr)
 	}
 
 	routingSessions, err := routing.NewSessionStore(db, time.Now)
@@ -77,7 +91,7 @@ func New(options Options) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve Profile %q: %w", record.Slug, err)
 		}
-		active := proxy.NewWithSessionStore(runtime, client, usage, routingSessions)
+		active := proxy.NewWithEvaluation(runtime, client, usage, routingSessions, evaluations)
 		if snapshot.Canary == nil {
 			return active, nil
 		}
@@ -87,7 +101,7 @@ func New(options Options) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve canary strategy for Profile %q: %w", record.Slug, err)
 		}
-		canary := proxy.NewWithSessionStore(canaryRuntime, client, usage, routingSessions)
+		canary := proxy.NewWithEvaluation(canaryRuntime, client, usage, routingSessions, evaluations)
 		return canaryHandler(
 			active, canary, routingSessions, record.ID, snapshot.Canary.ID, snapshot.CanaryBPS,
 		), nil
@@ -146,7 +160,7 @@ func New(options Options) (*App, error) {
 	adminAPI := admin.NewAPI(admin.Dependencies{
 		Auth:             auth,
 		Profiles:         admin.NewProfileService(profiles, coordinator, strategies),
-		Strategies:       admin.NewStrategyService(profiles, strategies, coordinator, time.Now),
+		Strategies:       admin.NewStrategyService(profiles, strategies, coordinator, time.Now, evaluationStore),
 		Stats:            usage,
 		DB:               db,
 		Version:          options.Version,
@@ -162,11 +176,13 @@ func New(options Options) (*App, error) {
 
 	gate := &requestGate{next: handler}
 	application := &App{
-		db:      db,
-		handler: gate,
-		usage:   usage,
-		gate:    gate,
+		db:         db,
+		handler:    gate,
+		usage:      usage,
+		evaluation: evaluations,
+		gate:       gate,
 	}
+	application.closeEvaluation = evaluations.Close
 	application.closeUsage = usage.Close
 	application.closeDatabase = db.Close
 	return application, nil
@@ -255,9 +271,10 @@ func (a *App) Handler() http.Handler {
 func (a *App) Close() error {
 	a.closeOnce.Do(func() {
 		a.gate.Close()
+		evaluationErr := a.closeEvaluation()
 		usageErr := a.closeUsage()
 		databaseErr := a.closeDatabase()
-		a.closeErr = errors.Join(usageErr, databaseErr)
+		a.closeErr = errors.Join(evaluationErr, usageErr, databaseErr)
 	})
 	return a.closeErr
 }

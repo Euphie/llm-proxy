@@ -6,13 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"mime"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/routing"
@@ -33,6 +36,20 @@ func NewWithSessionStore(
 	sdb *stats.DB,
 	sessions *routing.SessionStore,
 ) http.Handler {
+	return NewWithEvaluation(cfg, client, sdb, sessions, nil)
+}
+
+type evaluationSubmitter interface {
+	Submit(evaluation.Job) evaluation.SubmitResult
+}
+
+func NewWithEvaluation(
+	cfg profile.Runtime,
+	client *http.Client,
+	sdb *stats.DB,
+	sessions *routing.SessionStore,
+	evaluations evaluationSubmitter,
+) http.Handler {
 	var visionPreprocessor *vision.Preprocessor
 	if cfg.Vision.Enabled && strings.TrimSpace(cfg.Vision.Model) != "" {
 		visionPreprocessor = vision.New(cfg, client, sdb)
@@ -47,24 +64,26 @@ func NewWithSessionStore(
 		}
 	}
 	return &handler{
-		cfg:      cfg,
-		client:   client,
-		stats:    sdb,
-		parser:   stats.NewParser(string(cfg.Protocol)),
-		vision:   visionPreprocessor,
-		routing:  routeEngine,
-		sessions: sessions,
+		cfg:        cfg,
+		client:     client,
+		stats:      sdb,
+		parser:     stats.NewParser(string(cfg.Protocol)),
+		vision:     visionPreprocessor,
+		routing:    routeEngine,
+		sessions:   sessions,
+		evaluation: evaluations,
 	}
 }
 
 type handler struct {
-	cfg      profile.Runtime
-	client   *http.Client
-	stats    *stats.DB
-	parser   stats.Parser
-	vision   *vision.Preprocessor
-	routing  *routing.Engine
-	sessions *routing.SessionStore
+	cfg        profile.Runtime
+	client     *http.Client
+	stats      *stats.DB
+	parser     stats.Parser
+	vision     *vision.Preprocessor
+	routing    *routing.Engine
+	sessions   *routing.SessionStore
+	evaluation evaluationSubmitter
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -395,6 +414,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if isAuto && sessionKeyValid && modelAttemptIndex == 0 {
 				h.bindRoutingSession(sessionKey, plan, currentAttempt)
 			}
+			if isAuto {
+				h.submitEvaluation(
+					r.Header, target, routeRequest, classification, plan,
+					currentAttempt, captured, time.Since(start),
+				)
+			}
 			return
 		}
 
@@ -464,6 +489,253 @@ func (h *handler) bindRoutingSession(
 			"error", err,
 		)
 	}
+}
+
+const maxEvaluationContentBytes = 1 << 20
+
+func (h *handler) submitEvaluation(
+	headers http.Header,
+	target string,
+	request routing.Request,
+	classification routing.Classification,
+	plan routing.ExecutionPlan,
+	selected routing.ModelAttemptPlan,
+	captured []byte,
+	onlineLatency time.Duration,
+) {
+	config := h.cfg.AutoRouting.DynamicOptimization
+	if h.evaluation == nil || !config.Enabled || len(captured) == 0 ||
+		len(captured) > maxEvaluationContentBytes || request.Facts.HasTools {
+		return
+	}
+	pair, ok := h.routing.EvaluationPair(request, classification, selected.Model())
+	if !ok {
+		return
+	}
+	online := evaluation.ParseModelOutput(
+		request.Operation, captured, request.Facts,
+		evaluationAttemptCost(selected, request.Facts.ImageCount),
+		onlineLatency.Milliseconds(),
+	)
+	comparison := evaluation.ComparisonTask{
+		ProfileID: h.cfg.ID, Strategy: plan.Strategy(), Route: plan.Route(),
+		TaskType: classification.TaskType, CandidateModel: pair.Candidate.Model(),
+		ReferenceModel: pair.Reference.Model(), ReviewerModel: config.ReviewerModel,
+		Question: request.EvaluationText(),
+	}
+	switch selected.Model() {
+	case pair.Candidate.Model():
+		comparison.Candidate = &online
+	case pair.Reference.Model():
+		comparison.Reference = &online
+	default:
+		return
+	}
+
+	missing := pair.Candidate
+	if comparison.Candidate != nil {
+		missing = pair.Reference
+	}
+	reviewer, ok := h.cfg.Models[config.ReviewerModel]
+	if !ok || !reviewer.HasContextWindow || !reviewer.HasMaxOutputTokens ||
+		reviewer.MaxOutputTokens < 256 {
+		return
+	}
+	requestedOutput := request.Facts.RequestedOutputTokens
+	if requestedOutput <= 0 {
+		requestedOutput = 4096
+	}
+	reviewerInputTokens := request.Facts.EstimatedInputTokens + requestedOutput*2 + 512
+	if reviewerInputTokens > reviewer.ContextWindow-256 {
+		return
+	}
+	reviewerCost := estimateEvaluationCallCost(reviewerInputTokens, 256, reviewer)
+	missingCost := evaluationAttemptCost(missing, request.Facts.ImageCount)
+	estimatedCost := addEvaluationCost(missingCost, reviewerCost)
+	if estimatedCost == 0 {
+		estimatedCost = 1
+	}
+
+	forwardedHeaders := evaluationHeaders(headers)
+	comparison.Generate = func(ctx context.Context, model string) (evaluation.ModelOutput, error) {
+		attempt, found := evaluationPairAttempt(pair, model)
+		if !found {
+			return evaluation.ModelOutput{}, evaluation.ErrInvalidComparison
+		}
+		started := time.Now()
+		plannedCost := evaluationAttemptCost(attempt, request.Facts.ImageCount)
+		failedOutput := func() evaluation.ModelOutput {
+			return evaluation.ModelOutput{
+				CostMicroUSD: plannedCost,
+				LatencyMS:    time.Since(started).Milliseconds(),
+			}
+		}
+		body, err := h.prepareEvaluationAttempt(ctx, forwardedHeaders, target, request, attempt)
+		if err != nil {
+			return failedOutput(), err
+		}
+		response, err := h.do(ctx, http.MethodPost, target, forwardedHeaders, body)
+		if err != nil {
+			return failedOutput(), err
+		}
+		responseBody, err := readEvaluationResponse(response)
+		output := evaluation.ParseModelOutput(
+			request.Operation, responseBody, request.Facts,
+			plannedCost,
+			time.Since(started).Milliseconds(),
+		)
+		if err != nil {
+			return output, err
+		}
+		return output, nil
+	}
+	comparison.Review = func(ctx context.Context, input evaluation.ReviewInput) (evaluation.ReviewVerdict, error) {
+		body, err := evaluation.BuildReviewRequest(request.Operation, config.ReviewerModel, input)
+		if err != nil {
+			return evaluation.ReviewVerdict{}, err
+		}
+		response, err := h.do(ctx, http.MethodPost, target, forwardedHeaders, body)
+		if err != nil {
+			return evaluation.ReviewVerdict{ReviewerCostMicroUSD: reviewerCost}, err
+		}
+		responseBody, err := readEvaluationResponse(response)
+		if err != nil {
+			return evaluation.ReviewVerdict{ReviewerCostMicroUSD: reviewerCost}, err
+		}
+		verdict, err := evaluation.ParseReviewVerdict(request.Operation, responseBody)
+		verdict.ReviewerCostMicroUSD = reviewerCost
+		return verdict, err
+	}
+	workflow := evaluation.NewWorkflow(nil)
+	job := evaluation.Job{
+		ProfileID: h.cfg.ID, SampleRateBPS: config.SampleRateBPS,
+		DailyBudgetMicroUSD:   config.DailyBudgetMicroUSD,
+		EstimatedCostMicroUSD: estimatedCost, MaxConcurrency: config.MaxConcurrency,
+		QueueCapacity: config.QueueCapacity, Timeout: config.TaskTimeout,
+		ExpiresAt: time.Now().Add(10 * time.Minute),
+		Run: func(ctx context.Context) (evaluation.Result, error) {
+			return workflow.Evaluate(ctx, comparison)
+		},
+	}
+	result := h.evaluation.Submit(job)
+	slog.Info(
+		"routing.evaluation.submitted",
+		"profile", h.cfg.Slug,
+		"strategy", plan.Strategy(),
+		"route", plan.Route(),
+		"candidate_model", pair.Candidate.Model(),
+		"reference_model", pair.Reference.Model(),
+		"result", result,
+	)
+}
+
+func (h *handler) prepareEvaluationAttempt(
+	ctx context.Context,
+	headers http.Header,
+	target string,
+	request routing.Request,
+	attempt routing.ModelAttemptPlan,
+) ([]byte, error) {
+	body, err := request.WithModelNonStreaming(attempt.Model())
+	if err != nil {
+		return nil, err
+	}
+	if attempt.VisionMode() != routing.VisionComposite {
+		return body, nil
+	}
+	if h.vision == nil {
+		return nil, routing.ErrNoCapableModel
+	}
+	return h.vision.ProcessTargetWithBudget(ctx, headers, body, target, nil)
+}
+
+func evaluationPairAttempt(
+	pair routing.EvaluationPair,
+	model string,
+) (routing.ModelAttemptPlan, bool) {
+	if pair.Candidate.Model() == model {
+		return pair.Candidate, true
+	}
+	if pair.Reference.Model() == model {
+		return pair.Reference, true
+	}
+	return routing.ModelAttemptPlan{}, false
+}
+
+func evaluationHeaders(headers http.Header) http.Header {
+	cloned := headers.Clone()
+	cloned.Del(routing.SessionIDHeader)
+	cloned.Del("Content-Length")
+	cloned.Del("Accept-Encoding")
+	return cloned
+}
+
+func readEvaluationResponse(response *http.Response) ([]byte, error) {
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxEvaluationContentBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxEvaluationContentBytes {
+		return nil, errors.New("routing evaluation response exceeded the memory limit")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("routing evaluation upstream status %d", response.StatusCode)
+	}
+	return body, nil
+}
+
+func evaluationAttemptCost(attempt routing.ModelAttemptPlan, imageCount int) int64 {
+	return addEvaluationCost(
+		attempt.AnswerCallCostMicroUSD(),
+		multiplyEvaluationCost(attempt.VisionCallCostMicroUSD(), imageCount),
+	)
+}
+
+func estimateEvaluationCallCost(
+	inputTokens int,
+	outputTokens int,
+	model profile.ModelCapability,
+) int64 {
+	return addEvaluationCost(
+		estimateEvaluationTokenCost(inputTokens, model.InputPriceMicroUSDPerMillion),
+		estimateEvaluationTokenCost(outputTokens, model.OutputPriceMicroUSDPerMillion),
+	)
+}
+
+func estimateEvaluationTokenCost(tokens int, price int64) int64 {
+	if tokens <= 0 || price <= 0 {
+		return 0
+	}
+	if int64(tokens) > math.MaxInt64/price {
+		return math.MaxInt64
+	}
+	product := int64(tokens) * price
+	return product/1_000_000 + boolEvaluationCost(product%1_000_000 != 0)
+}
+
+func addEvaluationCost(left int64, right int64) int64 {
+	if left == math.MaxInt64 || right == math.MaxInt64 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
+}
+
+func multiplyEvaluationCost(cost int64, count int) int64 {
+	if cost <= 0 || count <= 0 {
+		return 0
+	}
+	if int64(count) > math.MaxInt64/cost {
+		return math.MaxInt64
+	}
+	return cost * int64(count)
+}
+
+func boolEvaluationCost(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 const maxPrecommitStreamBytes = 1 << 20

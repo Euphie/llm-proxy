@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 
+	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/strategy"
 )
@@ -178,6 +179,8 @@ func (a *API) writeDomainError(w http.ResponseWriter, r *http.Request, err error
 		writeError(w, http.StatusConflict, "strategy_transition_invalid", "Routing strategy cannot make that transition.", nil)
 	case errors.Is(err, strategy.ErrNoLastKnownGood):
 		writeError(w, http.StatusConflict, "strategy_lkg_unavailable", "No last-known-good strategy is available.", nil)
+	case errors.Is(err, evaluation.ErrInsufficientEvidence):
+		writeError(w, http.StatusConflict, "evaluation_evidence_insufficient", "Reliable quality evidence is not available yet.", nil)
 	default:
 		a.writeInternalError(w, r, fmt.Errorf("handle admin API request: %w", err))
 	}

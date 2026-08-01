@@ -173,6 +173,10 @@ Object.assign(api, {
       method: "POST",
       body: { expected_revision: expectedRevision },
     }),
+	generateStrategyCandidate: (profileId) =>
+		request(`/_admin/api/profiles/${profileId}/strategies/generate-candidate`, {
+			method: "POST",
+		}),
   stats: (params = {}) => {
     const query = new URLSearchParams(
       Object.entries(params)

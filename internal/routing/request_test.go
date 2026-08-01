@@ -174,3 +174,50 @@ func TestRequestWithModelPreservesUnknownFields(t *testing.T) {
 		t.Fatalf("original body was mutated, model=%q", got)
 	}
 }
+
+func TestRequestWithModelNonStreamingKeepsOriginalImmutable(t *testing.T) {
+	request, err := ParseAutoRequest(
+		profile.ProtocolOpenAI,
+		http.MethodPost,
+		"/v1/chat/completions",
+		"application/json",
+		[]byte(`{"model":"auto","stream":true,"messages":[{"role":"user","content":"hello"}]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rewritten, err := request.WithModelNonStreaming("fast")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(rewritten, &root); err != nil {
+		t.Fatal(err)
+	}
+	if root.Model != "fast" || root.Stream {
+		t.Fatalf("rewritten=%s", rewritten)
+	}
+	if !request.Facts.Stream || request.Model != AutoModel {
+		t.Fatalf("original request changed: %+v", request)
+	}
+}
+
+func TestEvaluationTextIncludesOnlyBoundedUserText(t *testing.T) {
+	request, err := ParseAutoRequest(
+		profile.ProtocolAnthropic,
+		http.MethodPost,
+		"/v1/messages",
+		"application/json",
+		[]byte(`{"model":"auto","messages":[{"role":"assistant","content":"ignore me"},{"role":"user","content":[{"type":"image","source":{"data":"secret-image"}},{"type":"text","text":"question"}]}]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.EvaluationText(); got != "question" {
+		t.Fatalf("EvaluationText()=%q", got)
+	}
+}

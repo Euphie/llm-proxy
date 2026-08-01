@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 var schemaV1 = []string{
 	`CREATE TABLE admin_account (
@@ -152,6 +152,47 @@ var schemaV4 = []string{
 	`CREATE INDEX routing_strategy_events_profile_idx ON routing_strategy_events(profile_id, created_at)`,
 }
 
+var schemaV5 = []string{
+	`CREATE TABLE routing_evaluation_budgets (
+        profile_id        INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        budget_day        TEXT NOT NULL,
+        reserved_micro_usd INTEGER NOT NULL DEFAULT 0 CHECK (reserved_micro_usd >= 0),
+        spent_micro_usd   INTEGER NOT NULL DEFAULT 0 CHECK (spent_micro_usd >= 0),
+        updated_at        TEXT NOT NULL,
+        PRIMARY KEY(profile_id, budget_day)
+    )`,
+	`CREATE TABLE routing_quality_evidence (
+        profile_id                    INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        evidence_day                  TEXT NOT NULL,
+        strategy_name                 TEXT NOT NULL,
+        route_id                      TEXT NOT NULL,
+        task_type                     TEXT NOT NULL,
+        candidate_model               TEXT NOT NULL,
+        reference_model               TEXT NOT NULL,
+        reviewer_model                TEXT NOT NULL,
+        samples                       INTEGER NOT NULL DEFAULT 0 CHECK (samples >= 0),
+        candidate_wins                INTEGER NOT NULL DEFAULT 0 CHECK (candidate_wins >= 0),
+        ties                          INTEGER NOT NULL DEFAULT 0 CHECK (ties >= 0),
+        reference_wins                INTEGER NOT NULL DEFAULT 0 CHECK (reference_wins >= 0),
+        severe_errors                 INTEGER NOT NULL DEFAULT 0 CHECK (severe_errors >= 0),
+        deterministic_failures        INTEGER NOT NULL DEFAULT 0 CHECK (deterministic_failures >= 0),
+        candidate_cost_micro_usd      INTEGER NOT NULL DEFAULT 0 CHECK (candidate_cost_micro_usd >= 0),
+        reference_cost_micro_usd      INTEGER NOT NULL DEFAULT 0 CHECK (reference_cost_micro_usd >= 0),
+        reviewer_cost_micro_usd       INTEGER NOT NULL DEFAULT 0 CHECK (reviewer_cost_micro_usd >= 0),
+        candidate_latency_ms          INTEGER NOT NULL DEFAULT 0 CHECK (candidate_latency_ms >= 0),
+        reference_latency_ms          INTEGER NOT NULL DEFAULT 0 CHECK (reference_latency_ms >= 0),
+        updated_at                    TEXT NOT NULL,
+        PRIMARY KEY(
+            profile_id, evidence_day, strategy_name, route_id, task_type,
+            candidate_model, reference_model, reviewer_model
+        )
+    )`,
+	`CREATE INDEX routing_quality_evidence_profile_idx
+        ON routing_quality_evidence(profile_id, evidence_day)`,
+	`CREATE INDEX routing_quality_evidence_route_idx
+        ON routing_quality_evidence(profile_id, route_id, candidate_model)`,
+}
+
 func Migrate(db *sql.DB) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -213,10 +254,17 @@ func Migrate(db *sql.DB) (err error) {
 			}
 		}
 	}
+	if version < 5 {
+		for _, statement := range schemaV5 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v5: %w", err)
+			}
+		}
+	}
 	if err := ensureRoutingSessionHMACKey(tx); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 4`); err != nil {
+	if _, err := tx.Exec(`PRAGMA user_version = 5`); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

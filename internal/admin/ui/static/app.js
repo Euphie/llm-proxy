@@ -256,6 +256,10 @@ async function renderAuthenticated(root, client, generateProfile, path) {
         await client.rollbackStrategy(draft.id, revision);
         await reloadStrategyEditor();
       },
+		generateStrategyCandidate: async () => {
+			const version = await client.generateStrategyCandidate(draft.id);
+			await reloadStrategyEditor(version.id);
+		},
     });
   }
 

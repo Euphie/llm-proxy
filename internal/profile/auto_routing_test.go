@@ -69,6 +69,143 @@ func TestResolveAutoRoutingDisabledDoesNotRequireRolesOrPrices(t *testing.T) {
 	}
 }
 
+func TestResolveDynamicOptimizationContract(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.DynamicOptimization = DynamicOptimizationConfig{
+		Enabled:             true,
+		SampleRateBPS:       1250,
+		DailyBudgetMicroUSD: 250_000,
+		ReviewerModel:       "strong",
+		MaxConcurrency:      3,
+		QueueCapacity:       128,
+		TaskTimeout:         "90s",
+	}
+
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runtime.AutoRouting.DynamicOptimization
+	if !got.Enabled || got.SampleRateBPS != 1250 || got.DailyBudgetMicroUSD != 250_000 ||
+		got.ReviewerModel != "strong" || got.MaxConcurrency != 3 ||
+		got.QueueCapacity != 128 || got.TaskTimeout != 90*time.Second {
+		t.Fatalf("dynamic optimization=%+v", got)
+	}
+}
+
+func TestResolveDynamicOptimizationRejectsIncompleteSettings(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*DynamicOptimizationConfig, *Record)
+	}{
+		{
+			name: "missing reviewer",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.ReviewerModel = ""
+			},
+		},
+		{
+			name: "reviewer outside catalog",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.ReviewerModel = "other"
+			},
+		},
+		{
+			name: "reviewer missing price",
+			mutate: func(config *DynamicOptimizationConfig, record *Record) {
+				config.ReviewerModel = "reviewer"
+				supportsVision := false
+				record.Config.Models = append(record.Config.Models, ModelCapabilityConfig{
+					ID: "reviewer", SupportsVision: &supportsVision,
+				})
+			},
+		},
+		{
+			name: "reviewer missing context capability",
+			mutate: func(config *DynamicOptimizationConfig, record *Record) {
+				config.ReviewerModel = "reviewer"
+				supportsVision := false
+				inputPrice := int64(100_000)
+				outputPrice := int64(400_000)
+				record.Config.Models = append(record.Config.Models, ModelCapabilityConfig{
+					ID: "reviewer", SupportsVision: &supportsVision,
+					InputPriceMicroUSDPerMillion:  &inputPrice,
+					OutputPriceMicroUSDPerMillion: &outputPrice,
+				})
+			},
+		},
+		{
+			name: "zero sample rate",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.SampleRateBPS = 0
+			},
+		},
+		{
+			name: "sample rate above one hundred percent",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.SampleRateBPS = 10_001
+			},
+		},
+		{
+			name: "zero daily budget",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.DailyBudgetMicroUSD = 0
+			},
+		},
+		{
+			name: "zero concurrency",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.MaxConcurrency = 0
+			},
+		},
+		{
+			name: "oversized queue",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.QueueCapacity = 4097
+			},
+		},
+		{
+			name: "timeout above credential lifetime",
+			mutate: func(config *DynamicOptimizationConfig, _ *Record) {
+				config.TaskTimeout = "11m"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := validAutoRoutingRecord()
+			config := DynamicOptimizationConfig{
+				Enabled:             true,
+				SampleRateBPS:       1000,
+				DailyBudgetMicroUSD: 100_000,
+				ReviewerModel:       "strong",
+				MaxConcurrency:      2,
+				QueueCapacity:       64,
+				TaskTimeout:         "1m",
+			}
+			tt.mutate(&config, &record)
+			record.Config.AutoRouting.DynamicOptimization = config
+			if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Resolve() error=%v, want ErrInvalidConfig", err)
+			}
+		})
+	}
+}
+
+func TestResolveDynamicOptimizationDisabledIgnoresEmptySettings(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.DynamicOptimization = DynamicOptimizationConfig{}
+
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AutoRouting.DynamicOptimization.Enabled {
+		t.Fatal("dynamic optimization unexpectedly enabled")
+	}
+}
+
 func TestResolveAutoRoutingRejectsIncompleteConfiguration(t *testing.T) {
 	tests := []struct {
 		name   string

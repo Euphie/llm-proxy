@@ -20,6 +20,7 @@ func TestOpenCreatesPrivateDatabaseAndSchema(t *testing.T) {
 		"app_settings", "admin_account", "admin_sessions", "profiles", "usage",
 		"routing_traces", "routing_session_bindings", "routing_strategies",
 		"routing_strategy_pointers", "routing_strategy_events",
+		"routing_evaluation_budgets", "routing_quality_evidence",
 	} {
 		var name string
 		err := db.QueryRow(
@@ -101,7 +102,7 @@ func TestOpenMigratesOnlyOnce(t *testing.T) {
 			db.Close()
 			t.Fatal(err)
 		}
-		if version != 4 {
+		if version != 5 {
 			db.Close()
 			t.Fatalf("user_version=%d", version)
 		}
@@ -164,7 +165,7 @@ func TestMigrateUpgradesV1WithoutReplacingExistingData(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_settings`).Scan(&settings); err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 || profiles != 1 || settings != 1 {
+	if version != 5 || profiles != 1 || settings != 1 {
 		t.Fatalf("version=%d profiles=%d settings=%d", version, profiles, settings)
 	}
 }

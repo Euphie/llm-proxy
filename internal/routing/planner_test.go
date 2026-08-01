@@ -128,6 +128,54 @@ func TestPlannerHighRiskAlwaysUsesStrongBaseline(t *testing.T) {
 	}
 }
 
+func TestPlannerBuildsCostSavingEvaluationPairAroundStrongBaseline(t *testing.T) {
+	planner, err := NewPlanner(routingRuntime(t, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`)
+	classification := Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	}
+
+	for _, selected := range []string{"fast", "strong"} {
+		pair, ok := planner.EvaluationPair(request, classification, selected)
+		if !ok {
+			t.Fatalf("EvaluationPair(selected=%q) was unavailable", selected)
+		}
+		if pair.Candidate.Model() != "fast" || pair.Reference.Model() != "strong" {
+			t.Fatalf("pair=%+v", pair.Snapshot())
+		}
+		if pair.Candidate.AnswerCallCostMicroUSD() >= pair.Reference.AnswerCallCostMicroUSD() {
+			t.Fatalf("pair does not reduce cost: %+v", pair.Snapshot())
+		}
+	}
+}
+
+func TestPlannerDoesNotEvaluateHighRiskOrNonSavingPairs(t *testing.T) {
+	config := routingConfig(false)
+	expensiveInput := int64(30_000_000)
+	expensiveOutput := int64(60_000_000)
+	config.Models[0].InputPriceMicroUSDPerMillion = &expensiveInput
+	config.Models[0].OutputPriceMicroUSDPerMillion = &expensiveOutput
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`)
+
+	if _, ok := planner.EvaluationPair(request, Classification{
+		TaskType: "simple", Risk: RiskHigh, Source: ClassificationSourceRule,
+	}, "strong"); ok {
+		t.Fatal("high-risk request received an evaluation pair")
+	}
+	if _, ok := planner.EvaluationPair(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	}, "strong"); ok {
+		t.Fatal("non-saving candidate received an evaluation pair")
+	}
+}
+
 func TestPlannerFiltersCapabilitiesAndQuality(t *testing.T) {
 	tests := []struct {
 		name   string

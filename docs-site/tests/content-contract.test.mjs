@@ -24,7 +24,7 @@ const canonicalChapters = [
   ["quality-and-cost", "质量与成本", "先满足 Route 质量门槛，再选择完整成本更低的模型。", "运行时", "scale", "yellow", "本版目标", "竞品源码验证"],
   ["target-reliability", "Target 与容错", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。", "运行时", "activity", "teal", "本版目标", "竞品源码验证"],
   ["runtime-reliability", "视觉、重试与 Session", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。", "运行时", "shield", "slate", "本版目标", "竞品源码验证"],
-  ["evaluation-feedback", "异步评测与策略优化", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。", "控制面", "activity", "orange", "本版目标", "竞品源码验证"],
+  ["evaluation-feedback", "异步评测与策略优化", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。", "控制面", "activity", "orange", "已实现", "本项目源码与测试验证"],
   ["strategy-lifecycle", "策略生命周期", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。", "控制面", "git-branch", "indigo", "已实现", "本项目源码与测试验证"],
   ["engineering-and-delivery", "实施范围与交付", "明确 v1 范围、实施阶段和验收条件。", "交付", "database", "slate", "本版目标", "本项目源码验证"],
 ].map(([slug, title, summary, group, icon, accent, implementation_status, evidence_level]) => ({
@@ -299,7 +299,7 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(routing, /高风险[\s\S]*结构信号[\s\S]*场景规则[\s\S]*分析器判断/);
   assert.match(routing, /不可变 ExecutionPlan/);
   assert.match(quality, /Route 质量门槛[\s\S]*完整成本/);
-  assert.match(quality, /分层贝叶斯估计[\s\S]*(?:时间|样本权重更高)/);
+  assert.match(quality, /带时间衰减的保守估计[\s\S]*样本权重更高/);
   assert.match(quality, /证据不足时使用保守先验[\s\S]*置信下界[\s\S]*强模型基线[\s\S]*否则请求失败/);
   assert.match(quality, /A\/B\/C\/D 等级[\s\S]*只用于展示/);
   assert.match(target, /v1 每个模型先使用一个 Target/);
@@ -327,7 +327,7 @@ test("locks the approved intelligent-routing contracts", async () => {
 test("keeps the canonical repository design aligned with the documentation site", async () => {
   const design = await readFile(path.join(siteRoot, "..", "docs", "intelligent-routing.md"), "utf8");
 
-  assert.match(design, /状态：Phase 1 已实现/);
+  assert.match(design, /状态：Phase 1[^\n]*已实现/);
   assert.match(design, /model=auto[\s\S]*一次请求只能使用 URL 选中的 Profile/);
   assert.match(design, /本地规则[\s\S]*轻量任务分析模型[\s\S]*强模型基线满足全部硬约束/);
   assert.match(design, /Anthropic `POST \/v1\/messages`[\s\S]*OpenAI[\s\S]*`POST \/v1\/chat\/completions`[\s\S]*`POST \/v1\/responses`[\s\S]*unsupported operation/);
@@ -336,7 +336,7 @@ test("keeps the canonical repository design aligned with the documentation site"
   assert.match(design, /max_answer_attempts[\s\S]*max_worst_case_cost/);
   assert.match(design, /Session 绑定只对 `model=auto` 生效[\s\S]*不会自动把会话降回较弱模型/);
   assert.match(design, /会话键使用 HMAC[\s\S]*原始 Session ID[\s\S]*Profile[\s\S]*Route[\s\S]*鉴权域[\s\S]*不建立跨请求绑定/);
-  assert.match(design, /有界内存队列[\s\S]*不会自动替换线上策略/);
+  assert.match(design, /有界内存队列[\s\S]*不修改 active 策略/);
   assert.match(design, /最多在内存保留凭据 10 分钟/);
   assert.match(design, /YYYYMMDD-NNN[\s\S]*原子热加载[\s\S]*CAS/);
   assert.match(design, /context_window[\s\S]*client_context_window/);

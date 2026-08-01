@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/stats"
@@ -29,11 +30,12 @@ import (
 const initialCredentialWarning = "High risk: the default admin/admin credentials are active. Change the password immediately."
 
 type apiTestFixture struct {
-	handler http.Handler
-	db      *sql.DB
-	dataDir string
-	logs    *bytes.Buffer
-	now     time.Time
+	handler  http.Handler
+	db       *sql.DB
+	dataDir  string
+	logs     *bytes.Buffer
+	now      time.Time
+	evidence *evaluation.Store
 }
 
 // Break caught: hiding the bootstrap credential risk or allowing Profile access before the mandatory password change.
@@ -728,6 +730,56 @@ func TestAPIStrategyLifecyclePublishesAndRollsBackWithCAS(t *testing.T) {
 	}
 }
 
+func TestAPIGeneratesCandidateDraftOnlyFromReliableQualityEvidence(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	createBody, err := json.Marshal(saveProfileRequest{
+		Slug: "auto", DisplayName: "Auto", Enabled: true,
+		Config: apiAutoRoutingConfig(), MakeDefault: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := fixture.request(
+		t, http.MethodPost, "/_admin/api/profiles", string(createBody), cookies, csrf,
+	)
+	var profileBody profileResponse
+	decodeTestJSON(t, created, &profileBody)
+	path := "/_admin/api/profiles/" + strconv.FormatInt(profileBody.ID, 10) +
+		"/strategies/generate-candidate"
+
+	insufficient := fixture.request(t, http.MethodPost, path, `{}`, cookies, csrf)
+	assertAPIError(t, insufficient, http.StatusConflict, "evaluation_evidence_insufficient")
+	for range 30 {
+		if err := fixture.evidence.RecordEvidence(context.Background(), evaluation.Evidence{
+			ProfileID: profileBody.ID, Strategy: "20260802-001", Route: "balanced",
+			TaskType: "simple", CandidateModel: "fast", ReferenceModel: "strong",
+			ReviewerModel: "strong", Outcome: evaluation.OutcomeCandidateWin,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	generated := fixture.request(t, http.MethodPost, path, `{}`, cookies, csrf)
+	if generated.Code != http.StatusCreated {
+		t.Fatalf("generate status=%d body=%s", generated.Code, generated.Body.String())
+	}
+	var version strategy.Version
+	decodeTestJSON(t, generated, &version)
+	if version.State != strategy.StateDraft || version.Config.Name != "20260729-001" {
+		t.Fatalf("generated=%+v", version)
+	}
+	overview := fixture.request(
+		t, http.MethodGet,
+		"/_admin/api/profiles/"+strconv.FormatInt(profileBody.ID, 10)+"/strategies",
+		"", cookies, "",
+	)
+	var body StrategyOverview
+	decodeTestJSON(t, overview, &body)
+	if len(body.QualityEstimates) != 1 || !body.QualityEstimates[0].Reliable {
+		t.Fatalf("overview=%+v", body)
+	}
+}
+
 // Break caught: omitting zero-value usage objects, counting data outside 30 days, or querying usage separately per Profile.
 func TestAPIProfileListIncludesThirtyDayUsageSummaries(t *testing.T) {
 	fixture := newTestAPI(t)
@@ -822,7 +874,7 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"data_dir":             fixture.dataDir,
 		"database_file":        "llm-proxy.db",
 		"database_bytes":       float64(databaseInfo.Size()),
-		"schema_version":       float64(4),
+		"schema_version":       float64(5),
 		"default_profile_id":   float64(first.ID),
 		"password_must_change": false,
 	}
@@ -991,6 +1043,7 @@ func TestAPIKnownRoutesReturnAccurateAllowHeader(t *testing.T) {
 			name: "strategy collection", path: "/_admin/api/profiles/123/strategies",
 			allow: []string{http.MethodGet, http.MethodHead, http.MethodPost},
 		},
+		{name: "strategy candidate generation", path: "/_admin/api/profiles/123/strategies/generate-candidate", allow: []string{http.MethodPost}},
 		{name: "strategy item", path: "/_admin/api/profiles/123/strategies/456", allow: []string{http.MethodPut}},
 		{name: "strategy advance", path: "/_admin/api/profiles/123/strategies/456/advance", allow: []string{http.MethodPost}},
 		{name: "strategy canary", path: "/_admin/api/profiles/123/strategies/456/canary", allow: []string{http.MethodPost}},
@@ -1172,6 +1225,7 @@ func newTestAPIWithActivation(
 	)
 	store := profile.NewStore(db)
 	strategyStore := strategy.NewStore(db, func() time.Time { return now })
+	evidenceStore := evaluation.NewStore(db, func() time.Time { return now })
 	registry := gateway.NewRegistry()
 	coordinator := gateway.NewCoordinator(store, registry, func(record profile.Record) (http.Handler, error) {
 		resolved, _, err := strategyStore.ResolveRecord(context.Background(), record)
@@ -1187,7 +1241,7 @@ func newTestAPIWithActivation(
 	handler := NewAPI(Dependencies{
 		Auth:             auth,
 		Profiles:         NewProfileService(store, coordinator, strategyStore),
-		Strategies:       NewStrategyService(store, strategyStore, coordinator, func() time.Time { return now }),
+		Strategies:       NewStrategyService(store, strategyStore, coordinator, func() time.Time { return now }, evidenceStore),
 		Stats:            stats.New(db),
 		DB:               db,
 		Version:          "test-version",
@@ -1196,11 +1250,12 @@ func newTestAPIWithActivation(
 		ActivateProfiles: activateProfiles,
 	})
 	return &apiTestFixture{
-		handler: handler,
-		db:      db,
-		dataDir: dataDir,
-		logs:    logs,
-		now:     now,
+		handler:  handler,
+		db:       db,
+		dataDir:  dataDir,
+		logs:     logs,
+		now:      now,
+		evidence: evidenceStore,
 	}
 }
 

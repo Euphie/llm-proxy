@@ -57,6 +57,15 @@ function newDefaultAutoRouting() {
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
     session_ttl: "24h",
+		dynamic_optimization: {
+			enabled: false,
+			sample_rate_bps: 1000,
+			daily_budget_micro_usd: 250000,
+			reviewer_model: "",
+			max_concurrency: 2,
+			queue_capacity: 128,
+			task_timeout: "90s",
+		},
     strategy: {
       name: "",
       alias: "",
@@ -1008,6 +1017,86 @@ export function renderProfileEditor(root, source, actions = {}) {
   );
   autoRoles.append(roleGrid);
 
+	const dynamicOptimizationSection = editorSubsection("对比学习");
+	const dynamicConfig = working.config.auto_routing.dynamic_optimization;
+	const dynamicEnabled = checkboxField(
+		dynamicOptimizationSection,
+		"启用异步对比学习",
+		"auto_dynamic_enabled",
+		{
+			description:
+				"只在当前回答已经返回后抽样比较低成本模型与强模型基线，不影响当前回答，也不会自动发布策略。",
+		},
+	);
+	dynamicEnabled.checked = Boolean(dynamicConfig.enabled);
+	const dynamicDetails = element("div", "stack dynamic-optimization-details");
+	const dynamicGrid = element("div", "form-grid");
+	const dynamicSampleRate = fieldInput(
+		dynamicGrid,
+		"异步抽样比例（%）",
+		"auto_dynamic_sample_rate",
+		basisPointsToPercent(dynamicConfig.sample_rate_bps),
+		{
+			type: "number", min: "0.01", max: "100", step: "0.01",
+			description: "仅抽取成功的 model=auto 请求；未命中时不会产生额外调用。",
+		},
+	);
+	const dynamicDailyBudget = fieldInput(
+		dynamicGrid,
+		"每日评测预算（微美元）",
+		"auto_dynamic_daily_budget",
+		dynamicConfig.daily_budget_micro_usd,
+		{
+			type: "number", min: "1", step: "1",
+			description: "对比回答和质量评审共用的每日硬上限；1 美元 = 1,000,000 微美元。",
+		},
+	);
+	const dynamicReviewer = fieldSelect(
+		dynamicGrid,
+		"质量评审模型",
+		"auto_dynamic_reviewer_model",
+		dynamicConfig.reviewer_model,
+		[],
+		{
+			description: "对去掉模型身份的 A/B 回答做异步判断；开启后必填，且必须已录入当前 Profile。",
+		},
+	);
+	const dynamicConcurrency = fieldInput(
+		dynamicGrid,
+		"评测并发",
+		"auto_dynamic_concurrency",
+		dynamicConfig.max_concurrency,
+		{
+			type: "number", min: "1", max: "32", step: "1",
+			description: "当前 Profile 同时运行的异步评测任务上限。",
+		},
+	);
+	const dynamicQueueCapacity = fieldInput(
+		dynamicGrid,
+		"等待队列容量",
+		"auto_dynamic_queue",
+		dynamicConfig.queue_capacity,
+		{
+			type: "number", min: "1", max: "4096", step: "1",
+			description: "队列满时直接丢弃样本，绝不阻塞在线请求。",
+		},
+	);
+	const dynamicTimeout = fieldInput(
+		dynamicGrid,
+		"单次评测超时",
+		"auto_dynamic_timeout",
+		dynamicConfig.task_timeout,
+		{
+			description: "对比回答与质量评审的总时限，例如 90s，最长 10m。",
+		},
+	);
+	dynamicDetails.append(dynamicGrid);
+	dynamicDetails.hidden = !dynamicEnabled.checked;
+	dynamicEnabled.addEventListener("change", () => {
+		dynamicDetails.hidden = !dynamicEnabled.checked;
+	});
+	dynamicOptimizationSection.append(dynamicDetails);
+
   const strategySection = editorSubsection("策略");
   const strategyGrid = element("div", "form-grid");
   const strategyName = fieldInput(
@@ -1351,6 +1440,62 @@ export function renderProfileEditor(root, source, actions = {}) {
 		const invokeStrategyAction = (action) => {
 			void runEditorAction(alert, action).catch(() => {});
 		};
+		const learningPanel = element("div", "stack strategy-learning-panel");
+		if (working.config.auto_routing.dynamic_optimization.enabled) {
+			const learningHelp = textElement(
+				"p",
+				"对比学习只积累匿名质量证据。可靠样本可生成新的草稿，但不会修改 active 策略。",
+			);
+			learningHelp.className = "field-help";
+			const evaluationBudget = strategyOverview.evaluation_budget || {};
+			const dailyBudget = Number(
+				working.config.auto_routing.dynamic_optimization.daily_budget_micro_usd || 0,
+			);
+			const spent = Number(evaluationBudget.spent_micro_usd || 0);
+			const reserved = Number(evaluationBudget.reserved_micro_usd || 0);
+			const budgetSummary = textElement(
+				"p",
+				`今日评测：${spent.toLocaleString("en-US")} / ${dailyBudget.toLocaleString("en-US")} 微美元`,
+			);
+			budgetSummary.className = "muted";
+			const reservedSummary = reserved > 0
+				? textElement("p", `已预留：${reserved.toLocaleString("en-US")} 微美元`)
+				: null;
+			if (reservedSummary) {
+				reservedSummary.className = "muted";
+			}
+			const estimates = element("div", "stack strategy-evidence-list");
+			for (const estimate of strategyOverview.quality_estimates || []) {
+				const card = element("article", "card strategy-evidence-card stack");
+				const title = textElement(
+					"h4",
+					`${estimate.candidate_model} ↔ ${estimate.reference_model}`,
+				);
+				const sampleText = estimate.reliable ? "证据可靠" : "继续积累";
+				const metrics = textElement(
+					"p",
+					`${estimate.raw_samples || 0} 个样本 · 保守质量 ${basisPointsToPercent(estimate.quality_lower_bps)}% · 严重错误上界 ${basisPointsToPercent(estimate.severe_error_upper_bps)}% · ${sampleText}`,
+				);
+				metrics.className = "muted";
+				card.append(title, metrics);
+				estimates.append(card);
+			}
+			const generateCandidate = actionButton("生成学习候选", "button-secondary");
+			generateCandidate.disabled = !(strategyOverview.quality_estimates || [])
+				.some((estimate) => estimate.reliable);
+			generateCandidate.addEventListener("click", () => {
+				if (!generateCandidate.disabled) {
+					invokeStrategyAction(() => actions.generateStrategyCandidate?.());
+				}
+			});
+			learningPanel.append(
+				learningHelp,
+				budgetSummary,
+				...(reservedSummary ? [reservedSummary] : []),
+				estimates,
+				generateCandidate,
+			);
+		}
 
 		const draftControls = element("div", "cluster strategy-draft-controls");
 		const saveDraft = actionButton(
@@ -1510,6 +1655,7 @@ export function renderProfileEditor(root, source, actions = {}) {
 		lifecycleSection.append(
 			lifecycleHelp,
 			summary,
+			learningPanel,
 			draftControls,
 			versions,
 			publicationControls,
@@ -1529,6 +1675,11 @@ export function renderProfileEditor(root, source, actions = {}) {
       [["", "请选择"], ...models.map((id) => [id, id])],
       taskAnalyzer.value,
     );
+		setSelectChoices(
+			dynamicReviewer,
+			[["", "请选择"], ...models.map((id) => [id, id])],
+			dynamicReviewer.value,
+		);
     refreshCandidateModelChoices();
   }
 
@@ -1566,6 +1717,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   autoDetails.hidden = !autoEnabled.checked;
 	autoDetails.append(
 		autoRoles,
+		dynamicOptimizationSection,
 		strategySection,
 		mappingSection,
 		budgetSection,
@@ -1868,6 +2020,20 @@ export function renderProfileEditor(root, source, actions = {}) {
           "任务分析最低置信度",
         ),
         session_ttl: sessionTTL.value,
+			dynamic_optimization: dynamicEnabled.checked
+				? {
+					enabled: true,
+					sample_rate_bps: percentToBasisPoints(
+						dynamicSampleRate.value,
+						"异步抽样比例",
+					),
+					daily_budget_micro_usd: dynamicDailyBudget.value,
+					reviewer_model: dynamicReviewer.value,
+					max_concurrency: dynamicConcurrency.value,
+					queue_capacity: dynamicQueueCapacity.value,
+					task_timeout: dynamicTimeout.value,
+				}
+				: { enabled: false },
         strategy: {
           ...working.config.auto_routing.strategy,
           name: strategyName.value,
@@ -2038,6 +2204,10 @@ function autoRoutingDraft(configured = {}) {
     ...defaults,
     ...configured,
     participants: [...(configured?.participants || [])],
+		dynamic_optimization: {
+			...defaults.dynamic_optimization,
+			...(configured?.dynamic_optimization || {}),
+		},
     strategy: {
       ...defaults.strategy,
       ...strategy,
@@ -2072,6 +2242,9 @@ function autoRoutingPayload(auto) {
       "任务分析最低置信度",
     ),
     session_ttl: String(auto.session_ttl ?? "24h"),
+		dynamic_optimization: dynamicOptimizationPayload(
+			auto.dynamic_optimization,
+		),
     strategy: {
       name: String(strategy.name ?? ""),
       alias: String(strategy.alias ?? ""),
@@ -2105,6 +2278,33 @@ function autoRoutingPayload(auto) {
       budget: autoBudgetPayload(strategy.budget || {}),
     },
   };
+}
+
+function dynamicOptimizationPayload(config = {}) {
+	if (!config?.enabled) {
+		return { enabled: false };
+	}
+	return {
+		enabled: true,
+		sample_rate_bps: boundedBasisPoints(
+			config.sample_rate_bps,
+			"异步抽样比例",
+		),
+		daily_budget_micro_usd: requiredNonnegativeSafeInteger(
+			config.daily_budget_micro_usd,
+			"每日评测预算",
+		),
+		reviewer_model: String(config.reviewer_model ?? ""),
+		max_concurrency: requiredNonnegativeSafeInteger(
+			config.max_concurrency,
+			"评测并发",
+		),
+		queue_capacity: requiredNonnegativeSafeInteger(
+			config.queue_capacity,
+			"评测队列容量",
+		),
+		task_timeout: String(config.task_timeout ?? ""),
+	};
 }
 
 function autoBudgetPayload(budget) {

@@ -119,6 +119,7 @@ func (a *API) routes() []apiRoute {
 		{method: http.MethodDelete, pattern: "/_admin/api/profiles/{id}", handler: a.deleteProfile},
 		{method: http.MethodGet, pattern: "/_admin/api/profiles/{id}/strategies", handler: a.listStrategies},
 		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies", handler: a.createStrategy},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/generate-candidate", handler: a.generateStrategyCandidate},
 		{method: http.MethodPut, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}", handler: a.updateStrategy},
 		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}/advance", handler: a.advanceStrategy},
 		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}/canary", handler: a.startStrategyCanary},

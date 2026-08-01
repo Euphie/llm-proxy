@@ -33,6 +33,14 @@ func (e *Engine) NewAttemptBudget(
 	return NewAttemptBudget(parent, e.auto.Strategy.Budget)
 }
 
+func (e *Engine) EvaluationPair(
+	request Request,
+	classification Classification,
+	selectedModel string,
+) (EvaluationPair, bool) {
+	return e.planner.EvaluationPair(request, classification, selectedModel)
+}
+
 func (e *Engine) Route(
 	ctx context.Context,
 	headers http.Header,

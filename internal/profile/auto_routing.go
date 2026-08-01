@@ -14,15 +14,28 @@ var (
 
 const defaultRoutingSessionTTL = 24 * time.Hour
 
+const maxDynamicOptimizationTaskTimeout = 10 * time.Minute
+
 type AutoRoutingConfig struct {
-	Enabled                  bool                  `json:"enabled"`
-	Participants             []string              `json:"participants,omitempty"`
-	StrongBaselineModel      string                `json:"strong_baseline_model,omitempty"`
-	TaskAnalyzerModel        string                `json:"task_analyzer_model,omitempty"`
-	AnalyzerTimeout          string                `json:"analyzer_timeout,omitempty"`
-	AnalyzerMinConfidenceBPS int                   `json:"analyzer_min_confidence_bps,omitempty"`
-	SessionTTL               string                `json:"session_ttl,omitempty"`
-	Strategy                 RoutingStrategyConfig `json:"strategy,omitempty"`
+	Enabled                  bool                      `json:"enabled"`
+	Participants             []string                  `json:"participants,omitempty"`
+	StrongBaselineModel      string                    `json:"strong_baseline_model,omitempty"`
+	TaskAnalyzerModel        string                    `json:"task_analyzer_model,omitempty"`
+	AnalyzerTimeout          string                    `json:"analyzer_timeout,omitempty"`
+	AnalyzerMinConfidenceBPS int                       `json:"analyzer_min_confidence_bps,omitempty"`
+	SessionTTL               string                    `json:"session_ttl,omitempty"`
+	DynamicOptimization      DynamicOptimizationConfig `json:"dynamic_optimization,omitempty"`
+	Strategy                 RoutingStrategyConfig     `json:"strategy,omitempty"`
+}
+
+type DynamicOptimizationConfig struct {
+	Enabled             bool   `json:"enabled"`
+	SampleRateBPS       int    `json:"sample_rate_bps,omitempty"`
+	DailyBudgetMicroUSD int64  `json:"daily_budget_micro_usd,omitempty"`
+	ReviewerModel       string `json:"reviewer_model,omitempty"`
+	MaxConcurrency      int    `json:"max_concurrency,omitempty"`
+	QueueCapacity       int    `json:"queue_capacity,omitempty"`
+	TaskTimeout         string `json:"task_timeout,omitempty"`
 }
 
 type RoutingStrategyConfig struct {
@@ -71,9 +84,20 @@ type AutoRoutingRuntime struct {
 	AnalyzerTimeout          time.Duration
 	AnalyzerMinConfidenceBPS int
 	SessionTTL               time.Duration
+	DynamicOptimization      DynamicOptimizationRuntime
 	Strategy                 RoutingStrategyRuntime
 
 	participantSet map[string]struct{}
+}
+
+type DynamicOptimizationRuntime struct {
+	Enabled             bool
+	SampleRateBPS       int
+	DailyBudgetMicroUSD int64
+	ReviewerModel       string
+	MaxConcurrency      int
+	QueueCapacity       int
+	TaskTimeout         time.Duration
 }
 
 type RoutingStrategyRuntime struct {
@@ -153,6 +177,13 @@ func resolveAutoRouting(
 		}
 		requiredModels[vision.Model] = struct{}{}
 	}
+	dynamicOptimization, err := resolveDynamicOptimization(config.DynamicOptimization, models)
+	if err != nil {
+		return AutoRoutingRuntime{}, err
+	}
+	if dynamicOptimization.Enabled {
+		requiredModels[dynamicOptimization.ReviewerModel] = struct{}{}
+	}
 	for model := range requiredModels {
 		capability := models[model]
 		if !capability.HasInputPrice || !capability.HasOutputPrice {
@@ -191,8 +222,75 @@ func resolveAutoRouting(
 		AnalyzerTimeout:          analyzerTimeout,
 		AnalyzerMinConfidenceBPS: config.AnalyzerMinConfidenceBPS,
 		SessionTTL:               sessionTTL,
+		DynamicOptimization:      dynamicOptimization,
 		Strategy:                 strategy,
 		participantSet:           participantSet,
+	}, nil
+}
+
+func resolveDynamicOptimization(
+	config DynamicOptimizationConfig,
+	models ModelCatalog,
+) (DynamicOptimizationRuntime, error) {
+	if !config.Enabled {
+		return DynamicOptimizationRuntime{}, nil
+	}
+	reviewer := strings.TrimSpace(config.ReviewerModel)
+	if reviewer == "" || reviewer != config.ReviewerModel {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"quality reviewer model is required without surrounding whitespace",
+		)
+	}
+	model, ok := models[reviewer]
+	if !ok {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"quality reviewer model %q is not in the model catalog", reviewer,
+		)
+	}
+	if !model.HasInputPrice || !model.HasOutputPrice {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"quality reviewer model %q requires input and output prices", reviewer,
+		)
+	}
+	if !model.HasContextWindow || !model.HasMaxOutputTokens || model.MaxOutputTokens < 256 {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"quality reviewer model %q requires a context window and at least 256 output tokens", reviewer,
+		)
+	}
+	if config.SampleRateBPS <= 0 || config.SampleRateBPS > 10_000 {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"dynamic optimization sample rate must be between 1 and 10000",
+		)
+	}
+	if config.DailyBudgetMicroUSD <= 0 || config.DailyBudgetMicroUSD > maxBrowserSafeInteger {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"dynamic optimization daily budget must be a positive browser-safe integer",
+		)
+	}
+	if config.MaxConcurrency <= 0 || config.MaxConcurrency > 32 {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"dynamic optimization concurrency must be between 1 and 32",
+		)
+	}
+	if config.QueueCapacity <= 0 || config.QueueCapacity > 4096 {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"dynamic optimization queue capacity must be between 1 and 4096",
+		)
+	}
+	taskTimeout, err := time.ParseDuration(config.TaskTimeout)
+	if err != nil || taskTimeout <= 0 || taskTimeout > maxDynamicOptimizationTaskTimeout {
+		return DynamicOptimizationRuntime{}, invalidAuto(
+			"dynamic optimization task timeout must be between 1ns and 10m",
+		)
+	}
+	return DynamicOptimizationRuntime{
+		Enabled:             true,
+		SampleRateBPS:       config.SampleRateBPS,
+		DailyBudgetMicroUSD: config.DailyBudgetMicroUSD,
+		ReviewerModel:       reviewer,
+		MaxConcurrency:      config.MaxConcurrency,
+		QueueCapacity:       config.QueueCapacity,
+		TaskTimeout:         taskTimeout,
 	}, nil
 }
 

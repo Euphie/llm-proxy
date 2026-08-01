@@ -101,6 +101,16 @@ type ModelAttemptSnapshot struct {
 	VisionCallCostMicroUSD int64
 }
 
+type EvaluationPair struct {
+	Candidate ModelAttemptPlan
+	Reference ModelAttemptPlan
+}
+
+type EvaluationPairSnapshot struct {
+	Candidate ModelAttemptSnapshot
+	Reference ModelAttemptSnapshot
+}
+
 func NewPlanner(runtime profile.Runtime) (*Planner, error) {
 	if !runtime.AutoRouting.Enabled {
 		return nil, ErrRoutingDisabled
@@ -183,6 +193,70 @@ func (p *Planner) RouteID(classification Classification) string {
 		return mapped
 	}
 	return p.strategy.DefaultRoute
+}
+
+func (p *Planner) EvaluationPair(
+	request Request,
+	classification Classification,
+	selectedModel string,
+) (EvaluationPair, bool) {
+	if classification.Risk == RiskHigh {
+		return EvaluationPair{}, false
+	}
+	route := p.strategy.Routes[p.RouteID(classification)]
+	reference, ok := p.evaluateCandidate(
+		request, p.auto.StrongBaselineModel, classification.Source,
+	)
+	if !ok {
+		return EvaluationPair{}, false
+	}
+	reference.qualityScoreBPS = 10_000
+	if metrics := candidatesForModel(route.Candidates, reference.model); metrics.Model != "" {
+		reference.qualityScoreBPS = metrics.QualityScoreBPS
+	}
+
+	var candidate candidatePlan
+	if selectedModel != "" && selectedModel != reference.model {
+		metrics := candidatesForModel(route.Candidates, selectedModel)
+		if metrics.Model == "" {
+			return EvaluationPair{}, false
+		}
+		candidate, ok = p.evaluateCandidate(request, selectedModel, classification.Source)
+		if !ok {
+			return EvaluationPair{}, false
+		}
+		candidate.qualityScoreBPS = metrics.QualityScoreBPS
+	} else {
+		candidates := make([]rankedCandidate, 0, len(route.Candidates))
+		for _, metrics := range route.Candidates {
+			if metrics.Model == reference.model {
+				continue
+			}
+			planned, capable := p.evaluateCandidate(request, metrics.Model, classification.Source)
+			if !capable {
+				continue
+			}
+			planned.qualityScoreBPS = metrics.QualityScoreBPS
+			candidates = append(candidates, rankedCandidate{plan: planned, metrics: metrics})
+		}
+		if len(candidates) == 0 {
+			return EvaluationPair{}, false
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return betterCandidate(
+				candidates[i].plan, candidates[j].plan,
+				candidates[i].metrics, candidates[j].metrics,
+			)
+		})
+		candidate = candidates[0].plan
+	}
+	if candidate.answerCallCost >= reference.answerCallCost {
+		return EvaluationPair{}, false
+	}
+	return EvaluationPair{
+		Candidate: modelAttemptPlan(candidate),
+		Reference: modelAttemptPlan(reference),
+	}, true
 }
 
 func (p *Planner) planStrongBaseline(
@@ -525,6 +599,13 @@ func (p ModelAttemptPlan) Snapshot() ModelAttemptSnapshot {
 		QualityScoreBPS:        p.qualityScoreBPS,
 		AnswerCallCostMicroUSD: p.answerCallCostMicroUSD,
 		VisionCallCostMicroUSD: p.visionCallCostMicroUSD,
+	}
+}
+
+func (p EvaluationPair) Snapshot() EvaluationPairSnapshot {
+	return EvaluationPairSnapshot{
+		Candidate: p.Candidate.Snapshot(),
+		Reference: p.Reference.Snapshot(),
 	}
 }
 
