@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,111 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
+
+func TestAutoStreamingRetriesOnlyBeforeClientCommit(t *testing.T) {
+	validEvent := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"second\"}}\n\n"
+	transport := &sequenceTransport{responses: []transportResponse{
+		{
+			status: http.StatusOK,
+			header: http.Header{"Content-Type": {"text/event-stream"}},
+			body:   &readErrorBody{data: []byte("event: message_start\ndata: {"), err: errors.New("connection reset")},
+		},
+		{
+			status: http.StatusOK,
+			header: http.Header{"Content-Type": {"text/event-stream"}},
+			body:   io.NopCloser(strings.NewReader(validEvent)),
+		},
+	}}
+	runtime := autoProxyRuntime(t, "https://upstream.test", false)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, &http.Client{Transport: transport}, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || transport.calls.Load() != 2 {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, transport.calls.Load(), response.Body.String())
+	}
+	if response.Body.String() != validEvent || strings.Contains(response.Body.String(), "connection reset") {
+		t.Fatalf("client received pre-commit bytes: %q", response.Body.String())
+	}
+}
+
+func TestAutoStreamingNeverRetriesAfterClientCommit(t *testing.T) {
+	validEvent := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"first\"}}\n\n"
+	transport := &sequenceTransport{responses: []transportResponse{
+		{
+			status: http.StatusOK,
+			header: http.Header{"Content-Type": {"text/event-stream"}},
+			body:   &readErrorBody{data: []byte(validEvent), err: errors.New("connection reset")},
+		},
+		{
+			status: http.StatusOK,
+			header: http.Header{"Content-Type": {"text/event-stream"}},
+			body:   io.NopCloser(strings.NewReader("must-not-send")),
+		},
+	}}
+	runtime := autoProxyRuntime(t, "https://upstream.test", false)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, &http.Client{Transport: transport}, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || transport.calls.Load() != 1 || response.Body.String() != validEvent {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, transport.calls.Load(), response.Body.String())
+	}
+}
+
+type transportResponse struct {
+	status int
+	header http.Header
+	body   io.ReadCloser
+}
+
+type sequenceTransport struct {
+	calls     atomic.Int32
+	responses []transportResponse
+}
+
+func (t *sequenceTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	index := int(t.calls.Add(1)) - 1
+	if index >= len(t.responses) {
+		return nil, errors.New("unexpected extra request")
+	}
+	response := t.responses[index]
+	return &http.Response{
+		StatusCode: response.status,
+		Status:     http.StatusText(response.status),
+		Header:     response.header.Clone(),
+		Body:       response.body,
+		Request:    request,
+	}, nil
+}
+
+type readErrorBody struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (b *readErrorBody) Read(target []byte) (int, error) {
+	if b.done {
+		return 0, b.err
+	}
+	b.done = true
+	return copy(target, b.data), b.err
+}
+
+func (b *readErrorBody) Close() error { return nil }
 
 func TestAutoRoutingAnalyzesUncertainRequestAndRewritesModel(t *testing.T) {
 	var analyzerCalls atomic.Int32

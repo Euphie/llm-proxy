@@ -4,6 +4,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -73,6 +74,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var budget *routing.AttemptBudget
 	var plan routing.ExecutionPlan
 	isAuto := false
+	autoStream := false
 	if model, ok := routing.RequestedModel(body); ok && model == routing.AutoModel {
 		isAuto = true
 		if h.routing == nil {
@@ -90,6 +92,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeRoutingError(w, routeErr)
 			return
 		}
+		autoStream = routeRequest.Facts.Stream
 		var cancel context.CancelFunc
 		budget, requestCtx, cancel = h.routing.NewAttemptBudget(r.Context())
 		defer cancel()
@@ -189,12 +192,44 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 2xx: stream to client while capturing for stats
 		if resp.StatusCode < 400 {
+			var captured []byte
+			if isAuto {
+				result := relayAutoSuccess(w, resp, autoStream)
+				if result.err != nil {
+					if result.committed {
+						slog.Warn("routing.client_stream.failed_after_commit",
+							"profile", label,
+							"strategy", plan.Strategy(),
+							"route", plan.Route(),
+							"model", plan.Model(),
+							"error", result.err)
+						return
+					}
+					if requestCtx.Err() != nil {
+						return
+					}
+					if rule == nil && len(h.cfg.OverloadRules) > 0 {
+						rule = &h.cfg.OverloadRules[0]
+					}
+					if rule == nil || retries >= rule.MaxRetries ||
+						!h.reserveRetry(requestCtx, budget, target, plan) {
+						http.Error(w, "upstream stream failed before client commit", http.StatusBadGateway)
+						return
+					}
+					retries++
+					if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
+						return
+					}
+					continue
+				}
+				captured = result.captured
+			} else {
+				captured = stream(w, resp)
+			}
 			slog.Info("<-",
 				"status", resp.StatusCode, "path", r.URL.Path,
 				"attempts", retries+1, "elapsed", time.Since(start).Round(time.Millisecond))
-			captured := stream(w, resp)
 			if h.stats != nil {
 				h.stats.RecordAsync(stats.RequestMeta{
 					ProfileID:   h.cfg.ID,
@@ -229,6 +264,113 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Non-overload error: forward as-is
 		forward(w, resp, errBody)
 		return
+	}
+}
+
+const maxPrecommitStreamBytes = 1 << 20
+
+type relayResult struct {
+	captured  []byte
+	committed bool
+	err       error
+}
+
+func relayAutoSuccess(
+	w http.ResponseWriter,
+	resp *http.Response,
+	streaming bool,
+) relayResult {
+	defer resp.Body.Close()
+	if !streaming {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return relayResult{err: err}
+		}
+		copyHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		_, err = w.Write(body)
+		return relayResult{captured: body, committed: true, err: err}
+	}
+
+	flusher, canFlush := w.(http.Flusher)
+	var captured bytes.Buffer
+	var pending bytes.Buffer
+	committed := false
+	buffer := make([]byte, 4096)
+	for {
+		n, readErr := resp.Body.Read(buffer)
+		if n > 0 {
+			chunk := buffer[:n]
+			captured.Write(chunk)
+			if committed {
+				if _, err := w.Write(chunk); err != nil {
+					return relayResult{captured: captured.Bytes(), committed: true, err: err}
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+			} else {
+				pending.Write(chunk)
+				if pending.Len() > maxPrecommitStreamBytes {
+					return relayResult{err: errors.New("stream exceeded pre-commit buffer limit")}
+				}
+				ready, err := hasCompleteSSEEvent(pending.Bytes())
+				if err != nil {
+					return relayResult{err: err}
+				}
+				if ready {
+					copyHeaders(w.Header(), resp.Header)
+					w.WriteHeader(resp.StatusCode)
+					if _, err := w.Write(pending.Bytes()); err != nil {
+						return relayResult{captured: captured.Bytes(), committed: true, err: err}
+					}
+					pending.Reset()
+					committed = true
+					if canFlush {
+						flusher.Flush()
+					}
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				if committed {
+					return relayResult{captured: captured.Bytes(), committed: true}
+				}
+				return relayResult{err: errors.New("stream ended before a complete protocol event")}
+			}
+			return relayResult{captured: captured.Bytes(), committed: committed, err: readErr}
+		}
+	}
+}
+
+func hasCompleteSSEEvent(buffer []byte) (bool, error) {
+	normalized := strings.ReplaceAll(string(buffer), "\r\n", "\n")
+	for {
+		end := strings.Index(normalized, "\n\n")
+		if end < 0 {
+			return false, nil
+		}
+		event := normalized[:end]
+		normalized = normalized[end+2:]
+		dataLines := make([]string, 0, 1)
+		for line := range strings.SplitSeq(event, "\n") {
+			if after, ok := strings.CutPrefix(line, "data:"); ok {
+				dataLines = append(dataLines, strings.TrimSpace(after))
+			}
+		}
+		if len(dataLines) == 0 {
+			continue
+		}
+		data := strings.Join(dataLines, "\n")
+		if data == "[DONE]" {
+			return true, nil
+		}
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(data), &payload); err != nil || payload == nil {
+			return false, errors.New("stream produced an invalid protocol event before client commit")
+		}
+		return true, nil
 	}
 }
 
