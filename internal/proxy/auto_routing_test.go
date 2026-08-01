@@ -234,6 +234,76 @@ func TestSuccessfulAutoRequestOnlyEnqueuesAsyncBlindComparison(t *testing.T) {
 	}
 }
 
+// Break caught: an asynchronous comparison redirect can replay caller credentials to another Profile path.
+func TestAsyncEvaluationReturnsRedirectWithoutCallingOtherProfile(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var redirectTargetCalls atomic.Int32
+			var redirectTargetHeaders http.Header
+			var redirectTargetBody []byte
+			var upstream *httptest.Server
+			upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/other-profile/v1/messages" {
+					redirectTargetCalls.Add(1)
+					redirectTargetHeaders = r.Header.Clone()
+					redirectTargetBody, _ = io.ReadAll(r.Body)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				var request struct {
+					Model string `json:"model"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				switch request.Model {
+				case "fast":
+					_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`)
+				case "strong":
+					w.Header().Set("Location", upstream.URL+"/other-profile/v1/messages")
+					w.WriteHeader(status)
+				default:
+					http.Error(w, "unexpected model", http.StatusBadRequest)
+				}
+			}))
+			defer upstream.Close()
+
+			runtime := autoProxyRuntime(t, upstream.URL, false)
+			runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+				Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+				ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+				TaskTimeout: time.Minute,
+			}
+			submitter := &capturingEvaluationSubmitter{}
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/messages",
+				strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Api-Key", "caller-api-key")
+			request.Header.Set("Authorization", "Bearer caller-token")
+			request.Header.Set("Cookie", "session=caller-cookie")
+			request.Header.Set("X-Caller-Metadata", "caller-metadata")
+			response := httptest.NewRecorder()
+
+			NewWithEvaluation(runtime, upstream.Client(), nil, nil, submitter).ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK || submitter.calls != 1 {
+				t.Fatalf("status=%d submissions=%d body=%q", response.Code, submitter.calls, response.Body.String())
+			}
+			_, err := submitter.job.Run(context.Background())
+			if redirectTargetCalls.Load() != 0 {
+				t.Fatalf("other Profile redirect target calls=%d headers=%v body=%q",
+					redirectTargetCalls.Load(), redirectTargetHeaders, redirectTargetBody)
+			}
+			if err == nil {
+				t.Fatal("asynchronous comparison unexpectedly succeeded after redirect")
+			}
+		})
+	}
+}
+
 func TestFailedAsyncComparisonStillChargesItsPlannedAttemptCost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`)

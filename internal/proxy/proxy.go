@@ -50,6 +50,7 @@ func NewWithEvaluation(
 	sessions *routing.SessionStore,
 	evaluations evaluationSubmitter,
 ) http.Handler {
+	client = proxyHTTPClient(client)
 	var visionPreprocessor *vision.Preprocessor
 	if cfg.Vision.Enabled && strings.TrimSpace(cfg.Vision.Model) != "" {
 		visionPreprocessor = vision.New(cfg, client, sdb)
@@ -1082,6 +1083,18 @@ func (h *handler) do(ctx context.Context, method, url string, headers http.Heade
 	}
 	copyHeaders(req.Header, headers)
 	return h.client.Do(req)
+}
+
+func proxyHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	cloned := *client
+	cloned.Jar = nil
+	cloned.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &cloned
 }
 
 // stream writes a successful response to w with SSE-friendly chunked flushing,

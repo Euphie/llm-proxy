@@ -74,6 +74,55 @@ func TestProxyPreservesEscapedPathQueryAndFiltersHopHeaders(t *testing.T) {
 	}
 }
 
+// Break caught: following an upstream redirect can replay a caller's request to another Profile path.
+func TestProxyReturnsRedirectWithoutCallingOtherProfile(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var redirectTargetCalls atomic.Int32
+			var redirectTargetHeaders http.Header
+			var redirectTargetBody []byte
+			var upstream *httptest.Server
+			upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/other-profile/v1/messages" {
+					redirectTargetCalls.Add(1)
+					redirectTargetHeaders = r.Header.Clone()
+					redirectTargetBody, _ = io.ReadAll(r.Body)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.Header().Set("Location", upstream.URL+"/other-profile/v1/messages")
+				w.WriteHeader(status)
+			}))
+			defer upstream.Close()
+
+			handler := New(
+				resolvedRuntime(t, 4, "coding", profile.ProtocolAnthropic, upstream.URL),
+				upstream.Client(),
+				nil,
+			)
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("caller body"))
+			request.Header.Set("X-Api-Key", "caller-api-key")
+			request.Header.Set("Authorization", "Bearer caller-token")
+			request.Header.Set("Cookie", "session=caller-cookie")
+			request.Header.Set("X-Caller-Metadata", "caller-metadata")
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != status {
+				t.Fatalf("status=%d, want %d", response.Code, status)
+			}
+			if response.Header().Get("Location") != upstream.URL+"/other-profile/v1/messages" {
+				t.Fatalf("Location=%q", response.Header().Get("Location"))
+			}
+			if redirectTargetCalls.Load() != 0 {
+				t.Fatalf("other Profile redirect target calls=%d headers=%v body=%q",
+					redirectTargetCalls.Load(), redirectTargetHeaders, redirectTargetBody)
+			}
+		})
+	}
+}
+
 func TestProxyRecordsProfileMainUsage(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{
