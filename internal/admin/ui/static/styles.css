@@ -863,6 +863,52 @@ caption {
   margin-top: 1rem;
 }
 
+.auto-routing-details {
+  margin-top: 1rem;
+}
+
+.auto-routing-subsection {
+  gap: 0.9rem;
+  padding: 1rem;
+  background: rgb(245 248 251 / 58%);
+  box-shadow: none;
+}
+
+.auto-routing-subsection > h3 {
+  margin: 0;
+  font-size: 0.96rem;
+}
+
+.model-participant-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.35rem 0.8rem;
+}
+
+.model-participant-list .checkbox-field {
+  padding: 0 0.65rem;
+  border: 1px solid var(--separator);
+  border-radius: 0.55rem;
+  background: rgb(255 255 255 / 42%);
+}
+
+.auto-route-row,
+.auto-candidate-row,
+.auto-task-route-row {
+  box-shadow: none;
+}
+
+.auto-candidate-row,
+.auto-task-route-row {
+  padding: 0.85rem;
+}
+
+.auto-route-row > .button,
+.auto-candidate-row > .button,
+.auto-task-route-row > .button {
+  margin-top: 0.75rem;
+}
+
 .retry-rule legend {
   padding: 0 0.35rem;
 }

@@ -24,6 +24,7 @@ test("new Anthropic Profile contains explicit defaults", () => {
   assert.equal(draft.config.vision.timeout, "2m");
   assert.equal(draft.config.vision.unlisted_model_policy, "bypass");
   assert.deepEqual(draft.config.models, []);
+  assert.equal(draft.config.auto_routing.enabled, false);
   assert.deepEqual(draft.config.overload_rules, []);
 });
 
@@ -95,9 +96,102 @@ test("model capability helpers append an explicit row and remove without sorting
       context_window: "",
       max_output_tokens: "",
       supports_vision: "",
+      supports_tools: "",
+      supports_structured_output: "",
+      input_price_micro_usd_per_million: "",
+      output_price_micro_usd_per_million: "",
     },
   ]);
   assert.deepEqual(removeModelCapability([first, second], 0), [second]);
+});
+
+test("payload preserves optional routing capabilities and integer micro-USD prices", () => {
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "priced-model",
+    context_window: "128K",
+    max_output_tokens: "16K",
+    supports_vision: false,
+    supports_tools: true,
+    supports_structured_output: false,
+    input_price_micro_usd_per_million: "100000",
+    output_price_micro_usd_per_million: "400000",
+  }];
+
+  assert.deepEqual(profilePayload(draft).config.models, [{
+    id: "priced-model",
+    context_window: 128000,
+    max_output_tokens: 16000,
+    supports_vision: false,
+    supports_tools: true,
+    supports_structured_output: false,
+    input_price_micro_usd_per_million: 100000,
+    output_price_micro_usd_per_million: 400000,
+  }]);
+});
+
+test("payload serializes a complete Profile-local Auto strategy", () => {
+  const draft = defaultProfileDraft();
+  draft.config.models = [
+    {
+      id: "fast",
+      context_window: 128000,
+      max_output_tokens: 16000,
+      supports_vision: false,
+      input_price_micro_usd_per_million: 100000,
+      output_price_micro_usd_per_million: 400000,
+    },
+    {
+      id: "strong",
+      context_window: 128000,
+      max_output_tokens: 16000,
+      supports_vision: true,
+      input_price_micro_usd_per_million: 3000000,
+      output_price_micro_usd_per_million: 15000000,
+    },
+  ];
+  draft.config.auto_routing = {
+    enabled: true,
+    participants: ["fast", "strong"],
+    strong_baseline_model: "strong",
+    task_analyzer_model: "fast",
+    analyzer_timeout: "5s",
+    analyzer_min_confidence_bps: "7000",
+    strategy: {
+      name: "20260802-001",
+      alias: "均衡",
+      default_route: "balanced",
+      task_routes: [{ task_type: "simple", route: "balanced" }],
+      routes: [{
+        id: "balanced",
+        min_quality_bps: "9000",
+        max_severe_error_rate_bps: "100",
+        candidates: [{
+          model: "fast",
+          quality_score_bps: "9200",
+          severe_error_rate_bps: "50",
+        }],
+      }],
+      budget: {
+        max_answer_attempts: "2",
+        max_auxiliary_calls: "2",
+        max_total_outbound_calls: "5",
+        max_retries_per_target: "1",
+        max_target_switches: "0",
+        max_model_switches: "1",
+        deadline: "2m",
+        max_worst_case_cost_micro_usd: "500000",
+      },
+    },
+  };
+
+  const auto = profilePayload(draft).config.auto_routing;
+  assert.equal(auto.enabled, true);
+  assert.deepEqual(auto.participants, ["fast", "strong"]);
+  assert.equal(auto.analyzer_min_confidence_bps, 7000);
+  assert.equal(auto.strategy.routes[0].min_quality_bps, 9000);
+  assert.equal(auto.strategy.routes[0].candidates[0].quality_score_bps, 9200);
+  assert.equal(auto.strategy.budget.max_worst_case_cost_micro_usd, 500000);
 });
 
 test("payload parses decimal K/M model limits and omits blank optional limits", () => {
@@ -242,6 +336,7 @@ test("payload preserves every configured field with numeric JSON types and retry
       protocol: "anthropic",
       upstream: "https://upstream.example",
       models: [],
+      auto_routing: { enabled: false },
       vision: {
         enabled: true,
         transport: "anthropic_messages",
@@ -507,6 +602,7 @@ test("editor renders exact accessible labels and sections and submits every conf
   assert.deepEqual(sectionHeadings(root), [
     "基础配置",
     "模型能力",
+    "智能路由",
     "视觉增强",
     "容错规则",
     "配置生成",
@@ -639,6 +735,17 @@ test("model editor rows add and remove in Profile order with explicit token and 
       choice.children.map((option) => [option.value, option.textContent]),
       [["", "请选择"], ["true", "是"], ["false", "否"]],
     );
+    assert.match(
+      fieldDescription(root, controlByField(row, "supports_tools")),
+      /Auto 请求包含 tools/,
+    );
+    assert.match(
+      fieldDescription(
+        root,
+        controlByField(row, "input_price_micro_usd_per_million"),
+      ),
+      /微美元\/百万 Token/,
+    );
   }
   assert.ok(findText(root, "不添加时不影响请求转发"));
 
@@ -651,6 +758,86 @@ test("model editor rows add and remove in Profile order with explicit token and 
   await buttonsByText(root, "删除模型")[0].dispatch("click");
   assert.deepEqual(modelIDs(root), ["manual-second", ""]);
   assert.equal(buttonTexts(root).includes("上移"), false);
+});
+
+test("Auto editor explains roles routes and budget and saves percentage inputs as basis points", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [
+    {
+      id: "fast", context_window: 128000, max_output_tokens: 16000,
+      supports_vision: false,
+      input_price_micro_usd_per_million: 100000,
+      output_price_micro_usd_per_million: 400000,
+    },
+    {
+      id: "strong", context_window: 128000, max_output_tokens: 16000,
+      supports_vision: true,
+      input_price_micro_usd_per_million: 3000000,
+      output_price_micro_usd_per_million: 15000000,
+    },
+  ];
+  draft.config.auto_routing = {
+    enabled: true,
+    participants: ["fast", "strong"],
+    strong_baseline_model: "strong",
+    task_analyzer_model: "fast",
+    analyzer_timeout: "5s",
+    analyzer_min_confidence_bps: 7000,
+    strategy: {
+      name: "20260802-001",
+      alias: "均衡",
+      default_route: "balanced",
+      task_routes: [{ task_type: "simple", route: "balanced" }],
+      routes: [{
+        id: "balanced",
+        min_quality_bps: 9000,
+        max_severe_error_rate_bps: 100,
+        candidates: [{
+          model: "fast",
+          quality_score_bps: 9200,
+          severe_error_rate_bps: 50,
+        }],
+      }],
+      budget: {
+        max_answer_attempts: 2,
+        max_auxiliary_calls: 2,
+        max_total_outbound_calls: 5,
+        max_retries_per_target: 1,
+        max_target_switches: 0,
+        max_model_switches: 1,
+        deadline: "2m",
+        max_worst_case_cost_micro_usd: 500000,
+      },
+    },
+  };
+  const saves = [];
+  renderProfileEditor(root, draft, {
+    save: async (payload) => saves.push(payload),
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  assert.equal(controlByName(root, "auto_routing_enabled").checked, true);
+  assert.equal(controlByName(root, "auto_analyzer_confidence").value, "70");
+  assert.equal(controlByName(root, "auto-route-0-min-quality").value, "90");
+  assert.match(
+    fieldDescription(root, controlByName(root, "auto_strong_baseline_model")),
+    /高风险/,
+  );
+  assert.match(
+    fieldDescription(root, controlByName(root, "auto-budget-total")),
+    /所有上游调用/,
+  );
+
+  controlByName(root, "auto_analyzer_confidence").value = "72.5";
+  controlByName(root, "auto-route-0-min-quality").value = "91.25";
+  await findTag(root, "FORM").dispatch("submit");
+
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].config.auto_routing.analyzer_min_confidence_bps, 7250);
+  assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_quality_bps, 9125);
+  assert.deepEqual(saves[0].config.auto_routing.participants, ["fast", "strong"]);
 });
 
 test("saved model rows retain empty optional limits while still showing catalog provenance", async (t) => {
