@@ -72,6 +72,26 @@ test("reliability keeps ordinary retries editable while Auto Target failover is 
   assert.equal(linkByText(root, "配置智能路由").getAttribute("href"), "/_admin/profiles/7/routing");
 });
 
+test("Profile section navigation protects unsaved changes", async (t) => {
+  const root = installFakeDOM(t);
+  const confirmations = [];
+  renderProfileEditor(root, profileFixture(), {
+    section: "models",
+    defaultProfileID: 7,
+    renderLegacy: legacySectionFixture,
+    confirmLeave: () => {
+      confirmations.push("asked");
+      return false;
+    },
+  });
+
+  const form = descendants(root).find((element) => element.tagName === "FORM");
+  await form.dispatch("input");
+  const event = await linkByText(root, "连接").dispatch("click");
+  assert.deepEqual(confirmations, ["asked"]);
+  assert.equal(event.defaultPrevented, true);
+});
+
 function legacySectionFixture(root) {
   const form = document.createElement("form");
   for (const heading of [
@@ -131,6 +151,7 @@ class FakeElement {
     this.attributes = new Map();
     this.textContent = "";
     this.className = "";
+    this.listeners = new Map();
   }
 
   append(...children) {
@@ -157,6 +178,23 @@ class FakeElement {
 
   getAttribute(name) {
     return this.attributes.get(name) ?? null;
+  }
+
+  addEventListener(name, listener) {
+    const listeners = this.listeners.get(name) || [];
+    listeners.push(listener);
+    this.listeners.set(name, listeners);
+  }
+
+  async dispatch(name) {
+    const event = {
+      defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true; },
+    };
+    for (const listener of this.listeners.get(name) || []) {
+      await listener(event);
+    }
+    return event;
   }
 }
 

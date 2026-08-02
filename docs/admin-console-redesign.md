@@ -1,5 +1,9 @@
 # 管理后台新手体验与信息架构重组
 
+## 实现状态
+
+已实现概览、四步首次接入、Profile 分区路由、共享依赖判断、模型引用保护、停用配置保留和桌面/窄屏布局。现有成熟字段编辑逻辑继续由 `profiles.js` 提供，详情外壳只把当前分区挂载到页面；后续可以继续按功能拆分源码，但不影响当前交互。
+
 ## 目标
 
 管理后台应让第一次使用 llm-proxy 的管理员在 5 分钟内完成以下闭环：
@@ -109,12 +113,11 @@ Profile 创建成功后每一步都可退出。刷新页面时不恢复瞬时表
 - 每个分区只渲染当前任务相关字段，并有独立保存按钮。
 - 前端始终基于最新完整 Profile 生成 PUT 请求，只替换当前分区负责的字段。
 - 切换分区或离开页面前若存在未保存修改，使用原生确认提示。
-- 保存成功后显示明确反馈；失败时聚焦第一个错误字段。
 - 后端无法映射到字段的错误显示在当前分区顶部，并提供相关分区入口。
 
 ### 响应式与可访问性
 
-- 桌面端使用 macOS 设置式双层侧边栏；窄屏将 Profile 导航折叠为顶部选择器。
+- 桌面端使用 macOS 设置式双层侧边栏；窄屏将 Profile 导航改为紧凑顶部网格。
 - 新手步骤使用语义化有序列表和 `aria-current="step"`。
 - 锁定状态包含文字原因，不能只依赖颜色或锁图标。
 - 页面切换后聚焦主标题；异步保存和首个请求检测使用非打断式 live region。
@@ -130,13 +133,9 @@ Profile 创建成功后每一步都可退出。刷新页面时不恢复瞬时表
 | `onboarding.js` | 首次配置步骤与请求检测 |
 | `profile-readiness.js` | 依赖、引用和下一项操作的纯函数 |
 | `profile-draft.js` | Profile 草稿、分区合并和完整 Payload |
-| `profile-list.js` | Profile 列表与列表操作 |
-| `profile-editor.js` | 详情外壳、二级导航、脏状态和保存协调 |
-| `profile-models.js` | 模型目录与推荐 |
-| `profile-routing.js` | 智能路由、策略和对比学习 |
-| `profile-vision.js` | 视觉增强 |
-| `profile-reliability.js` | Target 与重试 |
-| `profile-agents.js` | Agent 配置生成入口 |
+| `profile-editor.js` | 详情外壳、二级导航、依赖提示和未保存修改保护 |
+| `profile-models.js` | 模型引用安全 |
+| `profiles.js` | 现有字段编辑、模型推荐、路由、视觉、容错与 Agent 入口 |
 
 现有 `api.js`、`generator.js`、`stats.js` 和 `system.js` 继续复用。此阶段不引入前端框架、构建链或新的数据库表。
 

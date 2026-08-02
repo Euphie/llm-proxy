@@ -105,6 +105,34 @@ test("request poller pauses while hidden and stops after detection", async () =>
   assert.ok(cleared.length >= 1);
 });
 
+test("request poller resumes when the page becomes hidden during a scheduled check", async () => {
+  const scheduled = [];
+  const documentRef = visibilityDocument();
+  let loads = 0;
+  const poller = createRequestPoller({
+    documentRef,
+    interval: 25,
+    setTimeoutRef: (callback) => {
+      scheduled.push(callback);
+      return scheduled.length;
+    },
+    clearTimeoutRef: () => {},
+    load: async () => {
+      loads += 1;
+      if (loads === 2) documentRef.hidden = true;
+      return { summary: { requests: 0 } };
+    },
+    onDetected: () => {},
+  });
+
+  await poller.start();
+  await scheduled[0]();
+  documentRef.hidden = false;
+  await documentRef.dispatch("visibilitychange");
+  assert.equal(loads, 3);
+  poller.stop();
+});
+
 function profileFixture() {
   return {
     id: 7,

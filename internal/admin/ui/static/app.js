@@ -49,7 +49,19 @@ async function renderSession(root, client, session, generateProfile, path) {
     renderPasswordScreen(root, client, generateProfile, path);
     return;
   }
-  await renderAuthenticated(root, client, session, generateProfile, path);
+  const needsSetup = session?.initialization_state === "profile_setup_required" &&
+    (path === "/_admin" || path === "/_admin/");
+  const effectivePath = needsSetup ? "/_admin/setup" : path;
+  if (needsSetup && typeof window !== "undefined") {
+    window.history?.replaceState?.(null, "", effectivePath);
+  }
+  await renderAuthenticated(
+    root,
+    client,
+    session,
+    generateProfile,
+    effectivePath,
+  );
 }
 
 function renderLoginScreen(root, client, generateProfile, path) {

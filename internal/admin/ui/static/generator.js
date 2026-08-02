@@ -479,7 +479,7 @@ function requireCompactionPercent(percent) {
 export function openConfigurationGenerator(
   root,
   profile,
-  { origin = currentOrigin() } = {},
+  { origin = currentOrigin(), adapter: initialAdapter = "" } = {},
 ) {
   const protocol = String(profile?.config?.protocol ?? "anthropic");
   const slug = String(profile?.slug ?? "");
@@ -511,6 +511,7 @@ export function openConfigurationGenerator(
     availableAgentAdapters(protocol),
     {
       description: "选择要生成配置的客户端；可选项由 Profile 协议决定。",
+      value: initialAdapter,
     },
   );
   const adapterRoot = generatorElement("div", "stack");
@@ -1391,7 +1392,9 @@ function generatorSelect(parent, labelText, name, choices, options = {}) {
     option.value = value;
     select.append(option);
   }
-  select.value = choices[0][0];
+  select.value = choices.some(([value]) => value === options.value)
+    ? options.value
+    : choices[0][0];
   appendGeneratorField(parent, labelText, select, options.description);
   return select;
 }

@@ -814,6 +814,28 @@ test("Anthropic generator exposes exact scopes and temporary placeholder inputs"
   assert.deepEqual(root.children, [listMarker]);
 });
 
+test("configuration generator honors a compatible preselected Agent", (t) => {
+  const root = installFakeDOM(t);
+  const dialog = openConfigurationGenerator(
+    root,
+    {
+      slug: "coding",
+      display_name: "Coding",
+      config: { protocol: "anthropic", models: [] },
+    },
+    {
+      origin: "https://proxy.example.com",
+      adapter: "opencode-anthropic",
+    },
+  );
+
+  assert.equal(
+    controlByName(dialog, "generator-agent").value,
+    "opencode-anthropic",
+  );
+  assert.equal(controlByName(dialog, "generator-opencode-scope").value, "global");
+});
+
 test("Anthropic OpenCode adapter generates a native Messages config", async (t) => {
   const root = installFakeDOM(t);
   const dialog = openConfigurationGenerator(

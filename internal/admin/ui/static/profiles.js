@@ -1100,6 +1100,7 @@ export function renderProfileEditor(root, source, actions = {}) {
         if (!mutation.allowed) {
           id.value = model.id;
           refreshRecommendations();
+          refreshAutoModelOptions();
           openModelReferenceDialog(root, working, model.id, mutation.references);
           return;
         }

@@ -12,11 +12,6 @@ export function nextScreen(session) {
 
 export function renderLogin(root, handlers) {
   const card = createAuthCard("登录");
-  const warning = document.createElement("p");
-  warning.className = "warning-banner";
-  warning.textContent =
-    "首次登录存在公网抢占风险，请使用初始账号登录并立即修改密码。";
-
   const form = document.createElement("form");
   form.className = "stack";
   const username = createField({
@@ -51,7 +46,7 @@ export function renderLogin(root, handlers) {
     }
   });
 
-  card.append(warning, form);
+  card.append(form);
   root.replaceChildren(createAuthLayout(card));
 }
 

@@ -92,7 +92,7 @@ test("login renders the fixed accessible copy and submits transient credentials"
     descendants(root).some((element) => element.tagName === "NAV"),
     false,
   );
-  assert.ok(findText(root, "首次登录存在公网抢占风险"));
+  assert.equal(findText(root, "首次登录存在公网抢占风险"), undefined);
   assert.deepEqual(labelTexts(root), ["用户名", "密码"]);
   assert.equal(buttonByText(root, "登录").type, "submit");
 
@@ -378,6 +378,26 @@ test("authenticated setup route opens the four-step first-run flow", async (t) =
   assert.equal(findHeading(root, "开始配置").tagName, "H1");
   assert.ok(findText(root, "让第一个 Agent 跑起来"));
   assert.equal(descendants(root).filter((element) => element.tagName === "OL")[0].children.length, 4);
+});
+
+test("fresh administrator enters setup directly from the admin root", async (t) => {
+  const root = installFakeDOM(t);
+  const bootstrap = await loadBootstrap();
+  await bootstrap({
+    root,
+    path: "/_admin/",
+    client: {
+      session: async () => ({
+        username: "admin",
+        must_change_password: false,
+        initialization_state: "profile_setup_required",
+      }),
+      listProfiles: async () => ({ default_profile_id: 0, profiles: [] }),
+    },
+  });
+
+  assert.equal(findHeading(root, "开始配置").tagName, "H1");
+  assert.ok(findText(root, "让第一个 Agent 跑起来"));
 });
 
 test("a 401 during password change clears the form and returns to login", async (t) => {

@@ -26,6 +26,7 @@ export function renderProfileEditor(root, source, {
   section = "overview",
   defaultProfileID = 0,
   renderLegacy = renderLegacyProfileEditor,
+  confirmLeave = defaultConfirmLeave,
   ...actions
 } = {}) {
   const draft = profileDraft(source, defaultProfileID);
@@ -34,6 +35,8 @@ export function renderProfileEditor(root, source, {
   const navigation = element("nav", "profile-section-nav");
   navigation.setAttribute("aria-label", "Profile 设置");
   const content = element("section", "profile-section-content stack");
+  let editedForm = null;
+  let dirtyState = null;
 
   for (const [id, label] of sectionDefinitions) {
     const link = textElement("a", label);
@@ -57,6 +60,21 @@ export function renderProfileEditor(root, source, {
   if (section === "overview") {
     content.append(profileOverview(draft, readiness));
   } else {
+    dirtyState = { value: false };
+    const guardedActions = {
+      ...actions,
+      save: async (payload) => {
+        await actions.save?.(payload);
+        dirtyState.value = false;
+      },
+      cancel: () => {
+        if (dirtyState.value && !confirmLeave()) {
+          return;
+        }
+        dirtyState.value = false;
+        actions.cancel?.();
+      },
+    };
     const state = readiness.sections[section];
     if (state?.state === "blocked" || state?.state === "attention") {
       content.append(dependencyPanel(state));
@@ -67,9 +85,20 @@ export function renderProfileEditor(root, source, {
     if (targetDependency) {
       content.append(dependencyPanel(targetDependency));
     }
-    content.append(renderLegacySection(draft, section, renderLegacy, actions, {
+    const legacyMount = renderLegacySection(draft, section, renderLegacy, guardedActions, {
       hideTargets: Boolean(targetDependency),
-    }));
+    });
+    editedForm = legacyMount.children[0] || null;
+    content.append(legacyMount);
+  }
+
+  if (editedForm) {
+    protectUnsavedChanges(
+      navigation,
+      editedForm,
+      dirtyState,
+      confirmLeave,
+    );
   }
 
   shell.append(navigation, content);
@@ -188,6 +217,32 @@ function reliabilityTargetDependency(draft) {
     };
   }
   return null;
+}
+
+function protectUnsavedChanges(navigation, form, dirtyState, confirmLeave) {
+  const markDirty = () => { dirtyState.value = true; };
+  form.addEventListener("input", markDirty);
+  form.addEventListener("change", markDirty);
+  for (const link of navigation.children) {
+    link.addEventListener("click", (event) => {
+      if (dirtyState.value && !confirmLeave()) {
+        event.preventDefault();
+      }
+    });
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeunload", (event) => {
+      if (!dirtyState.value) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+    });
+  }
+}
+
+function defaultConfirmLeave() {
+  return typeof window === "undefined" || window.confirm("当前页面有未保存的修改，确定离开吗？");
 }
 
 function sectionDescription(section, state) {

@@ -1106,6 +1106,30 @@ test("model editor blocks deletion while an exact feature reference remains", as
   assert.equal(linkByText(dialog, "视觉模型").getAttribute("href"), "/_admin/profiles/7/vision");
 });
 
+test("blocked model rename restores Auto model choices", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.id = 7;
+  draft.slug = "coding";
+  draft.display_name = "Coding";
+  draft.config.upstream = "https://upstream.example";
+  draft.config.models = [{ id: "strong", supports_vision: true }];
+  draft.config.auto_routing.participants = ["strong"];
+  draft.config.vision.model = "strong";
+
+  renderProfileEditor(root, draft, { save: async () => {}, cancel: () => {} });
+  const id = controlByField(modelRows(root)[0], "id");
+  id.value = "renamed";
+  await id.dispatch("input");
+  await id.dispatch("blur");
+
+  assert.equal(id.value, "strong");
+  assert.equal(
+    controlByName(root, "auto-participant-0").parentNode.textContent,
+    "strong",
+  );
+});
+
 test("Auto editor explains roles routes and budget and saves percentage inputs as basis points", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();

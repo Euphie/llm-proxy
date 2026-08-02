@@ -260,6 +260,7 @@ export function createRequestPoller({
     if (stopped || running || documentRef?.hidden) {
       return;
     }
+    timer = 0;
     running = true;
     try {
       const data = await load();
