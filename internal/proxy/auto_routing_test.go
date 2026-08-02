@@ -831,6 +831,135 @@ func TestAsyncEvaluationFailureChargesVisionCallsWithoutUnsentAnswer(t *testing.
 	}
 }
 
+func TestAsyncEvaluationPreCanceledAnswerDoesNotChargeOrEnterTransport(t *testing.T) {
+	var asyncCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		switch {
+		case model == "fast" && root["system"] != nil:
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+		case model == "fast":
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`)
+		default:
+			asyncCalls.Add(1)
+			http.Error(w, "canceled evaluation reached upstream", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	NewWithEvaluation(runtime, server.Client(), nil, nil, submitter).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || submitter.calls != 1 {
+		t.Fatalf("status=%d submissions=%d body=%q", response.Code, submitter.calls, response.Body.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := submitter.job.Run(ctx)
+	if !errors.Is(err, context.Canceled) || asyncCalls.Load() != 0 ||
+		result.SpentMicroUSD != 0 || result.Evidence != nil {
+		t.Fatalf("err=%v async_calls=%d result=%+v", err, asyncCalls.Load(), result)
+	}
+}
+
+func TestAsyncEvaluationCanceledBeforeReviewerChargesOnlyAnswerTransport(t *testing.T) {
+	var cancelEvaluation context.CancelFunc
+	var answerCalls atomic.Int32
+	var reviewerCalls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(request.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		responseBody := ""
+		switch {
+		case model == "fast" && root["system"] != nil:
+			responseBody = `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`
+		case model == "fast":
+			responseBody = `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`
+		case model == "strong" && root["system"] != nil:
+			reviewerCalls.Add(1)
+			responseBody = `{"content":[{"type":"text","text":"{\"winner\":\"tie\",\"severe_a\":false,\"severe_b\":false}"}]}`
+		case model == "strong":
+			answerCalls.Add(1)
+			if cancelEvaluation != nil {
+				cancelEvaluation()
+			}
+			responseBody = `{"model":"strong","content":[{"type":"text","text":"generated answer"}]}`
+		default:
+			return nil, fmt.Errorf("unexpected model %q", model)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(responseBody)),
+			Request:    request,
+		}, nil
+	})}
+	runtime := autoProxyRuntime(t, "https://upstream.test", false)
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	body := `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	NewWithEvaluation(runtime, client, nil, nil, submitter).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || submitter.calls != 1 || answerCalls.Load() != 0 {
+		t.Fatalf("status=%d submissions=%d answers=%d body=%q",
+			response.Code, submitter.calls, answerCalls.Load(), response.Body.String())
+	}
+	routeRequest, err := routing.ParseAutoRequest(
+		runtime.Protocol, http.MethodPost, "/v1/messages", "application/json", []byte(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := routing.NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, ok := planner.EvaluationPair(routeRequest, routing.Classification{
+		TaskType: "simple", Risk: routing.RiskNormal, ConfidenceBPS: 9200,
+		Source: routing.ClassificationSourceAnalyzer,
+	}, "fast")
+	if !ok {
+		t.Fatal("evaluation pair unavailable")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelEvaluation = cancel
+	result, err := submitter.job.Run(ctx)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, errEvaluationCostInvariant) ||
+		answerCalls.Load() != 1 || reviewerCalls.Load() != 0 ||
+		result.SpentMicroUSD != pair.Reference.AnswerCallCostMicroUSD() || result.Evidence != nil {
+		t.Fatalf("err=%v answer=%d reviewer=%d result=%+v",
+			err, answerCalls.Load(), reviewerCalls.Load(), result)
+	}
+}
+
 // Break caught: an asynchronous comparison redirect can replay caller credentials to another Profile path.
 func TestAsyncEvaluationReturnsRedirectWithoutCallingOtherProfile(t *testing.T) {
 	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {

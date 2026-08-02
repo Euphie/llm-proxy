@@ -761,10 +761,14 @@ func (h *handler) submitEvaluation(
 		if err != nil {
 			return failedOutput(), err
 		}
-		if err := costTracker.charge(attempt.AnswerCallCostMicroUSD()); err != nil {
-			return failedOutput(), err
-		}
-		response, err := h.do(ctx, http.MethodPost, attemptTarget, forwardedHeaders, body)
+		response, err := h.doEvaluation(
+			ctx,
+			http.MethodPost,
+			attemptTarget,
+			forwardedHeaders,
+			body,
+			func() error { return costTracker.charge(attempt.AnswerCallCostMicroUSD()) },
+		)
 		if err != nil {
 			return failedOutput(), err
 		}
@@ -789,12 +793,23 @@ func (h *handler) submitEvaluation(
 		if err != nil {
 			return evaluation.ReviewVerdict{}, err
 		}
-		if err := costTracker.charge(reviewerCost); err != nil {
-			return evaluation.ReviewVerdict{}, err
-		}
-		response, err := h.do(ctx, http.MethodPost, reviewerTarget, forwardedHeaders, body)
+		reviewerSpent := int64(0)
+		response, err := h.doEvaluation(
+			ctx,
+			http.MethodPost,
+			reviewerTarget,
+			forwardedHeaders,
+			body,
+			func() error {
+				if err := costTracker.charge(reviewerCost); err != nil {
+					return err
+				}
+				reviewerSpent = reviewerCost
+				return nil
+			},
+		)
 		if err != nil {
-			return evaluation.ReviewVerdict{ReviewerCostMicroUSD: reviewerCost}, err
+			return evaluation.ReviewVerdict{ReviewerCostMicroUSD: reviewerSpent}, err
 		}
 		responseBody, err := readEvaluationResponse(response)
 		if err != nil {
@@ -1334,12 +1349,49 @@ func requestVisionOperation(
 }
 
 func (h *handler) do(ctx context.Context, method, url string, headers http.Header, body []byte) (*http.Response, error) {
+	req, err := newProxyRequest(ctx, method, url, headers, body)
+	if err != nil {
+		return nil, err
+	}
+	return h.client.Do(req)
+}
+
+func (h *handler) doEvaluation(
+	ctx context.Context,
+	method string,
+	url string,
+	headers http.Header,
+	body []byte,
+	charge func() error,
+) (*http.Response, error) {
+	req, err := newProxyRequest(ctx, method, url, headers, body)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if charge != nil {
+		if err := charge(); err != nil {
+			return nil, err
+		}
+	}
+	return h.client.Do(req)
+}
+
+func newProxyRequest(
+	ctx context.Context,
+	method string,
+	url string,
+	headers http.Header,
+	body []byte,
+) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	copyHeaders(req.Header, headers)
-	return h.client.Do(req)
+	return req, nil
 }
 
 func proxyHTTPClient(client *http.Client) *http.Client {
