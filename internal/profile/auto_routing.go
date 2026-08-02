@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -22,6 +23,25 @@ const (
 
 const maxDynamicOptimizationTaskTimeout = 10 * time.Minute
 
+const (
+	defaultLongContextThresholdBPS = 7500
+	maxRiskPatterns                = 64
+	maxRiskPatternRunes            = 128
+)
+
+var defaultSensitiveTextPatterns = []string{
+	"delete production", "drop table", "deploy to production", "rotate credential",
+	"删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
+	"edit the file", "modify the code", "fix the code", "implement this", "refactor",
+	"修改代码", "修复代码", "重构", "开始开发", "写代码",
+}
+
+var defaultSensitiveToolPatterns = []string{
+	"shell", "exec", "write", "edit", "delete", "apply_patch", "apply-patch",
+	"deploy", "rotate_credential", "rotate_secret", "rotate_key", "payment", "transfer",
+	"database_mutation", "database_write", "database_delete", "db_write", "db_delete",
+}
+
 type AutoRoutingConfig struct {
 	Enabled                  bool                      `json:"enabled"`
 	Participants             []string                  `json:"participants,omitempty"`
@@ -30,8 +50,16 @@ type AutoRoutingConfig struct {
 	AnalyzerTimeout          string                    `json:"analyzer_timeout,omitempty"`
 	AnalyzerMinConfidenceBPS int                       `json:"analyzer_min_confidence_bps,omitempty"`
 	SessionTTL               string                    `json:"session_ttl,omitempty"`
+	RiskPolicy               RiskPolicyConfig          `json:"risk_policy,omitempty"`
 	DynamicOptimization      DynamicOptimizationConfig `json:"dynamic_optimization,omitempty"`
 	Strategy                 RoutingStrategyConfig     `json:"strategy,omitempty"`
+}
+
+type RiskPolicyConfig struct {
+	SensitiveTextPatterns    []string `json:"sensitive_text_patterns"`
+	SensitiveToolPatterns    []string `json:"sensitive_tool_patterns"`
+	StructuredOutputHighRisk bool     `json:"structured_output_high_risk"`
+	LongContextThresholdBPS  int      `json:"long_context_threshold_bps"`
 }
 
 type DynamicOptimizationConfig struct {
@@ -90,10 +118,18 @@ type AutoRoutingRuntime struct {
 	AnalyzerTimeout          time.Duration
 	AnalyzerMinConfidenceBPS int
 	SessionTTL               time.Duration
+	RiskPolicy               RiskPolicyRuntime
 	DynamicOptimization      DynamicOptimizationRuntime
 	Strategy                 RoutingStrategyRuntime
 
 	participantSet map[string]struct{}
+}
+
+type RiskPolicyRuntime struct {
+	SensitiveTextPatterns    []string
+	SensitiveToolPatterns    []string
+	StructuredOutputHighRisk bool
+	LongContextThresholdBPS  int
 }
 
 type DynamicOptimizationRuntime struct {
@@ -224,6 +260,10 @@ func resolveAutoRouting(
 			return AutoRoutingRuntime{}, invalidAuto("Session TTL must be between 5m and 720h")
 		}
 	}
+	riskPolicy, err := resolveRiskPolicy(config.RiskPolicy)
+	if err != nil {
+		return AutoRoutingRuntime{}, err
+	}
 
 	strategy, err := resolveRoutingStrategy(config.Strategy, participantSet)
 	if err != nil {
@@ -241,10 +281,71 @@ func resolveAutoRouting(
 		AnalyzerTimeout:          analyzerTimeout,
 		AnalyzerMinConfidenceBPS: config.AnalyzerMinConfidenceBPS,
 		SessionTTL:               sessionTTL,
+		RiskPolicy:               riskPolicy,
 		DynamicOptimization:      dynamicOptimization,
 		Strategy:                 strategy,
 		participantSet:           participantSet,
 	}, nil
+}
+
+func resolveRiskPolicy(config RiskPolicyConfig) (RiskPolicyRuntime, error) {
+	textPatterns, err := resolveRiskPatterns(
+		config.SensitiveTextPatterns,
+		defaultSensitiveTextPatterns,
+		"sensitive text",
+	)
+	if err != nil {
+		return RiskPolicyRuntime{}, err
+	}
+	toolPatterns, err := resolveRiskPatterns(
+		config.SensitiveToolPatterns,
+		defaultSensitiveToolPatterns,
+		"sensitive tool",
+	)
+	if err != nil {
+		return RiskPolicyRuntime{}, err
+	}
+	threshold := config.LongContextThresholdBPS
+	if threshold == 0 {
+		threshold = defaultLongContextThresholdBPS
+	}
+	if threshold < 1 || threshold > 10_000 {
+		return RiskPolicyRuntime{}, invalidAuto(
+			"long-context threshold must be between 1 and 10000 basis points",
+		)
+	}
+	return RiskPolicyRuntime{
+		SensitiveTextPatterns:    textPatterns,
+		SensitiveToolPatterns:    toolPatterns,
+		StructuredOutputHighRisk: config.StructuredOutputHighRisk,
+		LongContextThresholdBPS:  threshold,
+	}, nil
+}
+
+func resolveRiskPatterns(configured, defaults []string, label string) ([]string, error) {
+	if configured == nil {
+		return append([]string(nil), defaults...), nil
+	}
+	if len(configured) > maxRiskPatterns {
+		return nil, invalidAuto("%s patterns must contain at most %d entries", label, maxRiskPatterns)
+	}
+	resolved := make([]string, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for index, pattern := range configured {
+		if pattern == "" || strings.TrimSpace(pattern) != pattern {
+			return nil, invalidAuto("%s pattern %d must be non-empty without surrounding whitespace", label, index+1)
+		}
+		if utf8.RuneCountInString(pattern) > maxRiskPatternRunes {
+			return nil, invalidAuto("%s pattern %d must contain at most %d characters", label, index+1, maxRiskPatternRunes)
+		}
+		key := strings.ToLower(pattern)
+		if _, ok := seen[key]; ok {
+			return nil, invalidAuto("%s pattern %d is a duplicate ignoring case", label, index+1)
+		}
+		seen[key] = struct{}{}
+		resolved[index] = pattern
+	}
+	return resolved, nil
 }
 
 func resolveDynamicOptimization(

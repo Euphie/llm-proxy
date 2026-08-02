@@ -5,10 +5,68 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
+
+func TestParseAutoRequestUsesSanitizedCanonicalEnvelopeForTokenEstimate(t *testing.T) {
+	large := strings.Repeat("A", 3<<20)
+	image := `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + large + `"}},{"type":"text","text":"hello"}]}]}`
+	request := autoAnthropicRequest(t, image)
+	if request.Facts.EstimatedInputTokens > 500 {
+		t.Fatalf("image estimate=%d", request.Facts.EstimatedInputTokens)
+	}
+	runtime := routingRuntime(t, false)
+	if classification, matched := ClassifyLocal(
+		request,
+		runtime.Models["strong"],
+		runtime.AutoRouting.RiskPolicy,
+	); matched && classification.Risk == RiskHigh {
+		t.Fatalf("base64 image caused high-risk context routing: %+v", classification)
+	}
+
+	lookalike := `{"model":"auto","max_tokens":1000,"metadata":{"data":"` + large + `"},"messages":[{"role":"user","content":"hello"}]}`
+	request = autoAnthropicRequest(t, lookalike)
+	if request.Facts.EstimatedInputTokens < (3<<20)/4 {
+		t.Fatalf("lookalike estimate=%d", request.Facts.EstimatedInputTokens)
+	}
+}
+
+func TestResponsesStringAndDirectInputTextDriveAnalysisAndEstimation(t *testing.T) {
+	longText := strings.Repeat("ordinary text ", 100_000)
+	request, err := ParseAutoRequest(profile.ProtocolOpenAI, http.MethodPost, "/v1/responses", "application/json", []byte(`{"model":"auto","input":`+mustJSON(t, longText)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Facts.EstimatedInputTokens < len(longText)/4 || !strings.HasPrefix(request.EvaluationText(), "ordinary text") {
+		t.Fatalf("estimate=%d text=%q", request.Facts.EstimatedInputTokens, request.EvaluationText())
+	}
+
+	request, err = ParseAutoRequest(profile.ProtocolOpenAI, http.MethodPost, "/v1/responses", "application/json", []byte(`{"model":"auto","input":[{"type":"input_text","text":"direct task"}]}`))
+	if err != nil || request.EvaluationText() != "direct task" {
+		t.Fatalf("request=%+v error=%v", request, err)
+	}
+}
+
+func TestTokenEstimateKeepsOrdinaryToolSchemaBytes(t *testing.T) {
+	largeDescription := strings.Repeat("schema text ", 100_000)
+	body := `{"model":"auto","max_tokens":1000,"tools":[{"name":"weather","description":` + mustJSON(t, largeDescription) + `}],"messages":[{"role":"user","content":"hello"}]}`
+	request := autoAnthropicRequest(t, body)
+	if request.Facts.EstimatedInputTokens < len(largeDescription)/4 {
+		t.Fatalf("tool schema estimate=%d", request.Facts.EstimatedInputTokens)
+	}
+}
+
+func mustJSON(t *testing.T, value string) string {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
 
 func TestRequestedModelRecognizesOnlyTopLevelString(t *testing.T) {
 	tests := []struct {

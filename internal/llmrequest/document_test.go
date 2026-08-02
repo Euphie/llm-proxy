@@ -2,6 +2,9 @@ package llmrequest
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -125,6 +128,117 @@ func TestResponsesEasyInputMessageRejectsMalformedContent(t *testing.T) {
 		body := `{"input":[{"role":"user","content":` + content + `}]}`
 		if _, err := Parse(OperationOpenAIResponses, []byte(body)); err == nil {
 			t.Fatalf("Parse(%s) error=nil", body)
+		}
+	}
+}
+
+func TestDocumentExtractsOnlyCanonicalActualAndForcedToolOperations(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation Operation
+		body      string
+		want      []string
+	}{
+		{
+			name: "anthropic", operation: OperationAnthropicMessages,
+			body: `{"tools":[{"name":"advertised_delete"}],"tool_choice":{"type":"tool","name":"forced_deploy"},"messages":[{"role":"user","content":[{"type":"tool_use","name":"user_lookalike","input":{}}]},{"role":"assistant","content":[{"type":"tool_use","name":"write_file","input":{}},{"type":"tool_use","name":"WRITE_FILE","input":{}}]}]}`,
+			want: []string{"forced_deploy", "write_file"},
+		},
+		{
+			name: "chat completions", operation: OperationOpenAIChatCompletions,
+			body: `{"tools":[{"type":"function","function":{"name":"advertised_delete"}}],"tool_choice":{"type":"function","function":{"name":"forced_exec"}},"messages":[{"role":"user","content":"safe","tool_calls":[{"function":{"name":"user_lookalike"}}]},{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"apply_patch","arguments":"{}"}}]}]}`,
+			want: []string{"forced_exec", "apply_patch"},
+		},
+		{
+			name: "responses", operation: OperationOpenAIResponses,
+			body: `{"tools":[{"type":"function","name":"advertised_delete"}],"tool_choice":{"type":"function","name":"forced_transfer"},"input":[{"type":"function_call","name":"database_mutation","arguments":"{}"},{"type":"input_text","text":"safe"}]}`,
+			want: []string{"forced_transfer", "database_mutation"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			document, err := Parse(tt.operation, []byte(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := document.ActualToolOperations(); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("operations=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDocumentAdvertisedToolDefinitionsDoNotBecomeActualOperations(t *testing.T) {
+	document, err := Parse(OperationOpenAIResponses, []byte(`{"tools":[{"type":"function","name":"delete_database"}],"input":"check weather"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := document.ActualToolOperations(); len(got) != 0 {
+		t.Fatalf("operations=%v", got)
+	}
+}
+
+func TestActualToolOperationsAreBoundedAndDeduplicated(t *testing.T) {
+	blocks := make([]map[string]string, maxActualToolOperations+10)
+	blocks[0] = map[string]string{"type": "tool_use", "name": strings.Repeat("x", maxActualToolNameRunes+20)}
+	blocks[1] = map[string]string{"type": "tool_use", "name": strings.Repeat("X", maxActualToolNameRunes+20)}
+	for index := 2; index < len(blocks); index++ {
+		blocks[index] = map[string]string{"type": "tool_use", "name": fmt.Sprintf("tool_%d", index)}
+	}
+	body, err := json.Marshal(map[string]any{
+		"messages": []any{map[string]any{"role": "assistant", "content": blocks}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Parse(OperationAnthropicMessages, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := document.ActualToolOperations()
+	if len(operations) != maxActualToolOperations || len([]rune(operations[0])) != maxActualToolNameRunes {
+		t.Fatalf("operations count=%d first length=%d", len(operations), len([]rune(operations[0])))
+	}
+}
+
+func TestCanonicalEstimationJSONReplacesOnlyProtocolImageBase64Payload(t *testing.T) {
+	large := strings.Repeat("A", 1024)
+	body := `{"metadata":{"image_url":"data:image/png;base64,` + large + `"},"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + large + `"}},{"type":"text","text":"ordinary text"}]}]}`
+	document, err := Parse(OperationOpenAIChatCompletions, []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := document.CanonicalEstimationJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(got, []byte(large)) != 1 || !bytes.Contains(got, []byte("data:image/png;base64,[image-data]")) ||
+		!bytes.Contains(got, []byte("ordinary text")) {
+		t.Fatalf("canonical estimation JSON=%s", got)
+	}
+}
+
+func TestCanonicalEstimationJSONSanitizesAllProtocolBase64ImageShapes(t *testing.T) {
+	const payload = "QUJDREVGR0hJSktMTU5PUA=="
+	tests := []struct {
+		operation Operation
+		body      string
+	}{
+		{OperationAnthropicMessages, `{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + payload + `"}}]}]}`},
+		{OperationOpenAIChatCompletions, `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + payload + `"}}]}]}`},
+		{OperationOpenAIResponses, `{"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + payload + `"}]}]}`},
+	}
+	for _, tt := range tests {
+		document, err := Parse(tt.operation, []byte(tt.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := document.CanonicalEstimationJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(got, []byte(payload)) || !bytes.Contains(got, []byte(imageEstimationMarker)) {
+			t.Fatalf("operation=%s envelope=%s", tt.operation, got)
 		}
 	}
 }

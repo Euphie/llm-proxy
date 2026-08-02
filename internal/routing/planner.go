@@ -661,6 +661,8 @@ func visionTransportSupportsSources(
 
 func cloneAutoRouting(auto profile.AutoRoutingRuntime) profile.AutoRoutingRuntime {
 	auto.Participants = append([]string(nil), auto.Participants...)
+	auto.RiskPolicy.SensitiveTextPatterns = append([]string(nil), auto.RiskPolicy.SensitiveTextPatterns...)
+	auto.RiskPolicy.SensitiveToolPatterns = append([]string(nil), auto.RiskPolicy.SensitiveToolPatterns...)
 	auto.Strategy = cloneStrategy(auto.Strategy)
 	return auto
 }

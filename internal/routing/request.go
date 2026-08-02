@@ -36,6 +36,7 @@ type RequestFacts struct {
 	HasImages                bool                         `json:"has_images"`
 	ImageSources             []llmrequest.ImageSourceKind `json:"image_sources,omitempty"`
 	HasTools                 bool                         `json:"has_tools"`
+	ActualToolOperations     []string                     `json:"actual_tool_operations,omitempty"`
 	RequiresStructuredOutput bool                         `json:"requires_structured_output"`
 	Stream                   bool                         `json:"stream"`
 }
@@ -90,11 +91,15 @@ func ParseAutoRequest(
 		return Request{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	images := document.Images()
+	estimationJSON, err := document.CanonicalEstimationJSON()
+	if err != nil {
+		return Request{}, fmt.Errorf("%w: canonical token estimate: %v", ErrInvalidRequest, err)
+	}
 
 	return Request{
 		Operation:      operation,
 		Model:          model,
-		Facts:          extractFacts(operation, root, body, images),
+		Facts:          extractFacts(operation, root, estimatedTokens(estimationJSON), images, document.ActualToolOperations()),
 		root:           cloneRoot(root),
 		evaluationText: boundedRoutingText(document.Texts()),
 	}, nil
@@ -159,16 +164,18 @@ func supportedOperation(protocol profile.Protocol, method, path string) (Operati
 func extractFacts(
 	operation Operation,
 	root map[string]json.RawMessage,
-	body []byte,
+	estimatedInputTokens int,
 	images []llmrequest.Image,
+	actualToolOperations []string,
 ) RequestFacts {
 	imageCount := len(images)
 	facts := RequestFacts{
-		EstimatedInputTokens: (len(body) + 3) / 4,
+		EstimatedInputTokens: estimatedInputTokens,
 		ImageCount:           imageCount,
 		HasImages:            imageCount > 0,
 		ImageSources:         make([]llmrequest.ImageSourceKind, imageCount),
 		HasTools:             nonEmptyArray(root["tools"]),
+		ActualToolOperations: append([]string(nil), actualToolOperations...),
 		Stream:               boolValue(root["stream"]),
 	}
 	for index, image := range images {
@@ -190,6 +197,17 @@ func extractFacts(
 		facts.RequiresStructuredOutput = nestedType(root["text"], "format") == "json_schema"
 	}
 	return facts
+}
+
+func estimatedTokens(envelope []byte) int {
+	return len(envelope)/4 + boolInt(len(envelope)%4 != 0)
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func positiveInt(raw json.RawMessage) int {

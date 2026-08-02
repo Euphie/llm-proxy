@@ -58,7 +58,7 @@ func (e *Engine) RouteWithPreference(
 	budget *AttemptBudget,
 	resolvePreference func(routeID string) SessionPreference,
 ) (ExecutionPlan, Classification, error) {
-	if classification, matched := ClassifyLocal(request, e.baseline); matched {
+	if classification, matched := ClassifyLocal(request, e.baseline, e.auto.RiskPolicy); matched {
 		plan, err := e.plan(request, classification, resolvePreference, budget)
 		return plan, classification, err
 	}

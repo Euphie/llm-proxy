@@ -29,6 +29,21 @@ test("new Anthropic Profile contains explicit defaults", () => {
   assert.equal(draft.config.vision.unlisted_model_policy, "bypass");
   assert.deepEqual(draft.config.models, []);
   assert.equal(draft.config.auto_routing.enabled, false);
+	assert.deepEqual(draft.config.auto_routing.risk_policy, {
+		sensitive_text_patterns: [
+			"delete production", "drop table", "deploy to production", "rotate credential",
+			"删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
+			"edit the file", "modify the code", "fix the code", "implement this", "refactor",
+			"修改代码", "修复代码", "重构", "开始开发", "写代码",
+		],
+		sensitive_tool_patterns: [
+			"shell", "exec", "write", "edit", "delete", "apply_patch", "apply-patch",
+			"deploy", "rotate_credential", "rotate_secret", "rotate_key", "payment", "transfer",
+			"database_mutation", "database_write", "database_delete", "db_write", "db_delete",
+		],
+		structured_output_high_risk: true,
+		long_context_threshold_bps: 7500,
+	});
 	assert.equal(
 		draft.config.auto_routing.dynamic_optimization.enabled,
 		false,
@@ -82,6 +97,31 @@ test("saved Profile model capabilities and unlisted policy remain authoritative 
     },
   ]);
   assert.equal(draft.config.vision.unlisted_model_policy, "enhance");
+});
+
+test("saved risk policy preserves explicit empty arrays booleans basis points and order", () => {
+	const draft = profileDraft(profileFixture({
+		config: {
+			...profileFixture().config,
+			auto_routing: {
+				...defaultProfileDraft().config.auto_routing,
+				enabled: true,
+				risk_policy: {
+					sensitive_text_patterns: [],
+					sensitive_tool_patterns: ["second", "first"],
+					structured_output_high_risk: false,
+					long_context_threshold_bps: 8125,
+				},
+			},
+		},
+	}));
+	const policy = profilePayload(draft).config.auto_routing.risk_policy;
+	assert.deepEqual(policy, {
+		sensitive_text_patterns: [],
+		sensitive_tool_patterns: ["second", "first"],
+		structured_output_high_risk: false,
+		long_context_threshold_bps: 8125,
+	});
 });
 
 test("model capability helpers append an explicit row and remove without sorting", () => {
@@ -1009,6 +1049,12 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
     session_ttl: "48h",
+		risk_policy: {
+			sensitive_text_patterns: ["private mutation", "second"],
+			sensitive_tool_patterns: ["exec", "apply_patch"],
+			structured_output_high_risk: true,
+			long_context_threshold_bps: 7500,
+		},
 		dynamic_optimization: {
 			enabled: true,
 			sample_rate_bps: 1000,
@@ -1055,6 +1101,22 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.equal(controlByName(root, "auto_routing_enabled").checked, true);
   assert.equal(controlByName(root, "auto_analyzer_confidence").value, "70");
   assert.equal(controlByName(root, "auto_session_ttl").value, "48h");
+	assert.equal(controlByName(root, "auto_sensitive_text_patterns").value, "private mutation\nsecond");
+	assert.equal(controlByName(root, "auto_sensitive_tool_patterns").value, "exec\napply_patch");
+	assert.equal(controlByName(root, "auto_structured_output_high_risk").checked, true);
+	assert.equal(controlByName(root, "auto_long_context_threshold").value, "75");
+	assert.match(
+		fieldDescription(root, controlByName(root, "auto_sensitive_tool_patterns")),
+		/仅.*强制|已经调用|暴露工具.*不会/,
+	);
+	assert.match(
+		fieldDescription(root, controlByName(root, "auto_sensitive_text_patterns")),
+		/不区分大小写.*子串|空列表.*停用/,
+	);
+	assert.match(
+		fieldDescription(root, controlByName(root, "auto_structured_output_high_risk")),
+		/强模型基线/,
+	);
 	assert.equal(controlByName(root, "auto_dynamic_enabled").checked, true);
 	assert.equal(controlByName(root, "auto_dynamic_sample_rate").value, "10");
 	assert.equal(controlByName(root, "auto_dynamic_reviewer_model").value, "strong");
@@ -1079,6 +1141,10 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   controlByName(root, "auto_analyzer_confidence").value = "72.5";
   controlByName(root, "auto_session_ttl").value = "72h";
 	controlByName(root, "auto_dynamic_sample_rate").value = "12.5";
+	controlByName(root, "auto_sensitive_text_patterns").value = "";
+	controlByName(root, "auto_sensitive_tool_patterns").value = "apply_patch\nexec";
+	controlByName(root, "auto_structured_output_high_risk").checked = false;
+	controlByName(root, "auto_long_context_threshold").value = "62.5";
   controlByName(root, "auto-route-0-min-quality").value = "91.25";
   await findTag(root, "FORM").dispatch("submit");
 
@@ -1095,6 +1161,12 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
 	);
   assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_quality_bps, 9125);
   assert.deepEqual(saves[0].config.auto_routing.participants, ["fast", "strong"]);
+	assert.deepEqual(saves[0].config.auto_routing.risk_policy, {
+		sensitive_text_patterns: [],
+		sensitive_tool_patterns: ["apply_patch", "exec"],
+		structured_output_high_risk: false,
+		long_context_threshold_bps: 6250,
+	});
 
   controlByName(root, "auto-route-0-min-quality").value = "";
   await findTag(root, "FORM").dispatch("submit");

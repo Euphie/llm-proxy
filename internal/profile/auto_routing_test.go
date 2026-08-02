@@ -1,10 +1,106 @@
 package profile
 
 import (
+	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestResolveRiskPolicyDefaultsAndExplicitEmptyLists(t *testing.T) {
+	record := validAutoRoutingRecord()
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns, defaultSensitiveTextPatterns) ||
+		!reflect.DeepEqual(runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns, defaultSensitiveToolPatterns) ||
+		runtime.AutoRouting.RiskPolicy.LongContextThresholdBPS != 7500 {
+		t.Fatalf("default risk policy=%+v", runtime.AutoRouting.RiskPolicy)
+	}
+
+	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
+		SensitiveTextPatterns:   []string{},
+		SensitiveToolPatterns:   []string{},
+		LongContextThresholdBPS: 6200,
+	}
+	runtime, err = record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns == nil ||
+		runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns == nil ||
+		len(runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns) != 0 ||
+		len(runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns) != 0 ||
+		runtime.AutoRouting.RiskPolicy.LongContextThresholdBPS != 6200 {
+		t.Fatalf("explicit empty risk policy=%+v", runtime.AutoRouting.RiskPolicy)
+	}
+}
+
+func TestRiskPolicyConfigJSONPreservesExplicitEmptyListsAndOrder(t *testing.T) {
+	want := RiskPolicyConfig{
+		SensitiveTextPatterns:    []string{"second", "first"},
+		SensitiveToolPatterns:    []string{},
+		StructuredOutputHighRisk: true,
+		LongContextThresholdBPS:  8125,
+	}
+	body, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got RiskPolicyConfig
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) || got.SensitiveToolPatterns == nil {
+		t.Fatalf("round trip=%+v JSON=%s", got, body)
+	}
+}
+
+func TestResolveRiskPolicyClonesConfiguredSlices(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
+		SensitiveTextPatterns: []string{"original text"},
+		SensitiveToolPatterns: []string{"original_tool"},
+	}
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Config.AutoRouting.RiskPolicy.SensitiveTextPatterns[0] = "mutated text"
+	record.Config.AutoRouting.RiskPolicy.SensitiveToolPatterns[0] = "mutated_tool"
+	if runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns[0] != "original text" ||
+		runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns[0] != "original_tool" {
+		t.Fatalf("runtime followed config mutation: %+v", runtime.AutoRouting.RiskPolicy)
+	}
+}
+
+func TestResolveRiskPolicyRejectsActionableInvalidSettings(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy RiskPolicyConfig
+		want   string
+	}{
+		{name: "blank text pattern", policy: RiskPolicyConfig{SensitiveTextPatterns: []string{" "}}, want: "sensitive text pattern 1"},
+		{name: "untrimmed tool pattern", policy: RiskPolicyConfig{SensitiveToolPatterns: []string{" exec"}}, want: "sensitive tool pattern 1"},
+		{name: "duplicate ignoring case", policy: RiskPolicyConfig{SensitiveTextPatterns: []string{"Deploy", "deploy"}}, want: "duplicate"},
+		{name: "too many patterns", policy: RiskPolicyConfig{SensitiveToolPatterns: make([]string, maxRiskPatterns+1)}, want: "at most"},
+		{name: "pattern too long", policy: RiskPolicyConfig{SensitiveTextPatterns: []string{strings.Repeat("x", maxRiskPatternRunes+1)}}, want: "at most"},
+		{name: "threshold above maximum", policy: RiskPolicyConfig{LongContextThresholdBPS: 10001}, want: "between 1 and 10000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := validAutoRoutingRecord()
+			record.Config.AutoRouting.RiskPolicy = tt.policy
+			_, err := record.Resolve()
+			if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Resolve() error=%v, want ErrInvalidConfig containing %q", err, tt.want)
+			}
+		})
+	}
+}
 
 func TestResolveAutoRoutingContract(t *testing.T) {
 	record := validAutoRoutingRecord()

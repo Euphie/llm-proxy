@@ -6,13 +6,6 @@ import (
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
-var highRiskTextSignals = []string{
-	"delete production", "drop table", "deploy to production", "rotate credential",
-	"删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
-	"edit the file", "modify the code", "fix the code", "implement this", "refactor",
-	"修改代码", "修复代码", "重构", "开始开发", "写代码",
-}
-
 var simpleTextPrefixes = []string{
 	"hi", "hello", "hey", "who are you", "what is ", "who is ",
 	"你好", "您好", "谢谢", "你是谁", "什么是", "请简单介绍",
@@ -21,19 +14,34 @@ var simpleTextPrefixes = []string{
 func ClassifyLocal(
 	request Request,
 	strongBaseline profile.ModelCapability,
+	riskPolicy profile.RiskPolicyRuntime,
 ) (Classification, bool) {
-	if request.Facts.HasTools || request.Facts.RequiresStructuredOutput {
+	if riskPolicy.StructuredOutputHighRisk && request.Facts.RequiresStructuredOutput {
 		return localHighRisk(), true
 	}
 	text := strings.ToLower(strings.TrimSpace(request.routingText()))
-	for _, signal := range highRiskTextSignals {
-		if strings.Contains(text, signal) {
+	for _, signal := range riskPolicy.SensitiveTextPatterns {
+		if strings.Contains(text, strings.ToLower(signal)) {
 			return localHighRisk(), true
 		}
 	}
+	for _, operation := range request.Facts.ActualToolOperations {
+		operation = strings.ToLower(operation)
+		for _, pattern := range riskPolicy.SensitiveToolPatterns {
+			if strings.Contains(operation, strings.ToLower(pattern)) {
+				return localHighRisk(), true
+			}
+		}
+	}
 	if strongBaseline.HasContextWindow {
-		total := request.Facts.EstimatedInputTokens + request.Facts.RequestedOutputTokens
-		if int64(total)*4 >= int64(strongBaseline.ContextWindow)*3 {
+		total := saturatingTokenSum(
+			request.Facts.EstimatedInputTokens,
+			request.Facts.RequestedOutputTokens,
+		)
+		if total >= thresholdTokens(
+			uint64(strongBaseline.ContextWindow),
+			uint64(riskPolicy.LongContextThresholdBPS),
+		) {
 			return localHighRisk(), true
 		}
 	}
@@ -48,6 +56,22 @@ func ClassifyLocal(
 		}
 	}
 	return Classification{}, false
+}
+
+func saturatingTokenSum(left, right int) uint64 {
+	if left < 0 || right < 0 {
+		return ^uint64(0)
+	}
+	a, b := uint64(left), uint64(right)
+	if ^uint64(0)-a < b {
+		return ^uint64(0)
+	}
+	return a + b
+}
+
+func thresholdTokens(contextWindow, thresholdBPS uint64) uint64 {
+	quotient, remainder := contextWindow/10_000, contextWindow%10_000
+	return quotient*thresholdBPS + (remainder*thresholdBPS+9_999)/10_000
 }
 
 func localHighRisk() Classification {

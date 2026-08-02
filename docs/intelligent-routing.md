@@ -31,6 +31,7 @@ URL 选择 Profile
 - 参与路由的模型；新录入的模型不会自动加入。
 - 一个强模型基线：任务无法可靠判断或没有更合适候选时使用。
 - 一个轻量任务分析模型：仅在本地规则无法确定任务时调用。
+- 一份 Profile 级高风险策略：敏感文本片段、敏感实际工具名片段、结构化输出开关和长上下文阈值。
 - 一份有效策略配置：包含任务类型到 Route 的映射、默认 Route、各 Route 的候选/质量门槛，
   以及在 Route 映射前就能创建的一份统一请求预算。首次保存生成 active 版本，后续修改生成
   独立草稿并经过评估、灰度和人工发布。
@@ -77,8 +78,9 @@ v1 的 `model=auto` 只支持可完整解析的推理操作：Anthropic `POST /v
 unsupported operation 错误；显式模型仍保持现有透传行为，不被 Session 或智能路由改写。
 
 入口路径决定唯一操作，解析器不会根据正文里是否碰巧出现 `messages` 或 `input` 字段来猜协议。
-图片和任务文本都由这份操作感知文档模型读取；协议字段之外的同名嵌套对象不参与图片计数、
-能力过滤或改写。Responses 的字符串 `input` 和直接 `input_text` 仍会用于任务分析。
+图片、任务文本和实际工具操作都由这份操作感知文档模型读取；协议字段之外的同名嵌套对象不参与
+图片计数、能力过滤、风险判断或改写。Responses 的字符串 `input`、easy-message 字符串
+`content` 和直接 `input_text` 都用于任务分析与输入 Token 估算。
 
 在线请求按固定顺序处理：
 
@@ -98,9 +100,32 @@ unsupported operation 错误；显式模型仍保持现有透传行为，不被 
 
 ### 高风险任务怎么判断
 
-高风险判断从确定性信息开始：结构化输出、工具调用、长上下文、代码修改、敏感操作等
-结构信号先匹配管理员规则。仍不明确时，才采用轻量分析模型的高置信结论。命中高风险后，
+本地确定性规则只匹配当前 Profile 的 `auto_routing.risk_policy`：
+
+- `sensitive_text_patterns` 按顺序对规范化用户/任务文本做不区分大小写的子串匹配；
+- `sensitive_tool_patterns` 只匹配协议位置中已经调用或按名称强制指定的工具操作；仅在请求中
+  声明 `tools` 不会触发高风险，但 `HasTools` 仍是候选模型必须满足的能力约束；
+- `structured_output_high_risk=true` 时，非文本或 JSON Schema 输出请求是高风险；关闭后仍保留
+  结构化输出能力约束；
+- 输入估算加请求输出达到强模型上下文窗口的 `long_context_threshold_bps` 比例时是高风险。
+
+敏感片段是管理员提供的普通子串，不执行正则；列表限制长度、要求去除首尾空白且不允许忽略
+大小写后的重复项。缺失或 `null` 列表使用内置保守默认值，显式空数组则停用对应维度；缺失或
+零长上下文阈值使用 `7500`（75%）。仍不明确时才采用轻量分析模型的高置信结论。命中任一规则后
 只使用满足全部硬约束的强模型基线；强基线不满足时明确失败。
+
+Anthropic 只从 assistant `tool_use` 和命名 `tool_choice` 提取实际操作；Chat Completions 只从
+assistant `tool_calls[].function.name` 和命名 `tool_choice` 提取；Responses 只从 `function_call`
+输入项和命名 `tool_choice` 提取。操作名有数量、长度与去重边界，只进入当次内存中的分析事实，
+不会把任务文本或工具参数写入路由轨迹。
+
+输入 Token 仍采用约四字节一 Token，但基于同一文档生成的 canonical JSON envelope。仅协议图片
+块内的 Anthropic base64 `source.data` 或 OpenAI data URL base64 payload 会替换为短标记；周边
+JSON、用户文本、工具 schema、普通 URL/`file_id` 和协议位置外的相似字段仍完整计入估算。
+
+**行为变更：**仅广告工具定义不再自动视为高风险；缺失
+`structured_output_high_risk` 按 `false` 处理。旧 Profile 的缺失敏感片段列表与零阈值仍按上述
+默认值解析；不提供其他历史兼容层。
 
 ## 4. 视觉增强
 

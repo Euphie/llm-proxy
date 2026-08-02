@@ -32,6 +32,7 @@ test-ui:
 		-v "$(CURDIR)":/src:ro -w /src \
 		node:24-alpine \
 		node --test \
+			scripts/risk-policy-defaults.test.mjs \
 			scripts/model-catalog-lib.test.mjs \
 			scripts/model-catalog-update-lib.test.mjs \
 			internal/admin/ui/static/visual.test.mjs \

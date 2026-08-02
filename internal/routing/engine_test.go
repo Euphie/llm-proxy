@@ -12,11 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
 )
 
 func TestClassifyLocalUsesOnlyHighConfidenceRules(t *testing.T) {
-	baseline := routingRuntime(t, false).Models["strong"]
+	runtime := routingRuntime(t, false)
+	baseline := runtime.Models["strong"]
 	tests := []struct {
 		name     string
 		body     string
@@ -43,11 +45,97 @@ func TestClassifyLocalUsesOnlyHighConfidenceRules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			classification, matched := ClassifyLocal(autoAnthropicRequest(t, tt.body), baseline)
+			classification, matched := ClassifyLocal(autoAnthropicRequest(t, tt.body), baseline, runtime.AutoRouting.RiskPolicy)
 			if matched != tt.matched || classification.TaskType != tt.taskType || classification.Risk != tt.risk {
 				t.Fatalf("classification=%+v matched=%v", classification, matched)
 			}
 		})
+	}
+}
+
+func TestClassifyLocalUsesConfiguredRiskPolicyAndNotAdvertisedTools(t *testing.T) {
+	config := routingConfig(false)
+	config.AutoRouting.RiskPolicy = profile.RiskPolicyConfig{
+		SensitiveTextPatterns:    []string{"private mutation"},
+		SensitiveToolPatterns:    []string{"apply_patch"},
+		StructuredOutputHighRisk: false,
+		LongContextThresholdBPS:  9000,
+	}
+	runtime := resolveRoutingRuntime(t, config)
+	tests := []struct {
+		name    string
+		body    string
+		matched bool
+	}{
+		{
+			name: "advertised tool only",
+			body: `{"model":"auto","max_tokens":1000,"tools":[{"name":"apply_patch"}],"messages":[{"role":"user","content":"check weather"}]}`,
+		},
+		{
+			name:    "actual sensitive tool",
+			body:    `{"model":"auto","max_tokens":1000,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"workspace_apply_patch","input":{}}]}]}`,
+			matched: true,
+		},
+		{
+			name:    "configured text",
+			body:    `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"Perform a PRIVATE MUTATION now"}]}`,
+			matched: true,
+		},
+		{
+			name: "structured output disabled",
+			body: `{"model":"auto","max_tokens":1000,"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":"analyze values"}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			classification, matched := ClassifyLocal(autoAnthropicRequest(t, tt.body), runtime.Models["strong"], runtime.AutoRouting.RiskPolicy)
+			if matched != tt.matched || (matched && classification.Risk != RiskHigh) {
+				t.Fatalf("classification=%+v matched=%v", classification, matched)
+			}
+		})
+	}
+}
+
+func TestClassifyLocalStructuredOutputAndLongContextPolicy(t *testing.T) {
+	config := routingConfig(false)
+	config.AutoRouting.RiskPolicy = profile.RiskPolicyConfig{
+		SensitiveTextPatterns: []string{}, SensitiveToolPatterns: []string{},
+		StructuredOutputHighRisk: true, LongContextThresholdBPS: 1,
+	}
+	runtime := resolveRoutingRuntime(t, config)
+	structured := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1,"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":"analyze"}]}`)
+	if classification, matched := ClassifyLocal(structured, runtime.Models["strong"], runtime.AutoRouting.RiskPolicy); !matched || classification.Risk != RiskHigh {
+		t.Fatalf("structured classification=%+v matched=%v", classification, matched)
+	}
+	long := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"analyze"}]}`)
+	if classification, matched := ClassifyLocal(long, runtime.Models["strong"], runtime.AutoRouting.RiskPolicy); !matched || classification.Risk != RiskHigh {
+		t.Fatalf("long-context classification=%+v matched=%v", classification, matched)
+	}
+}
+
+func TestEngineActualSensitiveToolForcesStrongBaselineWithoutAnalyzer(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer server.Close()
+	config := routingConfig(false)
+	config.Upstream = server.URL
+	config.AutoRouting.RiskPolicy = profile.RiskPolicyConfig{
+		SensitiveTextPatterns: []string{}, SensitiveToolPatterns: []string{"exec"},
+		LongContextThresholdBPS: 10000,
+	}
+	engine, err := NewEngine(resolveRoutingRuntime(t, config), server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, ctx, cancel := engine.NewAttemptBudget(context.Background())
+	defer cancel()
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"shell_exec","input":{}}]}]}`)
+	plan, classification, err := engine.Route(ctx, nil, request, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Model() != "strong" || !plan.UsesStrongBaseline() || classification.Risk != RiskHigh || calls.Load() != 0 {
+		t.Fatalf("plan=%+v classification=%+v analyzer_calls=%d", plan.Snapshot(), classification, calls.Load())
 	}
 }
 
@@ -436,5 +524,24 @@ func TestAnalyzerPromptContainsFactsButNotCredentials(t *testing.T) {
 	}
 	if !strings.Contains(analyzerBody, "SECRET_IN_PROMPT") || strings.Contains(analyzerBody, "TOP_SECRET") {
 		t.Fatalf("analyzer body=%s", analyzerBody)
+	}
+}
+
+func TestAnalyzerPromptDistinguishesAdvertisedToolsFromActualOperations(t *testing.T) {
+	runtime := routingRuntime(t, false)
+	analyzer := newAnalyzer(runtime, nil)
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"tools":[{"name":"weather"}],"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"read_weather","input":{}}]}]}`)
+	body, _, err := analyzer.buildRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{"actual_tool_operations", "read_weather", "advertised tool availability alone"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("analyzer body missing %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, `\"name\":\"weather\"`) {
+		t.Fatalf("analyzer body included advertised tool definition: %s", text)
 	}
 }

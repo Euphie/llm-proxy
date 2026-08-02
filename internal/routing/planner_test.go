@@ -612,6 +612,24 @@ func TestPlannerChoosesLowestCostQualifiedCandidate(t *testing.T) {
 	}
 }
 
+func TestPlannerAdvertisedToolsRemainACapabilityConstraint(t *testing.T) {
+	runtime := routingRuntime(t, false)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"tools":[{"name":"weather"}],"messages":[{"role":"user","content":"check weather"}]}`)
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceAnalyzer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !request.Facts.HasTools || len(request.Facts.ActualToolOperations) != 0 || plan.Model() != "fast" {
+		t.Fatalf("facts=%+v plan=%+v", request.Facts, plan.Snapshot())
+	}
+}
+
 func TestPlannerKeepsSessionModelAndOnlyMovesToEqualOrHigherQuality(t *testing.T) {
 	runtime := routingRuntime(t, false)
 	planner, err := NewPlanner(runtime)

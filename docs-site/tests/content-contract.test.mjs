@@ -297,7 +297,8 @@ test("locks the approved intelligent-routing contracts", async () => {
   assert.match(routing, /任务类型按 active 策略映射到 Route[\s\S]*默认 Route/);
   assert.match(routing, /入口[\s\S]*预检[\s\S]*高风险请求只检查强模型基线[\s\S]*其他请求[\s\S]*候选硬约束过滤/);
   assert.match(routing, /失败、超时或置信度不足[\s\S]*强模型基线/);
-  assert.match(routing, /高风险[\s\S]*结构信号[\s\S]*场景规则[\s\S]*分析器判断/);
+  assert.match(routing, /高风险策略[\s\S]*敏感子串[\s\S]*命名强制[\s\S]*仅声明 `tools` 不触发高风险/);
+  assert.match(routing, /base64 payload[\s\S]*短标记[\s\S]*工具 schema/);
   assert.match(routing, /不可变 ExecutionPlan/);
   assert.match(quality, /Route 质量门槛[\s\S]*完整成本/);
   assert.match(quality, /带时间衰减的保守估计[\s\S]*样本权重更高/);

@@ -48,6 +48,30 @@ const defaultRule = {
   jitter: "0s",
 };
 
+const defaultRiskPolicy = {
+  sensitive_text_patterns: [
+    "delete production", "drop table", "deploy to production", "rotate credential",
+    "删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
+    "edit the file", "modify the code", "fix the code", "implement this", "refactor",
+    "修改代码", "修复代码", "重构", "开始开发", "写代码",
+  ],
+  sensitive_tool_patterns: [
+    "shell", "exec", "write", "edit", "delete", "apply_patch", "apply-patch",
+    "deploy", "rotate_credential", "rotate_secret", "rotate_key", "payment", "transfer",
+    "database_mutation", "database_write", "database_delete", "db_write", "db_delete",
+  ],
+  structured_output_high_risk: true,
+  long_context_threshold_bps: 7500,
+};
+
+function newDefaultRiskPolicy() {
+  return {
+    ...defaultRiskPolicy,
+    sensitive_text_patterns: [...defaultRiskPolicy.sensitive_text_patterns],
+    sensitive_tool_patterns: [...defaultRiskPolicy.sensitive_tool_patterns],
+  };
+}
+
 function newDefaultAutoRouting() {
   return {
     enabled: false,
@@ -57,6 +81,7 @@ function newDefaultAutoRouting() {
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
     session_ttl: "24h",
+		risk_policy: newDefaultRiskPolicy(),
 		dynamic_optimization: {
 			enabled: false,
 			sample_rate_bps: 1000,
@@ -1211,6 +1236,54 @@ export function renderProfileEditor(root, source, actions = {}) {
   );
   autoRoles.append(roleGrid);
 
+  const riskSection = editorSubsection("高风险判定");
+  const riskPolicy = working.config.auto_routing.risk_policy;
+  const riskGrid = element("div", "form-grid");
+  const sensitiveTextPatterns = fieldTextarea(
+    riskGrid,
+    "敏感文本片段",
+    "auto_sensitive_text_patterns",
+    riskPolicy.sensitive_text_patterns.join("\n"),
+    {
+      description:
+        "按不区分大小写的子串仅匹配规范化用户/任务文本，每行一个；保存空列表会停用文本判定。命中后强制使用强模型基线。",
+    },
+  );
+  const sensitiveToolPatterns = fieldTextarea(
+    riskGrid,
+    "敏感工具名片段",
+    "auto_sensitive_tool_patterns",
+    riskPolicy.sensitive_tool_patterns.join("\n"),
+    {
+      description:
+        "按不区分大小写的子串仅匹配强制指定或已经调用的工具名；仅暴露工具定义不会使请求成为高风险。保存空列表会停用工具名判定。",
+    },
+  );
+  const structuredOutputHighRisk = checkboxField(
+    riskGrid,
+    "结构化输出视为高风险",
+    "auto_structured_output_high_risk",
+    {
+      description:
+        "开启后，JSON Schema 等非文本输出请求会被视为高风险并强制使用强模型基线；关闭时仍作为模型能力约束。",
+    },
+  );
+  structuredOutputHighRisk.checked = Boolean(
+    riskPolicy.structured_output_high_risk,
+  );
+  const longContextThreshold = fieldInput(
+    riskGrid,
+    "长上下文阈值（%）",
+    "auto_long_context_threshold",
+    basisPointsToPercent(riskPolicy.long_context_threshold_bps),
+    {
+      type: "number", min: "0.01", max: "100", step: "0.01",
+      description:
+        "估算输入与请求输出达到强模型上下文窗口的该比例时，强制使用强模型基线。",
+    },
+  );
+  riskSection.append(riskGrid);
+
 	const dynamicOptimizationSection = editorSubsection("对比学习");
 	const dynamicConfig = working.config.auto_routing.dynamic_optimization;
 	const dynamicEnabled = checkboxField(
@@ -1911,6 +1984,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   autoDetails.hidden = !autoEnabled.checked;
 	autoDetails.append(
 		autoRoles,
+		riskSection,
 		dynamicOptimizationSection,
 		strategySection,
 		mappingSection,
@@ -2217,6 +2291,15 @@ export function renderProfileEditor(root, source, actions = {}) {
           "任务分析最低置信度",
         ),
         session_ttl: sessionTTL.value,
+			risk_policy: {
+				sensitive_text_patterns: patternLines(sensitiveTextPatterns.value),
+				sensitive_tool_patterns: patternLines(sensitiveToolPatterns.value),
+				structured_output_high_risk: structuredOutputHighRisk.checked,
+				long_context_threshold_bps: percentToBasisPoints(
+					longContextThreshold.value,
+					"长上下文阈值",
+				),
+			},
 			dynamic_optimization: dynamicEnabled.checked
 				? {
 					enabled: true,
@@ -2450,10 +2533,27 @@ function modelCapabilitiesPayload(models) {
 function autoRoutingDraft(configured = {}) {
   const defaults = newDefaultAutoRouting();
   const strategy = configured?.strategy || {};
+  const configuredRisk = configured?.risk_policy;
+  const riskPolicy = configuredRisk
+    ? {
+        ...defaults.risk_policy,
+        ...configuredRisk,
+        sensitive_text_patterns: configuredRisk.sensitive_text_patterns == null
+          ? [...defaults.risk_policy.sensitive_text_patterns]
+          : [...configuredRisk.sensitive_text_patterns],
+        sensitive_tool_patterns: configuredRisk.sensitive_tool_patterns == null
+          ? [...defaults.risk_policy.sensitive_tool_patterns]
+          : [...configuredRisk.sensitive_tool_patterns],
+      }
+    : {
+        ...newDefaultRiskPolicy(),
+        structured_output_high_risk: false,
+      };
   return {
     ...defaults,
     ...configured,
     participants: [...(configured?.participants || [])],
+		risk_policy: riskPolicy,
 		dynamic_optimization: {
 			...defaults.dynamic_optimization,
 			...(configured?.dynamic_optimization || {}),
@@ -2492,6 +2592,7 @@ function autoRoutingPayload(auto) {
       "任务分析最低置信度",
     ),
     session_ttl: String(auto.session_ttl ?? "24h"),
+		risk_policy: riskPolicyPayload(auto.risk_policy),
 		dynamic_optimization: dynamicOptimizationPayload(
 			auto.dynamic_optimization,
 		),
@@ -2528,6 +2629,32 @@ function autoRoutingPayload(auto) {
       budget: autoBudgetPayload(strategy.budget || {}),
     },
   };
+}
+
+function riskPolicyPayload(policy = {}) {
+	const defaults = newDefaultRiskPolicy();
+  const threshold = boundedBasisPoints(
+    policy.long_context_threshold_bps || defaults.long_context_threshold_bps,
+    "长上下文阈值",
+  );
+  if (threshold === 0) {
+    throw new Error("长上下文阈值必须大于 0%。");
+  }
+  return {
+    sensitive_text_patterns: [...(policy.sensitive_text_patterns == null
+		? defaults.sensitive_text_patterns
+		: policy.sensitive_text_patterns)].map(String),
+    sensitive_tool_patterns: [...(policy.sensitive_tool_patterns == null
+		? defaults.sensitive_tool_patterns
+		: policy.sensitive_tool_patterns)].map(String),
+    structured_output_high_risk: Boolean(policy.structured_output_high_risk),
+    long_context_threshold_bps: threshold,
+  };
+}
+
+function patternLines(value) {
+  const text = String(value ?? "").replaceAll("\r\n", "\n");
+  return text.trim() === "" ? [] : text.split("\n");
 }
 
 function dynamicOptimizationPayload(config = {}) {

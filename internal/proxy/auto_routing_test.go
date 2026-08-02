@@ -2412,7 +2412,7 @@ func autoCompositeSharingRuntime(t *testing.T, upstream string) profile.Runtime 
 }
 
 func autoCompositeSharingBody() string {
-	return `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/shared.png"}},{"type":"text","text":"edit the production file"}]}]}`
+	return `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/shared.png"}},{"type":"text","text":"edit the file"}]}]}`
 }
 
 func TestAutoRoutingVisionCacheHitConsumesOnlyAnalyzerAndAnswer(t *testing.T) {

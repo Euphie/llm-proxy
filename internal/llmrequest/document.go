@@ -14,13 +14,20 @@ type documentNode struct {
 }
 
 type Document struct {
-	operation       Operation
-	root            map[string]json.RawMessage
-	collectionField string
-	nodes           []documentNode
-	images          []Image
-	texts           []string
+	operation            Operation
+	root                 map[string]json.RawMessage
+	collectionField      string
+	nodes                []documentNode
+	images               []Image
+	texts                []string
+	actualToolOperations []string
 }
+
+const (
+	maxActualToolOperations = 64
+	maxActualToolNameRunes  = 128
+	imageEstimationMarker   = "[image-data]"
+)
 
 func Parse(operation Operation, body []byte) (*Document, error) {
 	var root map[string]json.RawMessage
@@ -41,16 +48,23 @@ func ParseRoot(operation Operation, root map[string]json.RawMessage) (*Document,
 }
 
 func parseRoot(operation Operation, root map[string]json.RawMessage) (*Document, error) {
+	var document *Document
+	var err error
 	switch operation {
 	case OperationAnthropicMessages:
-		return parseMessageCollection(operation, root, "image", "text", parseAnthropicImage)
+		document, err = parseMessageCollection(operation, root, "image", "text", parseAnthropicImage)
 	case OperationOpenAIChatCompletions:
-		return parseMessageCollection(operation, root, "image_url", "text", parseChatImage)
+		document, err = parseMessageCollection(operation, root, "image_url", "text", parseChatImage)
 	case OperationOpenAIResponses:
-		return parseResponses(root)
+		document, err = parseResponses(root)
 	default:
 		return nil, fmt.Errorf("unsupported inference operation %q", operation)
 	}
+	if err != nil {
+		return nil, err
+	}
+	document.collectForcedToolOperation()
+	return document, nil
 }
 
 func (d *Document) Images() []Image {
@@ -59,6 +73,27 @@ func (d *Document) Images() []Image {
 
 func (d *Document) Texts() []string {
 	return append([]string(nil), d.texts...)
+}
+
+func (d *Document) ActualToolOperations() []string {
+	return append([]string(nil), d.actualToolOperations...)
+}
+
+func (d *Document) CanonicalEstimationJSON() ([]byte, error) {
+	overrides := make(map[[2]int]json.RawMessage, len(d.images))
+	for _, image := range d.images {
+		block, err := d.sanitizedImageBlock(image)
+		if err != nil {
+			return nil, err
+		}
+		if block != nil {
+			overrides[[2]int{image.NodeIndex, image.BlockIndex}] = block
+		}
+	}
+	if len(overrides) == 0 {
+		return json.Marshal(d.root)
+	}
+	return d.marshalWithBlockOverrides(overrides)
 }
 
 func (d *Document) RewriteImages(replacements []string) ([]byte, error) {
@@ -84,6 +119,10 @@ func (d *Document) RewriteImages(replacements []string) ([]byte, error) {
 		encodedReplacements[[2]int{image.NodeIndex, image.BlockIndex}] = replacement
 	}
 
+	return d.marshalWithBlockOverrides(encodedReplacements)
+}
+
+func (d *Document) marshalWithBlockOverrides(overrides map[[2]int]json.RawMessage) ([]byte, error) {
 	rawNodes := make([]json.RawMessage, len(d.nodes))
 	for nodeIndex, node := range d.nodes {
 		if node.fields == nil {
@@ -95,7 +134,7 @@ func (d *Document) RewriteImages(replacements []string) ([]byte, error) {
 			blocks := append([]json.RawMessage(nil), node.blocks...)
 			changed := false
 			for blockIndex := range blocks {
-				if replacement, ok := encodedReplacements[[2]int{nodeIndex, blockIndex}]; ok {
+				if replacement, ok := overrides[[2]int{nodeIndex, blockIndex}]; ok {
 					blocks[blockIndex] = replacement
 					changed = true
 				}
@@ -129,6 +168,65 @@ func (d *Document) RewriteImages(replacements []string) ([]byte, error) {
 	return result, nil
 }
 
+func (d *Document) sanitizedImageBlock(image Image) (json.RawMessage, error) {
+	if image.SourceKind != ImageSourceBase64 && image.SourceKind != ImageSourceDataURL {
+		return nil, nil
+	}
+	var block map[string]json.RawMessage
+	if err := json.Unmarshal(image.Block, &block); err != nil {
+		return nil, fmt.Errorf("parse image block for estimation: %w", err)
+	}
+	switch d.operation {
+	case OperationAnthropicMessages:
+		var source map[string]json.RawMessage
+		if err := json.Unmarshal(block["source"], &source); err != nil {
+			return nil, fmt.Errorf("parse Anthropic image source for estimation: %w", err)
+		}
+		source["data"] = json.RawMessage(`"` + imageEstimationMarker + `"`)
+		encoded, err := json.Marshal(source)
+		if err != nil {
+			return nil, err
+		}
+		block["source"] = encoded
+	case OperationOpenAIChatCompletions:
+		var imageURL map[string]json.RawMessage
+		if err := json.Unmarshal(block["image_url"], &imageURL); err != nil {
+			return nil, fmt.Errorf("parse Chat Completions image URL for estimation: %w", err)
+		}
+		var value string
+		if json.Unmarshal(imageURL["url"], &value) != nil {
+			return nil, fmt.Errorf("parse Chat Completions image URL for estimation")
+		}
+		imageURL["url"], _ = json.Marshal(sanitizeBase64DataURL(value))
+		encoded, err := json.Marshal(imageURL)
+		if err != nil {
+			return nil, err
+		}
+		block["image_url"] = encoded
+	case OperationOpenAIResponses:
+		var value string
+		if json.Unmarshal(block["image_url"], &value) != nil {
+			return nil, fmt.Errorf("parse Responses image URL for estimation")
+		}
+		block["image_url"], _ = json.Marshal(sanitizeBase64DataURL(value))
+	}
+	encoded, err := json.Marshal(block)
+	if err != nil {
+		return nil, fmt.Errorf("marshal image block for estimation: %w", err)
+	}
+	return encoded, nil
+}
+
+func sanitizeBase64DataURL(value string) string {
+	lower := strings.ToLower(value)
+	marker := ";base64,"
+	index := strings.Index(lower, marker)
+	if index < 0 {
+		return value
+	}
+	return value[:index+len(marker)] + imageEstimationMarker
+}
+
 func parseMessageCollection(
 	operation Operation,
 	root map[string]json.RawMessage,
@@ -156,6 +254,7 @@ func parseMessageCollection(
 		if err := json.Unmarshal(rawMessage, &fields); err != nil {
 			return nil, fmt.Errorf("parse message %d: %w", messageIndex, err)
 		}
+		collectMessageToolOperations(document, operation, fields)
 		node := documentNode{raw: rawMessage, fields: fields}
 		content, exists := fields["content"]
 		if !exists {
@@ -212,6 +311,109 @@ func parseMessageCollection(
 	return document, nil
 }
 
+func collectMessageToolOperations(
+	document *Document,
+	operation Operation,
+	fields map[string]json.RawMessage,
+) {
+	if !isAssistantRole(fields) {
+		return
+	}
+	if operation == OperationOpenAIChatCompletions {
+		var calls []map[string]json.RawMessage
+		if json.Unmarshal(fields["tool_calls"], &calls) != nil {
+			return
+		}
+		for _, call := range calls {
+			if rawString(call["type"]) != "function" {
+				continue
+			}
+			var function map[string]json.RawMessage
+			if json.Unmarshal(call["function"], &function) == nil {
+				document.addActualToolOperation(rawString(function["name"]))
+			}
+		}
+		return
+	}
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(fields["content"], &blocks) != nil {
+		return
+	}
+	for _, block := range blocks {
+		if rawString(block["type"]) == "tool_use" {
+			document.addActualToolOperation(rawString(block["name"]))
+		}
+	}
+}
+
+func (d *Document) collectForcedToolOperation() {
+	var choice map[string]json.RawMessage
+	if json.Unmarshal(d.root["tool_choice"], &choice) != nil {
+		return
+	}
+	switch d.operation {
+	case OperationAnthropicMessages:
+		if rawString(choice["type"]) == "tool" {
+			d.prependActualToolOperation(rawString(choice["name"]))
+		}
+	case OperationOpenAIChatCompletions:
+		if rawString(choice["type"]) != "function" {
+			return
+		}
+		var function map[string]json.RawMessage
+		if json.Unmarshal(choice["function"], &function) == nil {
+			d.prependActualToolOperation(rawString(function["name"]))
+		}
+	case OperationOpenAIResponses:
+		if rawString(choice["type"]) == "function" {
+			d.prependActualToolOperation(rawString(choice["name"]))
+		}
+	}
+}
+
+func (d *Document) prependActualToolOperation(name string) {
+	name = boundedActualToolOperation(name)
+	if name == "" || len(d.actualToolOperations) >= maxActualToolOperations ||
+		d.hasActualToolOperation(name) {
+		return
+	}
+	d.actualToolOperations = append(d.actualToolOperations, "")
+	copy(d.actualToolOperations[1:], d.actualToolOperations[:len(d.actualToolOperations)-1])
+	d.actualToolOperations[0] = name
+}
+
+func (d *Document) addActualToolOperation(name string) {
+	name = boundedActualToolOperation(name)
+	if name == "" || len(d.actualToolOperations) >= maxActualToolOperations ||
+		d.hasActualToolOperation(name) {
+		return
+	}
+	d.actualToolOperations = append(d.actualToolOperations, name)
+}
+
+func boundedActualToolOperation(name string) string {
+	runes := []rune(name)
+	if len(runes) > maxActualToolNameRunes {
+		return string(runes[:maxActualToolNameRunes])
+	}
+	return name
+}
+
+func (d *Document) hasActualToolOperation(name string) bool {
+	for _, existing := range d.actualToolOperations {
+		if strings.EqualFold(existing, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func rawString(raw json.RawMessage) string {
+	var value string
+	_ = json.Unmarshal(raw, &value)
+	return value
+}
+
 func imageDetail(fields map[string]json.RawMessage, message string, args ...any) (string, error) {
 	detail := "auto"
 	if raw, ok := fields["detail"]; ok {
@@ -226,6 +428,11 @@ func imageDetail(fields map[string]json.RawMessage, message string, args ...any)
 func isUserRole(fields map[string]json.RawMessage) bool {
 	var role string
 	return json.Unmarshal(fields["role"], &role) == nil && role == "user"
+}
+
+func isAssistantRole(fields map[string]json.RawMessage) bool {
+	var role string
+	return json.Unmarshal(fields["role"], &role) == nil && role == "assistant"
 }
 
 func isAssistantToolCallMessage(fields map[string]json.RawMessage) bool {

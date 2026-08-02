@@ -49,6 +49,31 @@ func TestStoreSaveDefaultCopyAndDelete(t *testing.T) {
 	}
 }
 
+func TestStorePreservesExplicitEmptyRiskPatternLists(t *testing.T) {
+	db := openStoreTestDB(t)
+	store := NewStore(db)
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
+		SensitiveTextPatterns: []string{}, SensitiveToolPatterns: []string{},
+		LongContextThresholdBPS: 7500,
+	}
+	if _, err := store.Save(context.Background(), SaveInput{
+		Slug: record.Slug, DisplayName: record.DisplayName, Enabled: true,
+		Config: record.Config,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	records, _, err := store.LoadSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := records[0].Config.AutoRouting.RiskPolicy
+	if policy.SensitiveTextPatterns == nil || policy.SensitiveToolPatterns == nil ||
+		len(policy.SensitiveTextPatterns) != 0 || len(policy.SensitiveToolPatterns) != 0 {
+		t.Fatalf("stored policy=%+v", policy)
+	}
+}
+
 func TestStoreDuplicateSlugRollsBackDefaultChange(t *testing.T) {
 	db := openStoreTestDB(t)
 	store := NewStore(db)

@@ -35,6 +35,9 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 		if err := json.Unmarshal(rawItem, &node.fields); err != nil {
 			return nil, fmt.Errorf("parse input item %d: %w", itemIndex, err)
 		}
+		if rawString(node.fields["type"]) == "function_call" {
+			document.addActualToolOperation(rawString(node.fields["name"]))
+		}
 		node.blockField = responsesBlockField(node.fields)
 		if node.blockField == "" {
 			var itemType, text string
