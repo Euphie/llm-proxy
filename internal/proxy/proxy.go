@@ -4,7 +4,6 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -454,7 +453,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode < 400 {
 			var captured []byte
 			if isAuto {
-				result := relayAutoSuccess(w, resp, autoStream)
+				result := relayAutoSuccess(w, resp, autoStream, routeRequest.Operation)
 				if result.err != nil {
 					completeAnswer(resp.StatusCode, "response_io", result.captured)
 					if result.committed {
@@ -930,6 +929,7 @@ func relayAutoSuccess(
 	w http.ResponseWriter,
 	resp *http.Response,
 	streaming bool,
+	operation llmrequest.Operation,
 ) relayResult {
 	defer resp.Body.Close()
 	if !streaming {
@@ -963,9 +963,13 @@ func relayAutoSuccess(
 			} else {
 				pending.Write(chunk)
 				if pending.Len() > maxPrecommitStreamBytes {
-					return relayResult{err: errors.New("stream exceeded pre-commit buffer limit")}
+					return relayResult{err: provider.NewFailure(
+						provider.FailureRequestProtocolCapability,
+						0,
+						errors.New("stream exceeded pre-commit buffer limit"),
+					)}
 				}
-				ready, err := hasCompleteSSEEvent(pending.Bytes())
+				ready, err := hasCompleteSSEEvent(pending.Bytes(), operation)
 				if err != nil {
 					return relayResult{err: err}
 				}
@@ -992,36 +996,6 @@ func relayAutoSuccess(
 			}
 			return relayResult{captured: captured.Bytes(), committed: committed, err: readErr}
 		}
-	}
-}
-
-func hasCompleteSSEEvent(buffer []byte) (bool, error) {
-	normalized := strings.ReplaceAll(string(buffer), "\r\n", "\n")
-	for {
-		end := strings.Index(normalized, "\n\n")
-		if end < 0 {
-			return false, nil
-		}
-		event := normalized[:end]
-		normalized = normalized[end+2:]
-		dataLines := make([]string, 0, 1)
-		for line := range strings.SplitSeq(event, "\n") {
-			if after, ok := strings.CutPrefix(line, "data:"); ok {
-				dataLines = append(dataLines, strings.TrimSpace(after))
-			}
-		}
-		if len(dataLines) == 0 {
-			continue
-		}
-		data := strings.Join(dataLines, "\n")
-		if data == "[DONE]" {
-			return true, nil
-		}
-		var payload map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(data), &payload); err != nil || payload == nil {
-			return false, errors.New("stream produced an invalid protocol event before client commit")
-		}
-		return true, nil
 	}
 }
 

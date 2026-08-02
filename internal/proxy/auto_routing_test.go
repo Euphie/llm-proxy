@@ -85,6 +85,330 @@ func TestAutoStreamingNeverRetriesAfterClientCommit(t *testing.T) {
 	}
 }
 
+func TestAutoStreamingAnthropicErrorEventFailsHardBeforeClientCommit(t *testing.T) {
+	invalidEvent := "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n"
+	response, calls := serveAutoStreamSequence(
+		t,
+		profile.ProtocolAnthropic,
+		"/v1/messages",
+		`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+		invalidEvent,
+	)
+
+	assertAutoStreamProtocolFailure(t, response, calls, invalidEvent)
+}
+
+func TestAutoStreamingRejectsNonHeartbeatEventWithoutDataBeforeClientCommit(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{name: "error event", event: "event: error\n\n"},
+		{name: "message start", event: "event: message_start\n\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, calls := serveAutoStreamSequence(
+				t,
+				profile.ProtocolAnthropic,
+				"/v1/messages",
+				`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+				test.event,
+			)
+
+			assertAutoStreamProtocolFailure(t, response, calls, test.event)
+		})
+	}
+}
+
+func TestAutoStreamingOversizedIncompleteEventFailsHardBeforeClientCommit(t *testing.T) {
+	upstreamBody := strings.Repeat("x", maxPrecommitStreamBytes+1)
+	response, calls := serveAutoStreamSequence(
+		t,
+		profile.ProtocolAnthropic,
+		"/v1/messages",
+		`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+		upstreamBody,
+	)
+
+	if response.Code != http.StatusBadGateway || calls != 1 ||
+		strings.Contains(response.Body.String(), strings.Repeat("x", 64)) {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
+	}
+}
+
+func TestAutoStreamingAnthropicRequiresMessageStartAsFirstCommitEvent(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{name: "message stop", event: "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"},
+		{name: "message delta", event: "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{}}\n\n"},
+		{name: "content block delta", event: "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{}}\n\n"},
+		{name: "message omitted", event: "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"},
+		{name: "message null", event: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":null}\n\n"},
+		{name: "message array", event: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":[]}\n\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, calls := serveAutoStreamSequence(
+				t,
+				profile.ProtocolAnthropic,
+				"/v1/messages",
+				`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+				test.event,
+			)
+
+			assertAutoStreamProtocolFailure(t, response, calls, test.event)
+		})
+	}
+}
+
+func TestAutoStreamingChatRequiresNonEmptyChoicesInFirstChunk(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{name: "null choices", event: "data: {\"object\":\"chat.completion.chunk\",\"choices\":null}\n\n"},
+		{name: "empty choices", event: "data: {\"object\":\"chat.completion.chunk\",\"choices\":[]}\n\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, calls := serveAutoStreamSequence(
+				t,
+				profile.ProtocolOpenAI,
+				"/v1/chat/completions",
+				`{"model":"auto","max_completion_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+				test.event,
+			)
+
+			assertAutoStreamProtocolFailure(t, response, calls, test.event)
+		})
+	}
+}
+
+func TestAutoStreamingResponsesRequiresCreatedOrQueuedFirstEvent(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{name: "in progress", event: "event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{}}\n\n"},
+		{name: "output delta", event: "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"},
+		{name: "response omitted", event: "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"},
+		{name: "response null", event: "event: response.created\ndata: {\"type\":\"response.created\",\"response\":null}\n\n"},
+		{name: "response array", event: "event: response.created\ndata: {\"type\":\"response.created\",\"response\":[]}\n\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, calls := serveAutoStreamSequence(
+				t,
+				profile.ProtocolOpenAI,
+				"/v1/responses",
+				`{"model":"auto","max_output_tokens":1000,"stream":true,"input":"你好"}`,
+				test.event,
+			)
+
+			assertAutoStreamProtocolFailure(t, response, calls, test.event)
+		})
+	}
+}
+
+func TestAutoStreamingAcceptsMinimalProtocolStartEvents(t *testing.T) {
+	tests := []struct {
+		name        string
+		protocol    profile.Protocol
+		path        string
+		requestBody string
+		event       string
+	}{
+		{
+			name:        "anthropic message start",
+			protocol:    profile.ProtocolAnthropic,
+			path:        "/v1/messages",
+			requestBody: `{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+			event:       "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n",
+		},
+		{
+			name:        "chat completion chunk",
+			protocol:    profile.ProtocolOpenAI,
+			path:        "/v1/chat/completions",
+			requestBody: `{"model":"auto","max_completion_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+			event:       "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{}]}\n\n",
+		},
+		{
+			name:        "responses created",
+			protocol:    profile.ProtocolOpenAI,
+			path:        "/v1/responses",
+			requestBody: `{"model":"auto","max_output_tokens":1000,"stream":true,"input":"你好"}`,
+			event:       "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{}}\n\n",
+		},
+		{
+			name:        "responses queued",
+			protocol:    profile.ProtocolOpenAI,
+			path:        "/v1/responses",
+			requestBody: `{"model":"auto","max_output_tokens":1000,"stream":true,"input":"你好"}`,
+			event:       "event: response.queued\ndata: {\"type\":\"response.queued\",\"response\":{}}\n\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, calls := serveAutoStreamSequence(
+				t,
+				test.protocol,
+				test.path,
+				test.requestBody,
+				test.event,
+			)
+
+			if response.Code != http.StatusOK || calls != 1 || response.Body.String() != test.event {
+				t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAutoStreamingChatRejectsResponsesEventBeforeClientCommit(t *testing.T) {
+	invalidEvent := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"wrong-protocol\"}}\n\n"
+	response, calls := serveAutoStreamSequence(
+		t,
+		profile.ProtocolOpenAI,
+		"/v1/chat/completions",
+		`{"model":"auto","max_completion_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+		invalidEvent,
+	)
+
+	assertAutoStreamProtocolFailure(t, response, calls, invalidEvent)
+}
+
+func TestAutoStreamingResponsesRejectsChatChunkBeforeClientCommit(t *testing.T) {
+	invalidEvent := "data: {\"id\":\"chatcmpl-wrong\",\"object\":\"chat.completion.chunk\",\"choices\":[]}\n\n"
+	response, calls := serveAutoStreamSequence(
+		t,
+		profile.ProtocolOpenAI,
+		"/v1/responses",
+		`{"model":"auto","max_output_tokens":1000,"stream":true,"input":"你好"}`,
+		invalidEvent,
+	)
+
+	assertAutoStreamProtocolFailure(t, response, calls, invalidEvent)
+}
+
+func TestAutoStreamingOpenAIErrorObjectsFailHardBeforeClientCommit(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		requestBody  string
+		invalidEvent string
+	}{
+		{
+			name:         "chat completions",
+			path:         "/v1/chat/completions",
+			requestBody:  `{"model":"auto","max_completion_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+			invalidEvent: "data: {\"object\":\"chat.completion.chunk\",\"choices\":[],\"error\":{\"message\":\"bad\"}}\n\n",
+		},
+		{
+			name:         "responses",
+			path:         "/v1/responses",
+			requestBody:  `{"model":"auto","max_output_tokens":1000,"stream":true,"input":"你好"}`,
+			invalidEvent: "event: response.created\ndata: {\"type\":\"response.created\",\"error\":{\"message\":\"bad\"}}\n\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, calls := serveAutoStreamSequence(
+				t,
+				profile.ProtocolOpenAI,
+				test.path,
+				test.requestBody,
+				test.invalidEvent,
+			)
+
+			assertAutoStreamProtocolFailure(t, response, calls, test.invalidEvent)
+		})
+	}
+}
+
+func TestAutoStreamingAnthropicRejectsInvalidCompleteEventsBeforeClientCommit(t *testing.T) {
+	tests := []struct {
+		name  string
+		first string
+	}{
+		{name: "arbitrary object", first: "data: {}\n\n"},
+		{name: "done sentinel", first: "data: [DONE]\n\n"},
+		{name: "empty data", first: "event: message_start\ndata:\n\n"},
+		{name: "unknown event", first: "event: mystery\ndata: {\"type\":\"mystery\"}\n\n"},
+		{name: "event type mismatch", first: "event: message_start\ndata: {\"type\":\"message_delta\"}\n\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, calls := serveAutoStreamSequence(
+				t,
+				profile.ProtocolAnthropic,
+				"/v1/messages",
+				`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+				test.first,
+			)
+
+			assertAutoStreamProtocolFailure(t, response, calls, test.first)
+		})
+	}
+}
+
+func assertAutoStreamProtocolFailure(
+	t *testing.T,
+	response *httptest.ResponseRecorder,
+	calls int32,
+	upstreamBody string,
+) {
+	t.Helper()
+	if response.Code != http.StatusBadGateway || calls != 1 ||
+		strings.Contains(response.Body.String(), strings.TrimSpace(upstreamBody)) {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
+	}
+}
+
+func TestAutoStreamingAcceptsCRLFHeartbeatAndMultilineData(t *testing.T) {
+	validEvent := ": heartbeat\r\n\r\nevent: message_start\r\ndata: {\"type\":\r\ndata: \"message_start\",\"message\":{\"id\":\"first\"}}\r\n\r\n"
+	response, calls := serveAutoStreamSequence(
+		t,
+		profile.ProtocolAnthropic,
+		"/v1/messages",
+		`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好"}]}`,
+		validEvent,
+	)
+
+	if response.Code != http.StatusOK || calls != 1 || response.Body.String() != validEvent {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
+	}
+}
+
+func serveAutoStreamSequence(
+	t *testing.T,
+	protocol profile.Protocol,
+	path string,
+	requestBody string,
+	upstreamBodies ...string,
+) (*httptest.ResponseRecorder, int32) {
+	t.Helper()
+	responses := make([]transportResponse, len(upstreamBodies))
+	for index, body := range upstreamBodies {
+		responses[index] = transportResponse{
+			status: http.StatusOK,
+			header: http.Header{"Content-Type": {"text/event-stream"}},
+			body:   io.NopCloser(strings.NewReader(body)),
+		}
+	}
+	transport := &sequenceTransport{responses: responses}
+	runtime := autoProxyRuntime(t, "https://upstream.test", false)
+	runtime.Protocol = protocol
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, &http.Client{Transport: transport}, nil).ServeHTTP(response, request)
+	return response, transport.calls.Load()
+}
+
 type transportResponse struct {
 	status int
 	header http.Header

@@ -54,7 +54,14 @@ max_worst_case_cost
 
 ## ClientCommit
 
-收到 HTTP 成功状态或第一个字节不等于提交。只有收到第一个完整、合法的入口协议事件并准备发送给客户端时，才形成 `ClientCommit`。提交前可以在预算内恢复；提交后禁止重试、Target 切换或模型切换。
+收到 HTTP 成功状态或第一个字节不等于提交。只有收到第一个完整、合法且与入口操作一致的成功
+事件并准备发送给客户端时，才形成 `ClientCommit`：Anthropic 首事件必须是含 `message` 对象的
+`message_start`，Chat Completions 首 chunk 必须是含非空 `choices` 数组的
+`chat.completion.chunk`，Responses 首事件必须是含 `response` 对象的 `response.created` 或
+`response.queued`。SSE heartbeat/comment
+不提交；错误事件、跨协议事件、任意 JSON 和提交前的孤立 `[DONE]` 属于硬协议失败，会终止请求
+且不会泄露预提交字节。只有提交前的连接、EOF 或读取失败等可恢复传输故障才能沿冻结计划回退。
+提交后禁止重试、Target 切换或模型切换。
 
 ## Session 固定模型
 
