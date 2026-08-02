@@ -5,6 +5,7 @@ import {
   renderPasswordChange,
 } from "./auth.js";
 import { createWindowFrame } from "./chrome.js";
+import { renderDashboard } from "./dashboard.js";
 import {
   defaultProfileDraft,
   profileDraft,
@@ -14,6 +15,7 @@ import {
 } from "./profiles.js";
 import { renderStatsPage } from "./stats.js";
 import { renderSystemPage } from "./system.js";
+import { parseAdminRoute } from "./routes.js";
 
 export async function bootstrap({
   root = document.querySelector("#app"),
@@ -45,7 +47,7 @@ async function renderSession(root, client, session, generateProfile, path) {
     renderPasswordScreen(root, client, generateProfile, path);
     return;
   }
-  await renderAuthenticated(root, client, generateProfile, path);
+  await renderAuthenticated(root, client, session, generateProfile, path);
 }
 
 function renderLoginScreen(root, client, generateProfile, path) {
@@ -77,8 +79,9 @@ function renderPasswordScreen(root, client, generateProfile, path) {
   });
 }
 
-async function renderAuthenticated(root, client, generateProfile, path) {
-  const pageName = pageForPath(path);
+async function renderAuthenticated(root, client, session, generateProfile, path) {
+  const route = parseAdminRoute(path);
+  const pageName = navigationPage(route);
   const stage = document.createElement("div");
   stage.className = "desktop-stage";
   const sidebar = document.createElement("aside");
@@ -92,6 +95,13 @@ async function renderAuthenticated(root, client, generateProfile, path) {
   list.className = "app-nav";
 
   for (const item of [
+    {
+      name: "overview",
+      text: "概览",
+      href: "/_admin/",
+      iconClass: "nav-icon-mint",
+      iconText: "⌂",
+    },
     {
       name: "profiles",
       text: "Profiles",
@@ -145,9 +155,11 @@ async function renderAuthenticated(root, client, generateProfile, path) {
   headingGroup.className = "page-heading";
   const heading = document.createElement("h1");
   heading.textContent = {
+    overview: "概览",
     profiles: "Profiles",
     stats: "统计",
     system: "系统",
+    "not-found": "页面不存在",
   }[pageName];
   const alert = document.createElement("div");
   alert.className = "error-banner";
@@ -321,6 +333,85 @@ async function renderAuthenticated(root, client, generateProfile, path) {
     }
   }
 
+  async function showOverview() {
+    alert.hidden = true;
+    alert.textContent = "";
+    try {
+      const data =
+        typeof client.listProfiles === "function"
+          ? await client.listProfiles()
+          : { default_profile_id: 0, profiles: [] };
+      await renderDashboard(workspace, {
+        session,
+        profiles: data,
+        loadProfileStats: (profileId) =>
+          typeof client.stats === "function"
+            ? client.stats({ profile_id: profileId })
+            : Promise.resolve({ summary: { requests: 0 } }),
+      });
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        renderLoginScreen(root, client, generateProfile, path);
+        return;
+      }
+      workspace.replaceChildren();
+      showAppError(error);
+    }
+  }
+
+  async function showProfileRoute() {
+    try {
+      const [profile, data] = await Promise.all([
+        client.getProfile(route.profileId),
+        client.listProfiles(),
+      ]);
+      heading.textContent = profile.display_name || profile.slug || "Profile";
+      await showEditor(profileDraft(profile, data.default_profile_id));
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        renderLoginScreen(root, client, generateProfile, path);
+        return;
+      }
+      if (error?.status === 404) {
+        showNotFound();
+        return;
+      }
+      workspace.replaceChildren();
+      showAppError(error);
+    }
+  }
+
+  function showSetupPlaceholder() {
+    const card = document.createElement("section");
+    card.className = "card empty-state";
+    const title = document.createElement("h2");
+    title.textContent = "开始配置";
+    const description = document.createElement("p");
+    description.className = "muted";
+    description.textContent = "正在准备首次接入引导。";
+    const profiles = document.createElement("a");
+    profiles.href = "/_admin/profiles";
+    profiles.textContent = "前往 Profiles";
+    card.append(title, description, profiles);
+    workspace.replaceChildren(card);
+  }
+
+  function showNotFound() {
+    heading.textContent = "页面不存在";
+    const card = document.createElement("section");
+    card.className = "card empty-state";
+    const title = document.createElement("h2");
+    title.textContent = "页面不存在";
+    const description = document.createElement("p");
+    description.className = "muted";
+    description.textContent = "地址可能已变更，或者 Profile 不存在。";
+    const profiles = document.createElement("a");
+    profiles.setAttribute("href", "/_admin/profiles");
+    profiles.textContent = "返回 Profiles";
+    card.append(title, description, profiles);
+    workspace.replaceChildren(card);
+  }
+
   async function showStats() {
     try {
       const data =
@@ -384,11 +475,27 @@ async function renderAuthenticated(root, client, generateProfile, path) {
     }),
   );
   root.replaceChildren(stage);
-  if (pageName === "stats") {
+  if (route.page === "overview") {
+    await showOverview();
+    return;
+  }
+  if (route.page === "setup") {
+    showSetupPlaceholder();
+    return;
+  }
+  if (route.page === "profile") {
+    await showProfileRoute();
+    return;
+  }
+  if (route.page === "not-found") {
+    showNotFound();
+    return;
+  }
+  if (route.page === "stats") {
     await showStats();
     return;
   }
-  if (pageName === "system") {
+  if (route.page === "system") {
     await showSystem();
     return;
   }
@@ -425,19 +532,19 @@ function isUnauthorized(error) {
 
 function currentPath() {
   if (typeof window === "undefined") {
-    return "/_admin/profiles";
+    return "/_admin/";
   }
   return window.location.pathname;
 }
 
-function pageForPath(path) {
-  if (path === "/_admin/stats") {
-    return "stats";
+function navigationPage(route) {
+  if (route.page === "profile") {
+    return "profiles";
   }
-  if (path === "/_admin/system") {
-    return "system";
+  if (route.page === "setup") {
+    return "overview";
   }
-  return "profiles";
+  return route.page;
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {

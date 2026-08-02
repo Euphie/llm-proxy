@@ -25,13 +25,13 @@ test("initial admin must change password", () => {
   );
 });
 
-test("initialized admin reaches profiles", () => {
+test("initialized admin reaches overview", () => {
   assert.equal(
     nextScreen({
       authenticated: true,
       must_change_password: false,
     }),
-    "profiles",
+    "overview",
   );
 });
 
@@ -251,7 +251,7 @@ test("bootstrap keeps must-change users on the narrow password screen", async (t
   assert.equal(descendants(root).some((element) => element.tagName === "NAV"), false);
 });
 
-test("authenticated bootstrap renders only the fixed navigation and Profiles placeholder", async (t) => {
+test("authenticated bootstrap renders Overview as the default destination", async (t) => {
   const root = installFakeDOM(t);
   const bootstrap = await loadBootstrap();
 
@@ -265,7 +265,7 @@ test("authenticated bootstrap renders only the fixed navigation and Profiles pla
     },
   });
 
-  assert.deepEqual(navigationTexts(root), ["Profiles", "统计", "系统", "退出"]);
+  assert.deepEqual(navigationTexts(root), ["概览", "Profiles", "统计", "系统", "退出"]);
   assert.equal(elementsByClass(root, "desktop-stage").length, 1);
   assert.equal(elementsByClass(root, "app-window").length, 1);
   assert.equal(elementsByClass(root, "window-control").length, 3);
@@ -274,7 +274,9 @@ test("authenticated bootstrap renders only the fixed navigation and Profiles pla
     "true",
   );
   assert.equal(elementsByClass(root, "app-sidebar").length, 1);
-  assert.equal(findHeading(root, "Profiles").tagName, "H1");
+  assert.equal(findHeading(root, "概览").tagName, "H1");
+  assert.equal(linkByText(root, "概览").getAttribute("href"), "/_admin/");
+  assert.equal(linkByText(root, "概览").getAttribute("aria-current"), "page");
 });
 
 test("successful login enters only the mandatory password-change screen", async (t) => {
@@ -306,7 +308,7 @@ test("successful login enters only the mandatory password-change screen", async 
   assert.equal(descendants(root).some((element) => element.tagName === "NAV"), false);
 });
 
-test("password success refreshes the rotated Session before entering Profiles", async (t) => {
+test("password success refreshes the rotated Session before entering Overview", async (t) => {
   const root = installFakeDOM(t);
   const bootstrap = await loadBootstrap();
   const calls = [];
@@ -338,7 +340,26 @@ test("password success refreshes the rotated Session before entering Profiles", 
     ["change", "admin", "安全密码一二三四五六七八"],
     "session",
   ]);
-  assert.deepEqual(navigationTexts(root), ["Profiles", "统计", "系统", "退出"]);
+  assert.deepEqual(navigationTexts(root), ["概览", "Profiles", "统计", "系统", "退出"]);
+});
+
+test("authenticated bootstrap renders a stable not-found page for an unknown path", async (t) => {
+  const root = installFakeDOM(t);
+  const bootstrap = await loadBootstrap();
+
+  await bootstrap({
+    root,
+    path: "/_admin/unknown",
+    client: {
+      session: async () => ({
+        username: "admin",
+        must_change_password: false,
+      }),
+    },
+  });
+
+  assert.ok(findText(root, "页面不存在"));
+  assert.equal(linkByText(root, "返回 Profiles").getAttribute("href"), "/_admin/profiles");
 });
 
 test("a 401 during password change clears the form and returns to login", async (t) => {
@@ -570,6 +591,14 @@ function buttonByText(root, text) {
   );
   assert.ok(button, `button ${text} not found`);
   return button;
+}
+
+function linkByText(root, text) {
+  const link = descendants(root).find(
+    (element) => element.tagName === "A" && element.textContent === text,
+  );
+  assert.ok(link, `link ${text} not found`);
+  return link;
 }
 
 function assertLabelsInput(root, labelText, input) {

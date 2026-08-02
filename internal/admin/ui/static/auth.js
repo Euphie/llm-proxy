@@ -7,7 +7,7 @@ export function nextScreen(session) {
   if (session.must_change_password) {
     return "password-change";
   }
-  return "profiles";
+  return "overview";
 }
 
 export function renderLogin(root, handlers) {

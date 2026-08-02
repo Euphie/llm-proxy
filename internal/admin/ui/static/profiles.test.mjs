@@ -2260,7 +2260,7 @@ test("authenticated app creates a Profile only through the injected API client",
     },
   };
 
-  await bootstrap({ root, client });
+  await bootstrap({ root, client, path: "/_admin/profiles" });
   await buttonByText(root, "创建第一个 Profile").dispatch("click");
   assert.equal(controlByName(root, "enabled").checked, true);
   assert.equal(controlByName(root, "enabled").disabled, true);
