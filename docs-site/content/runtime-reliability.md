@@ -1,6 +1,6 @@
 # 视觉、重试与 Session
 
-> [!TARGET]
+> [!CURRENT]
 > 在线任务分析、视觉辅助、主回答、重试和模型切换共享同一个请求级 AttemptBudget、deadline、取消信号和最坏成本上限。任务分析先消耗预算，随后生成的 ExecutionPlan 固定剩余预算。
 
 ## 视觉三态

@@ -16,19 +16,24 @@ const expectedSlugs = [
   "target-reliability", "runtime-reliability", "evaluation-feedback",
   "strategy-lifecycle", "engineering-and-delivery",
 ];
+const implementedRuntimeChapterSlugs = [
+  "overview", "core-model", "profile-isolation", "online-routing", "quality-and-cost",
+  "target-reliability", "runtime-reliability", "evaluation-feedback", "strategy-lifecycle",
+  "engineering-and-delivery",
+];
 const canonicalChapters = [
-  ["overview", "智能路由概览", "用一个简单流程说明 auto 如何在单个 Profile 内选模型、控成本并守住质量。", "理解方案", "compass", "blue", "本版目标", "本项目源码验证"],
+  ["overview", "智能路由概览", "用一个简单流程说明 auto 如何在单个 Profile 内选模型、控成本并守住质量。", "理解方案", "compass", "blue", "已实现", "本项目源码与测试验证"],
   ["source-baseline", "当前能力与目标", "区分当前已实现能力与智能路由的待实现目标。", "理解方案", "layers", "cyan", "本版目标", "本项目源码验证"],
   ["competitor-evidence", "参考方案与取舍", "提炼竞品中值得采用的机制，并明确不照搬的复杂设计。", "理解方案", "activity", "orange", "本版目标", "竞品源码验证"],
-  ["core-model", "Profile 配置与模型角色", "说明启用 auto 所需配置，以及 ModelCard、Target 和模型角色。", "理解方案", "sliders", "indigo", "本版目标", "竞品源码验证"],
-  ["profile-isolation", "Profile 隔离边界", "URL 选定 Profile 后，路由、视觉、重试和评测始终留在该边界内。", "运行时", "shield", "red", "本版目标", "本项目源码验证"],
-  ["online-routing", "在线路由", "规则先判断，拿不准时调用轻量任务分析器，再生成不可变执行计划。", "运行时", "route", "green", "本版目标", "竞品源码验证"],
-  ["quality-and-cost", "质量与成本", "先满足 Route 质量门槛，再选择完整成本更低的模型。", "运行时", "scale", "yellow", "本版目标", "竞品源码验证"],
+  ["core-model", "Profile 配置与模型角色", "说明启用 auto 所需配置，以及 ModelCard、Target 和模型角色。", "理解方案", "sliders", "indigo", "已实现", "本项目源码与测试验证"],
+  ["profile-isolation", "Profile 隔离边界", "URL 选定 Profile 后，路由、视觉、重试和评测始终留在该边界内。", "运行时", "shield", "red", "已实现", "本项目源码与测试验证"],
+  ["online-routing", "在线路由", "规则先判断，拿不准时调用轻量任务分析器，再生成不可变执行计划。", "运行时", "route", "green", "已实现", "本项目源码与测试验证"],
+  ["quality-and-cost", "质量与成本", "先满足 Route 质量门槛，再选择完整成本更低的模型。", "运行时", "scale", "yellow", "已实现", "本项目源码与测试验证"],
   ["target-reliability", "Target 与容错", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。", "运行时", "activity", "teal", "已实现", "本项目源码与测试验证"],
-  ["runtime-reliability", "视觉、重试与 Session", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。", "运行时", "shield", "slate", "本版目标", "竞品源码验证"],
+  ["runtime-reliability", "视觉、重试与 Session", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。", "运行时", "shield", "slate", "已实现", "本项目源码与测试验证"],
   ["evaluation-feedback", "异步评测与策略优化", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。", "控制面", "activity", "orange", "已实现", "本项目源码与测试验证"],
   ["strategy-lifecycle", "策略生命周期", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。", "控制面", "git-branch", "indigo", "已实现", "本项目源码与测试验证"],
-  ["engineering-and-delivery", "实施范围与交付", "明确 v1 范围、实施阶段和验收条件。", "交付", "database", "slate", "本版目标", "本项目源码验证"],
+  ["engineering-and-delivery", "实施范围与交付", "明确 v1 范围、实施阶段和验收条件。", "交付", "database", "slate", "已实现", "本项目源码与测试验证"],
 ].map(([slug, title, summary, group, icon, accent, implementation_status, evidence_level]) => ({
   slug, title, summary, group, icon, accent, implementation_status, evidence_level,
 }));
@@ -152,6 +157,19 @@ test("locks the twelve canonical chapter records", async () => {
     problems.push("chapters must be an array containing the twelve canonical records.");
   }
   assertContract(problems);
+});
+
+test("labels implemented runtime chapters with project source and test evidence", async () => {
+  const { value: contract, problems } = await loadJsonContract("chapters.json");
+  assertContract(problems);
+  for (const slug of implementedRuntimeChapterSlugs) {
+    const chapter = contract.chapters.find((item) => item.slug === slug);
+    assert.deepEqual(
+      [chapter?.implementation_status, chapter?.evidence_level],
+      ["已实现", "本项目源码与测试验证"],
+      `${slug} must not be presented as a roadmap or competitor-only capability`,
+    );
+  }
 });
 
 test("accepts every manifest evidence level through the shared runtime contract", async () => {

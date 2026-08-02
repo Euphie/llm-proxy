@@ -1,6 +1,6 @@
 # Profile 隔离边界
 
-> [!TARGET]
+> [!CURRENT]
 > Profile 是永久路由边界。URL 在请求入口只选择一次 Profile；后续模型选择、视觉辅助、重试、Session、评测和策略发布都只能使用该 Profile 的配置与数据。
 
 ## 边界如何工作

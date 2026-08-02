@@ -7,8 +7,8 @@
       "group": "理解方案",
       "icon": "compass",
       "accent": "blue",
-      "implementation_status": "本版目标",
-      "evidence_level": "本项目源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     },
     {
       "slug": "source-baseline",
@@ -37,8 +37,8 @@
       "group": "理解方案",
       "icon": "sliders",
       "accent": "indigo",
-      "implementation_status": "本版目标",
-      "evidence_level": "竞品源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     },
     {
       "slug": "profile-isolation",
@@ -47,8 +47,8 @@
       "group": "运行时",
       "icon": "shield",
       "accent": "red",
-      "implementation_status": "本版目标",
-      "evidence_level": "本项目源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     },
     {
       "slug": "online-routing",
@@ -57,8 +57,8 @@
       "group": "运行时",
       "icon": "route",
       "accent": "green",
-      "implementation_status": "本版目标",
-      "evidence_level": "竞品源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     },
     {
       "slug": "quality-and-cost",
@@ -67,8 +67,8 @@
       "group": "运行时",
       "icon": "scale",
       "accent": "yellow",
-      "implementation_status": "本版目标",
-      "evidence_level": "竞品源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     },
     {
       "slug": "target-reliability",
@@ -87,8 +87,8 @@
       "group": "运行时",
       "icon": "shield",
       "accent": "slate",
-      "implementation_status": "本版目标",
-      "evidence_level": "竞品源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     },
     {
       "slug": "evaluation-feedback",
@@ -117,8 +117,8 @@
       "group": "交付",
       "icon": "database",
       "accent": "slate",
-      "implementation_status": "本版目标",
-      "evidence_level": "本项目源码验证"
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
     }
   ]
 }
