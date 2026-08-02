@@ -362,6 +362,24 @@ test("authenticated bootstrap renders a stable not-found page for an unknown pat
   assert.equal(linkByText(root, "返回 Profiles").getAttribute("href"), "/_admin/profiles");
 });
 
+test("authenticated setup route opens the four-step first-run flow", async (t) => {
+  const root = installFakeDOM(t);
+  const bootstrap = await loadBootstrap();
+
+  await bootstrap({
+    root,
+    path: "/_admin/setup",
+    client: {
+      session: async () => ({ username: "admin", must_change_password: false }),
+      listProfiles: async () => ({ default_profile_id: 0, profiles: [] }),
+    },
+  });
+
+  assert.equal(findHeading(root, "开始配置").tagName, "H1");
+  assert.ok(findText(root, "让第一个 Agent 跑起来"));
+  assert.equal(descendants(root).filter((element) => element.tagName === "OL")[0].children.length, 4);
+});
+
 test("a 401 during password change clears the form and returns to login", async (t) => {
   const root = installFakeDOM(t);
   const bootstrap = await loadBootstrap();

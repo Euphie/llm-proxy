@@ -476,6 +476,53 @@ h3 {
   font-weight: 740;
 }
 
+.setup-flow {
+  width: min(58rem, 100%);
+}
+
+.setup-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.setup-progress li {
+  min-width: 0;
+  padding: 0.72rem 0.8rem;
+  border: 1px solid var(--separator);
+  border-radius: 0.68rem;
+  background: rgb(255 255 255 / 50%);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 650;
+  text-align: center;
+}
+
+.setup-progress li[data-state="current"] {
+  border-color: rgb(0 109 204 / 30%);
+  background: rgb(0 109 204 / 12%);
+  color: var(--primary);
+}
+
+.setup-progress li[data-state="complete"] {
+  background: var(--success-surface);
+  color: var(--success);
+}
+
+.setup-panel {
+  padding: clamp(1.1rem, 3vw, 1.6rem);
+}
+
+.verification-status {
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.68rem;
+  background: rgb(0 109 204 / 8%);
+  color: #234d72;
+}
+
 .warning-banner,
 .error-banner {
   padding: 0.82rem 0.95rem;
@@ -1339,6 +1386,10 @@ dialog::backdrop {
     grid-template-columns: 1fr;
   }
 
+  .setup-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .profile-row-header,
   .card-header {
     align-items: stretch;
@@ -1379,6 +1430,10 @@ dialog::backdrop {
   .profile-summary {
     grid-template-columns: 1fr;
     gap: 0.2rem;
+  }
+
+  .setup-progress {
+    grid-template-columns: 1fr;
   }
 
   .profile-summary dd {

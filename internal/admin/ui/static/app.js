@@ -6,6 +6,7 @@ import {
 } from "./auth.js";
 import { createWindowFrame } from "./chrome.js";
 import { renderDashboard } from "./dashboard.js";
+import { renderOnboarding } from "./onboarding.js";
 import {
   defaultProfileDraft,
   profileDraft,
@@ -381,19 +382,23 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
     }
   }
 
-  function showSetupPlaceholder() {
-    const card = document.createElement("section");
-    card.className = "card empty-state";
-    const title = document.createElement("h2");
-    title.textContent = "开始配置";
-    const description = document.createElement("p");
-    description.className = "muted";
-    description.textContent = "正在准备首次接入引导。";
-    const profiles = document.createElement("a");
-    profiles.href = "/_admin/profiles";
-    profiles.textContent = "前往 Profiles";
-    card.append(title, description, profiles);
-    workspace.replaceChildren(card);
+  async function showSetup() {
+    heading.textContent = "开始配置";
+    try {
+      const data = await client.listProfiles();
+      await renderOnboarding(workspace, {
+        session,
+        profiles: data,
+        client,
+      });
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        renderLoginScreen(root, client, generateProfile, path);
+        return;
+      }
+      workspace.replaceChildren();
+      showAppError(error);
+    }
   }
 
   function showNotFound() {
@@ -480,7 +485,7 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
     return;
   }
   if (route.page === "setup") {
-    showSetupPlaceholder();
+    await showSetup();
     return;
   }
   if (route.page === "profile") {
