@@ -960,6 +960,62 @@ func TestAsyncEvaluationCanceledBeforeReviewerChargesOnlyAnswerTransport(t *test
 	}
 }
 
+func TestEvaluationTransportDefinesTheChargeBoundary(t *testing.T) {
+	t.Run("canceled before transport", func(t *testing.T) {
+		var charges atomic.Int32
+		var transportCalls atomic.Int32
+		h := &handler{client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportCalls.Add(1)
+			return nil, errors.New("must not enter base transport")
+		})}}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := h.doEvaluation(ctx, http.MethodPost, "https://upstream.test/v1/messages", nil, nil, func() error {
+			charges.Add(1)
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) || charges.Load() != 0 || transportCalls.Load() != 0 {
+			t.Fatalf("err=%v charges=%d transport=%d", err, charges.Load(), transportCalls.Load())
+		}
+	})
+
+	t.Run("charge rejection stops base transport", func(t *testing.T) {
+		chargeErr := errors.New("budget exhausted")
+		var transportCalls atomic.Int32
+		h := &handler{client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportCalls.Add(1)
+			return nil, errors.New("must not enter base transport")
+		})}}
+		_, err := h.doEvaluation(
+			context.Background(), http.MethodPost, "https://upstream.test/v1/messages", nil, nil,
+			func() error { return chargeErr },
+		)
+		if !errors.Is(err, chargeErr) || transportCalls.Load() != 0 {
+			t.Fatalf("err=%v transport=%d", err, transportCalls.Load())
+		}
+	})
+
+	t.Run("network failure after transport entry remains charged", func(t *testing.T) {
+		networkErr := errors.New("connection reset")
+		var charges atomic.Int32
+		var transportCalls atomic.Int32
+		h := &handler{client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportCalls.Add(1)
+			return nil, networkErr
+		})}}
+		_, err := h.doEvaluation(
+			context.Background(), http.MethodPost, "https://upstream.test/v1/messages", nil, nil,
+			func() error {
+				charges.Add(1)
+				return nil
+			},
+		)
+		if !errors.Is(err, networkErr) || charges.Load() != 1 || transportCalls.Load() != 1 {
+			t.Fatalf("err=%v charges=%d transport=%d", err, charges.Load(), transportCalls.Load())
+		}
+	})
+}
+
 // Break caught: an asynchronous comparison redirect can replay caller credentials to another Profile path.
 func TestAsyncEvaluationReturnsRedirectWithoutCallingOtherProfile(t *testing.T) {
 	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {

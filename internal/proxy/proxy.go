@@ -1368,15 +1368,34 @@ func (h *handler) doEvaluation(
 	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
+	transport := h.client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client := &http.Client{
+		Transport:     chargingRoundTripper{base: transport, charge: charge},
+		CheckRedirect: h.client.CheckRedirect,
+		Jar:           h.client.Jar,
+		Timeout:       h.client.Timeout,
+	}
+	return client.Do(req)
+}
+
+type chargingRoundTripper struct {
+	base   http.RoundTripper
+	charge func() error
+}
+
+func (t chargingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if err := request.Context().Err(); err != nil {
 		return nil, err
 	}
-	if charge != nil {
-		if err := charge(); err != nil {
+	if t.charge != nil {
+		if err := t.charge(); err != nil {
 			return nil, err
 		}
 	}
-	return h.client.Do(req)
+	return t.base.RoundTrip(request)
 }
 
 func newProxyRequest(
