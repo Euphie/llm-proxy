@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
-	"sync/atomic"
 )
 
 type traceContextKey struct{}
@@ -16,19 +14,22 @@ type traceContext struct {
 	callID    string
 }
 
-var fallbackTraceSequence atomic.Uint64
+var readTraceRandom = rand.Read
 
-func NewRequestTrace(ctx context.Context) (context.Context, string) {
-	traceID := newOpaqueTraceID()
-	return context.WithValue(ctx, traceContextKey{}, traceContext{requestID: traceID}), traceID
+func NewRequestTrace(ctx context.Context) (context.Context, string, error) {
+	traceID, err := newOpaqueTraceID()
+	if err != nil {
+		return ctx, "", err
+	}
+	return context.WithValue(ctx, traceContextKey{}, traceContext{requestID: traceID}), traceID, nil
 }
 
-func ensureRequestTrace(ctx context.Context) context.Context {
+func ensureRequestTrace(ctx context.Context) (context.Context, error) {
 	if requestTraceID(ctx) != "" {
-		return ctx
+		return ctx, nil
 	}
-	ctx, _ = NewRequestTrace(ctx)
-	return ctx
+	ctx, _, err := NewRequestTrace(ctx)
+	return ctx, err
 }
 
 func requestTraceID(ctx context.Context) string {
@@ -49,10 +50,10 @@ func traceFromContext(ctx context.Context) traceContext {
 	return trace
 }
 
-func newOpaqueTraceID() string {
+func newOpaqueTraceID() (string, error) {
 	buffer := make([]byte, 12)
-	if _, err := rand.Read(buffer); err == nil {
-		return hex.EncodeToString(buffer)
+	if _, err := readTraceRandom(buffer); err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("local-%d", fallbackTraceSequence.Add(1))
+	return hex.EncodeToString(buffer), nil
 }

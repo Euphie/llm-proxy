@@ -100,6 +100,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	slog.Info("->", "method", r.Method, "path", r.URL.Path)
+	requestCtx, requestTraceID, err := vision.NewRequestTrace(r.Context())
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	sessionID := singleSessionID(r.Header)
 	r.Header.Del(routing.SessionIDHeader)
 
@@ -110,7 +115,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	requestCtx, requestTraceID := vision.NewRequestTrace(r.Context())
 	var budget *routing.AttemptBudget
 	var plan routing.ExecutionPlan
 	var classification routing.Classification

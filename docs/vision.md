@@ -149,6 +149,7 @@ base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前�
 不新增记录。关键结构化日志包括：
 
 - `vision.images.discovered`
+- `vision.cache.waiter_joined`
 - `vision.image.cache`
 - `vision.shadow.attempt`
 - `vision.image.completed` / `vision.image.failed`
@@ -157,4 +158,5 @@ base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前�
 日志只保留 Profile、传输、模型、图片索引/来源、状态、字节数、重试匹配、耗时、缓存来源，
 以及随机生成的 `request_trace_id`、`owner_trace_id` 和 `call_id`。视觉描述、Upstream 响应正文、
 鉴权头、原始 base64、URL、file ID、自定义提示词和用户文本均不写入持久日志。trace ID 只存在于
-代理 context 和日志中，不作为请求头转发给 Upstream。
+代理 context 和日志中，不作为请求头转发给 Upstream；安全随机源不可用时请求会失败，不生成
+可预测的替代 ID。

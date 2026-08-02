@@ -299,7 +299,14 @@ func (p *Preprocessor) processTargetWithBudget(
 	reserveCall CallReservation,
 	parse func(map[string]json.RawMessage) (requestDocument, error),
 ) ([]byte, error) {
-	ctx = ensureRequestTrace(ctx)
+	var traceErr error
+	ctx, traceErr = ensureRequestTrace(ctx)
+	if traceErr != nil {
+		return nil, &processError{
+			status: http.StatusInternalServerError,
+			err:    fmt.Errorf("create vision request trace: %w", traceErr),
+		}
+	}
 	requestTrace := requestTraceID(ctx)
 	root, err := parseRequestRoot(body)
 	if err != nil {

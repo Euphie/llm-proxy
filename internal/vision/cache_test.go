@@ -287,6 +287,27 @@ func TestResultCacheCanceledOwnerWaitsForPhysicalLoadCompletion(t *testing.T) {
 	}
 }
 
+func TestResultCacheOwnerCancellationWinsBeforePublication(t *testing.T) {
+	cache := newResultCache(8, time.Minute)
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	cache.beforePublish = cancelOwner
+
+	value, source, err := cache.getOrLoad(ownerCtx, "key", func(context.Context) (string, error) {
+		return "canceled owner result", nil
+	})
+	if value != "" || source != sourceLoaded || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled load: value=%q source=%v err=%v", value, source, err)
+	}
+
+	cache.beforePublish = nil
+	value, source, err = cache.getOrLoad(context.Background(), "key", func(context.Context) (string, error) {
+		return "replacement", nil
+	})
+	if value != "replacement" || source != sourceLoaded || err != nil {
+		t.Fatalf("replacement load: value=%q source=%v err=%v", value, source, err)
+	}
+}
+
 func TestResultCacheDoesNotJoinCanceledInflightCall(t *testing.T) {
 	cache := newResultCache(8, time.Minute)
 	oldStarted := make(chan struct{})

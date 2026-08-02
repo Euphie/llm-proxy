@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2169,9 +2170,9 @@ func TestAutoVisionSuccessfulSharingChargesOnlyPhysicalOwner(t *testing.T) {
 	proxyHandler := New(runtime, server.Client(), nil).(*handler)
 	ledgers := make(chan []routing.CallLedgerEntry, 2)
 	proxyHandler.callLedgerSink = func(rows []routing.CallLedgerEntry) { ledgers <- rows }
-	var logs bytes.Buffer
+	logs := newWaiterJoinedLogBuffer()
 	originalLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(originalLogger) })
 	body := autoCompositeSharingBody()
 	serve := func(result chan<- *httptest.ResponseRecorder) {
@@ -2186,7 +2187,12 @@ func TestAutoVisionSuccessfulSharingChargesOnlyPhysicalOwner(t *testing.T) {
 	go serve(firstResult)
 	<-visionStarted
 	go serve(secondResult)
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-logs.waiterJoined:
+	case <-time.After(time.Second):
+		close(releaseVision)
+		t.Fatal("second request did not reach the shared vision flight")
+	}
 	if visionCalls.Load() != 1 {
 		close(releaseVision)
 		t.Fatalf("physical vision calls before release=%d, want 1", visionCalls.Load())
@@ -2271,9 +2277,9 @@ func TestAutoVisionCanceledOwnerReplacementChargesBothOwners(t *testing.T) {
 	proxyHandler := New(runtime, server.Client(), nil).(*handler)
 	ledgers := make(chan []routing.CallLedgerEntry, 2)
 	proxyHandler.callLedgerSink = func(rows []routing.CallLedgerEntry) { ledgers <- rows }
-	var logs bytes.Buffer
+	logs := newWaiterJoinedLogBuffer()
 	originalLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(originalLogger) })
 	body := autoCompositeSharingBody()
 	ownerCtx, cancelOwner := context.WithCancel(context.Background())
@@ -2289,7 +2295,12 @@ func TestAutoVisionCanceledOwnerReplacementChargesBothOwners(t *testing.T) {
 	go serve(ownerCtx, ownerResult)
 	<-firstVisionStarted
 	go serve(context.Background(), waiterResult)
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-logs.waiterJoined:
+	case <-time.After(time.Second):
+		cancelOwner()
+		t.Fatal("second request did not reach the shared vision flight")
+	}
 	cancelOwner()
 	select {
 	case <-firstVisionCanceled:
@@ -2345,6 +2356,34 @@ func TestAutoVisionCanceledOwnerReplacementChargesBothOwners(t *testing.T) {
 			t.Fatalf("replacement trace metadata=%v correlations=%v", record, correlations)
 		}
 	}
+}
+
+type waiterJoinedLogBuffer struct {
+	mu           sync.Mutex
+	buffer       bytes.Buffer
+	waiterJoined chan struct{}
+	once         sync.Once
+}
+
+func newWaiterJoinedLogBuffer() *waiterJoinedLogBuffer {
+	return &waiterJoinedLogBuffer{waiterJoined: make(chan struct{})}
+}
+
+func (b *waiterJoinedLogBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	n, err := b.buffer.Write(data)
+	joined := bytes.Contains(b.buffer.Bytes(), []byte(`"msg":"vision.cache.waiter_joined"`))
+	b.mu.Unlock()
+	if joined {
+		b.once.Do(func() { close(b.waiterJoined) })
+	}
+	return n, err
+}
+
+func (b *waiterJoinedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func visionCacheLogRecords(t *testing.T, logs string) []map[string]any {

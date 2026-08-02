@@ -3,6 +3,7 @@ package vision
 import (
 	"container/list"
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -21,15 +22,25 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
+type inflightState uint8
+
+const (
+	inflightLoading inflightState = iota
+	inflightCanceled
+	inflightCompleted
+)
+
 type inflightCall struct {
-	owner   context.Context
-	ctx     context.Context
-	cancel  context.CancelFunc
-	done    chan struct{}
-	waiters int
-	trace   cacheLoadTrace
-	value   string
-	err     error
+	owner    context.Context
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	canceled chan struct{}
+	waiters  int
+	state    inflightState
+	trace    cacheLoadTrace
+	value    string
+	err      error
 }
 
 type cacheLoadTrace struct {
@@ -38,13 +49,14 @@ type cacheLoadTrace struct {
 }
 
 type resultCache struct {
-	mu       sync.Mutex
-	capacity int
-	ttl      time.Duration
-	now      func() time.Time
-	lru      *list.List
-	entries  map[string]*list.Element
-	inflight map[string]*inflightCall
+	mu            sync.Mutex
+	capacity      int
+	ttl           time.Duration
+	now           func() time.Time
+	lru           *list.List
+	entries       map[string]*list.Element
+	inflight      map[string]*inflightCall
+	beforePublish func()
 }
 
 func newResultCache(capacity int, ttl time.Duration) *resultCache {
@@ -81,33 +93,47 @@ func (c *resultCache) getOrLoadTrace(
 
 		call := c.inflight[key]
 		owner := false
-		if call != nil && call.owner.Err() != nil {
-			delete(c.inflight, key)
-			call.cancel()
+		if call != nil && (call.state == inflightCanceled || call.owner.Err() != nil) {
+			c.cancelLoadLocked(key, call)
 			call = nil
 		}
 		if call == nil {
 			callCtx, cancel := context.WithCancel(ctx)
 			ownerTraceID := requestTraceID(ctx)
+			callID, traceErr := newOpaqueTraceID()
+			if traceErr != nil {
+				cancel()
+				c.mu.Unlock()
+				return "", sourceLoaded, cacheLoadTrace{}, traceErr
+			}
 			trace := cacheLoadTrace{
-				callID:       newOpaqueTraceID(),
+				callID:       callID,
 				ownerTraceID: ownerTraceID,
 			}
 			call = &inflightCall{
-				owner:   ctx,
-				ctx:     withLoadTrace(callCtx, trace.callID, ownerTraceID),
-				cancel:  cancel,
-				done:    make(chan struct{}),
-				waiters: 1,
-				trace:   trace,
+				owner:    ctx,
+				ctx:      withLoadTrace(callCtx, trace.callID, ownerTraceID),
+				cancel:   cancel,
+				done:     make(chan struct{}),
+				canceled: make(chan struct{}),
+				waiters:  1,
+				state:    inflightLoading,
+				trace:    trace,
 			}
 			c.inflight[key] = call
 			owner = true
+			go c.watchOwnerCancellation(key, call)
 			go c.runLoad(key, call, load)
 		} else {
 			call.waiters++
 		}
 		c.mu.Unlock()
+		if !owner {
+			slog.Info("vision.cache.waiter_joined",
+				"request_trace_id", requestTraceID(ctx),
+				"owner_trace_id", call.trace.ownerTraceID,
+				"call_id", call.trace.callID)
+		}
 
 		if owner {
 			<-call.done
@@ -116,16 +142,12 @@ func (c *resultCache) getOrLoadTrace(
 
 		select {
 		case <-call.done:
-			if call.owner.Err() != nil && ctx.Err() == nil {
+			if call.state == inflightCanceled && ctx.Err() == nil {
 				continue
 			}
 			return call.value, sourceShared, call.trace, call.err
-		case <-call.owner.Done():
+		case <-call.canceled:
 			c.mu.Lock()
-			if c.inflight[key] == call {
-				delete(c.inflight, key)
-				call.cancel()
-			}
 			call.waiters--
 			c.mu.Unlock()
 			if err := ctx.Err(); err != nil {
@@ -141,23 +163,53 @@ func (c *resultCache) getOrLoadTrace(
 	}
 }
 
+func (c *resultCache) watchOwnerCancellation(key string, call *inflightCall) {
+	select {
+	case <-call.owner.Done():
+		c.mu.Lock()
+		c.cancelLoadLocked(key, call)
+		c.mu.Unlock()
+	case <-call.done:
+	}
+}
+
+func (c *resultCache) cancelLoadLocked(key string, call *inflightCall) {
+	if call.state != inflightLoading {
+		return
+	}
+	call.state = inflightCanceled
+	if c.inflight[key] == call {
+		delete(c.inflight, key)
+	}
+	call.cancel()
+	close(call.canceled)
+}
+
 func (c *resultCache) runLoad(
 	key string,
 	call *inflightCall,
 	load func(context.Context) (string, error),
 ) {
 	value, err := load(call.ctx)
+	if c.beforePublish != nil {
+		c.beforePublish()
+	}
 
 	c.mu.Lock()
-	if ownerErr := call.owner.Err(); ownerErr != nil {
-		value = ""
-		err = ownerErr
+	if call.state == inflightLoading && call.owner.Err() != nil {
+		c.cancelLoadLocked(key, call)
 	}
-	if c.inflight[key] == call {
+	if call.state == inflightCanceled {
+		value = ""
+		err = call.owner.Err()
+	} else if call.state == inflightLoading {
+		call.state = inflightCompleted
 		if err == nil && value != "" {
 			c.putLocked(key, value)
 		}
-		delete(c.inflight, key)
+		if c.inflight[key] == call {
+			delete(c.inflight, key)
+		}
 	}
 	call.value = value
 	call.err = err

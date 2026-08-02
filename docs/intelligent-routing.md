@@ -167,7 +167,8 @@ unsupported operation 错误；显式模型仍保持现有透传行为，不被 
 分支释放未使用容量。每次真实网络调用只消费一张票据，失败调用同样计数，缓存或共享命中不计调用。
 每个显式和 `model=auto` 请求都会生成一个不透明随机 trace ID；auto 请求同时把它作为调用账本
 correlation ID。每次物理视觉加载另有一个 call ID，owner 和 waiter 日志共享该 call ID 与
-owner trace ID。这些 ID 只用于代理内部关联，不包含请求内容或凭据，也不转发给 Upstream。
+owner trace ID。这些 ID 只用于代理内部关联，不包含请求内容或凭据，也不转发给 Upstream；
+安全随机源不可用时请求会失败，不回退到可预测 ID。
 
 ## 6. Session 固定模型
 
