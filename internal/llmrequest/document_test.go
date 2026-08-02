@@ -201,6 +201,100 @@ func TestActualToolOperationsAreBoundedAndDeduplicated(t *testing.T) {
 	}
 }
 
+func TestNamedForcedToolOperationWinsAtCapacityForEveryProtocol(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation Operation
+		body      func(string) []byte
+	}{
+		{
+			name: "anthropic", operation: OperationAnthropicMessages,
+			body: func(forced string) []byte {
+				blocks := make([]map[string]any, maxActualToolOperations)
+				for index := range blocks {
+					blocks[index] = map[string]any{"type": "tool_use", "name": fmt.Sprintf("operation_%02d", index), "input": map[string]any{}}
+				}
+				return marshalDocumentTestBody(t, map[string]any{
+					"tool_choice": map[string]any{"type": "tool", "name": forced},
+					"messages":    []any{map[string]any{"role": "assistant", "content": blocks}},
+				})
+			},
+		},
+		{
+			name: "chat completions", operation: OperationOpenAIChatCompletions,
+			body: func(forced string) []byte {
+				calls := make([]map[string]any, maxActualToolOperations)
+				for index := range calls {
+					calls[index] = map[string]any{"type": "function", "function": map[string]any{"name": fmt.Sprintf("operation_%02d", index), "arguments": "{}"}}
+				}
+				return marshalDocumentTestBody(t, map[string]any{
+					"tool_choice": map[string]any{"type": "function", "function": map[string]any{"name": forced}},
+					"messages":    []any{map[string]any{"role": "assistant", "content": nil, "tool_calls": calls}},
+				})
+			},
+		},
+		{
+			name: "responses", operation: OperationOpenAIResponses,
+			body: func(forced string) []byte {
+				input := make([]map[string]any, maxActualToolOperations)
+				for index := range input {
+					input[index] = map[string]any{"type": "function_call", "name": fmt.Sprintf("operation_%02d", index), "arguments": "{}"}
+				}
+				return marshalDocumentTestBody(t, map[string]any{
+					"tool_choice": map[string]any{"type": "function", "name": forced},
+					"input":       input,
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			document, err := Parse(tt.operation, tt.body("forced_operation"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			operations := document.ActualToolOperations()
+			if len(operations) != maxActualToolOperations || operations[0] != "forced_operation" ||
+				containsFold(operations, "operation_63") {
+				t.Fatalf("unique forced operations=%v", operations)
+			}
+
+			document, err = Parse(tt.operation, tt.body("OPERATION_10"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			operations = document.ActualToolOperations()
+			if len(operations) != maxActualToolOperations || operations[0] != "operation_10" ||
+				countFold(operations, "operation_10") != 1 || !containsFold(operations, "operation_63") {
+				t.Fatalf("duplicate forced operations=%v", operations)
+			}
+		})
+	}
+}
+
+func marshalDocumentTestBody(t *testing.T, value any) []byte {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func containsFold(values []string, want string) bool {
+	return countFold(values, want) > 0
+}
+
+func countFold(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if strings.EqualFold(value, want) {
+			count++
+		}
+	}
+	return count
+}
+
 func TestCanonicalEstimationJSONReplacesOnlyProtocolImageBase64Payload(t *testing.T) {
 	large := strings.Repeat("A", 1024)
 	body := `{"metadata":{"image_url":"data:image/png;base64,` + large + `"},"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + large + `"}},{"type":"text","text":"ordinary text"}]}]}`

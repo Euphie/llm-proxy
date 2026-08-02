@@ -2538,6 +2538,10 @@ function autoRoutingDraft(configured = {}) {
     ? {
         ...defaults.risk_policy,
         ...configuredRisk,
+				structured_output_high_risk:
+					typeof configuredRisk.structured_output_high_risk === "boolean"
+						? configuredRisk.structured_output_high_risk
+						: false,
         sensitive_text_patterns: configuredRisk.sensitive_text_patterns == null
           ? [...defaults.risk_policy.sensitive_text_patterns]
           : [...configuredRisk.sensitive_text_patterns],
@@ -2578,7 +2582,10 @@ function autoRoutingDraft(configured = {}) {
 
 function autoRoutingPayload(auto) {
   if (!auto?.enabled) {
-    return { enabled: false };
+    return {
+			enabled: false,
+			risk_policy: riskPolicyPayload(auto?.risk_policy),
+		};
   }
   const strategy = auto.strategy || {};
   return {

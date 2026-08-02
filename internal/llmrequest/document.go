@@ -373,11 +373,18 @@ func (d *Document) collectForcedToolOperation() {
 
 func (d *Document) prependActualToolOperation(name string) {
 	name = boundedActualToolOperation(name)
-	if name == "" || len(d.actualToolOperations) >= maxActualToolOperations ||
-		d.hasActualToolOperation(name) {
+	if name == "" {
 		return
 	}
-	d.actualToolOperations = append(d.actualToolOperations, "")
+	if index := d.actualToolOperationIndex(name); index >= 0 {
+		existing := d.actualToolOperations[index]
+		copy(d.actualToolOperations[1:index+1], d.actualToolOperations[:index])
+		d.actualToolOperations[0] = existing
+		return
+	}
+	if len(d.actualToolOperations) < maxActualToolOperations {
+		d.actualToolOperations = append(d.actualToolOperations, "")
+	}
 	copy(d.actualToolOperations[1:], d.actualToolOperations[:len(d.actualToolOperations)-1])
 	d.actualToolOperations[0] = name
 }
@@ -400,12 +407,16 @@ func boundedActualToolOperation(name string) string {
 }
 
 func (d *Document) hasActualToolOperation(name string) bool {
-	for _, existing := range d.actualToolOperations {
+	return d.actualToolOperationIndex(name) >= 0
+}
+
+func (d *Document) actualToolOperationIndex(name string) int {
+	for index, existing := range d.actualToolOperations {
 		if strings.EqualFold(existing, name) {
-			return true
+			return index
 		}
 	}
-	return false
+	return -1
 }
 
 func rawString(raw json.RawMessage) string {

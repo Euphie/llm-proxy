@@ -124,6 +124,58 @@ test("saved risk policy preserves explicit empty arrays booleans basis points an
 	});
 });
 
+test("saved empty or partial risk policy drafts use the Go missing-boolean contract", () => {
+	for (const riskPolicy of [
+		{},
+		{
+			sensitive_text_patterns: ["text"],
+			sensitive_tool_patterns: ["tool"],
+			long_context_threshold_bps: 8125,
+		},
+	]) {
+		const draft = profileDraft(profileFixture({
+			config: {
+				...profileFixture().config,
+				auto_routing: {
+					...defaultProfileDraft().config.auto_routing,
+					enabled: true,
+					risk_policy: riskPolicy,
+				},
+			},
+		}));
+		assert.equal(
+			draft.config.auto_routing.risk_policy.structured_output_high_risk,
+			false,
+		);
+		assert.equal(
+			profilePayload(draft).config.auto_routing.risk_policy.structured_output_high_risk,
+			false,
+		);
+	}
+});
+
+test("disabled Auto routing persists and round-trips an explicit risk policy", () => {
+	const expected = {
+		sensitive_text_patterns: [],
+		sensitive_tool_patterns: ["second", "first"],
+		structured_output_high_risk: false,
+		long_context_threshold_bps: 8125,
+	};
+	const draft = defaultProfileDraft();
+	draft.config.auto_routing.enabled = false;
+	draft.config.auto_routing.risk_policy = structuredClone(expected);
+	const first = profilePayload(draft).config.auto_routing;
+	assert.deepEqual(first, { enabled: false, risk_policy: expected });
+
+	const reloaded = profileDraft(profileFixture({
+		config: {
+			...profileFixture().config,
+			auto_routing: structuredClone(first),
+		},
+	}));
+	assert.deepEqual(profilePayload(reloaded).config.auto_routing, first);
+});
+
 test("model capability helpers append an explicit row and remove without sorting", () => {
   const first = {
     id: "first",
@@ -463,7 +515,10 @@ test("payload preserves every configured field with numeric JSON types and retry
       protocol: "anthropic",
       upstream: "https://upstream.example",
       models: [],
-      auto_routing: { enabled: false },
+      auto_routing: {
+			enabled: false,
+			risk_policy: structuredClone(draft.config.auto_routing.risk_policy),
+		},
       vision: {
         enabled: true,
         transport: "anthropic_messages",
