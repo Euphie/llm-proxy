@@ -17,6 +17,16 @@ test("intelligent routing explains that models must be recorded first", () => {
   });
 });
 
+test("disabled intelligent routing names missing model prices before activation", () => {
+  const draft = readyDraft();
+  draft.config.models = [{ id: "freeform" }];
+
+  const routing = profileReadiness(draft, { saved: true }).sections.routing;
+  assert.equal(routing.state, "attention");
+  assert.match(routing.reasons[0], /价格/);
+  assert.equal(routing.action.href, "/_admin/profiles/7/models");
+});
+
 test("Agent configuration is ready without models and reliability accepts no rules", () => {
   const draft = readyDraft();
   draft.config.models = [];
@@ -26,6 +36,7 @@ test("Agent configuration is ready without models and reliability accepts no rul
   const readiness = profileReadiness(draft, { saved: true });
   assert.equal(readiness.sections.agents.state, "ready");
   assert.equal(readiness.sections.reliability.state, "ready");
+  assert.equal(readiness.state, "ready");
 });
 
 test("Auto with vision requires a priced catalog model with usable limits", () => {

@@ -11,12 +11,13 @@ import {
   defaultProfileDraft,
   profileDraft,
   profilePayload,
-  renderProfileEditor,
+  renderProfileEditor as renderLegacyProfileEditor,
   renderProfileList,
 } from "./profiles.js";
+import { renderProfileEditor as renderProfileSectionEditor } from "./profile-editor.js";
 import { renderStatsPage } from "./stats.js";
 import { renderSystemPage } from "./system.js";
-import { parseAdminRoute } from "./routes.js";
+import { parseAdminRoute, profileSectionHref } from "./routes.js";
 
 export async function bootstrap({
   root = document.querySelector("#app"),
@@ -176,10 +177,10 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
     alert.hidden = false;
   }
 
-  async function runMutation(mutation) {
+  async function runMutation(mutation, after = showList) {
     try {
       await mutation();
-      await showList();
+      await after();
     } catch (error) {
       if (isUnauthorized(error)) {
         renderLoginScreen(root, client, generateProfile, path);
@@ -221,7 +222,7 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
       );
     }
 
-    renderProfileEditor(workspace, draft, {
+    const editorActions = {
       save: async (payload) => {
         await runMutation(async () => {
           if (draft.id) {
@@ -229,7 +230,7 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
             return;
           }
           await client.createProfile(payload);
-        });
+        }, route.page === "profile" ? showProfileRoute : showList);
       },
       cancel: () => {
         void showList();
@@ -273,7 +274,16 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
 			const version = await client.generateStrategyCandidate(draft.id);
 			await reloadStrategyEditor(version.id);
 		},
-    });
+    };
+    if (route.page === "profile") {
+      renderProfileSectionEditor(workspace, draft, {
+        ...editorActions,
+        section: route.section,
+        defaultProfileID: draft.make_default ? draft.id : 0,
+      });
+      return;
+    }
+    renderLegacyProfileEditor(workspace, draft, editorActions);
   }
 
   async function openEditor(draft, editingStrategyID = 0) {
@@ -303,7 +313,7 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
           void openEditor(draft);
         },
         edit: (profile) =>
-          void openEditor(profileDraft(profile, data.default_profile_id)),
+          navigateTo(profileSectionHref(profile.id, "overview")),
         generate: generateProfile,
         copy: async (profile, body) => {
           await runMutation(() => client.copyProfile(profile.id, body));
@@ -550,6 +560,12 @@ function navigationPage(route) {
     return "overview";
   }
   return route.page;
+}
+
+function navigateTo(href) {
+  if (typeof window !== "undefined") {
+    window.location.assign(href);
+  }
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {

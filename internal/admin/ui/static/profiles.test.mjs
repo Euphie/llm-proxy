@@ -1086,6 +1086,26 @@ test("model editor rows add and remove in Profile order with explicit token and 
   assert.equal(buttonTexts(root).includes("上移"), false);
 });
 
+test("model editor blocks deletion while an exact feature reference remains", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.id = 7;
+  draft.slug = "coding";
+  draft.display_name = "Coding";
+  draft.config.upstream = "https://upstream.example";
+  draft.config.models = [{ id: "strong", supports_vision: true }];
+  draft.config.vision.model = "strong";
+
+  renderProfileEditor(root, draft, { save: async () => {}, cancel: () => {} });
+  await buttonByText(root, "删除模型").dispatch("click");
+
+  assert.equal(elementsByClass(root, "model-capability-row").length, 1);
+  const dialog = findAllTags(root, "DIALOG")[0];
+  assert.ok(dialog.open);
+  assert.ok(findText(dialog, "模型仍被其他功能使用"));
+  assert.equal(linkByText(dialog, "视觉模型").getAttribute("href"), "/_admin/profiles/7/vision");
+});
+
 test("Auto editor explains roles routes and budget and saves percentage inputs as basis points", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();
@@ -1236,6 +1256,18 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.equal(saves.length, 1);
   assert.equal(findClass(root, "error-banner").hidden, false);
   assert.match(findClass(root, "error-banner").textContent, /最低质量必须是/);
+});
+
+test("Auto enable control waits for at least one recorded model", (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.id = 7;
+  draft.slug = "coding";
+  draft.display_name = "Coding";
+  draft.config.upstream = "https://upstream.example";
+
+  renderProfileEditor(root, draft, { save: async () => {}, cancel: () => {} });
+  assert.equal(controlByName(root, "auto_routing_enabled").disabled, true);
 });
 
 test("strategy lifecycle UI creates drafts and exposes only valid publication actions", async (t) => {
@@ -2278,6 +2310,104 @@ test("authenticated app creates a Profile only through the injected API client",
   assert.equal(typeof creates[0].config.vision.max_tokens, "number");
 });
 
+test("authenticated Profile detail route mounts only its selected settings section", async (t) => {
+  const root = installFakeDOM(t);
+  const profile = profileFixture({
+    id: 7,
+    slug: "coding",
+    display_name: "Coding",
+  });
+  await bootstrap({
+    root,
+    path: "/_admin/profiles/7/models",
+    client: {
+      session: async () => ({ username: "admin", must_change_password: false }),
+      getProfile: async () => profile,
+      listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+    },
+  });
+
+  assert.equal(findAllTags(root, "H1")[0].textContent, "Coding");
+  assert.equal(linkByText(root, "模型").getAttribute("aria-current"), "page");
+  assert.ok(findText(root, "模型能力"));
+  assert.equal(
+    descendants(root).some((element) => element.textContent === "基础配置"),
+    false,
+  );
+  assert.equal(findText(root, "视觉增强"), linkByText(root, "视觉增强"));
+});
+
+test("saving one Profile detail section keeps unrelated configuration", async (t) => {
+  const root = installFakeDOM(t);
+  const profile = profileFixture({
+    id: 7,
+    slug: "coding",
+    display_name: "Coding",
+    config: {
+      version: 1,
+      protocol: "anthropic",
+      upstream: "https://upstream.example",
+      models: [{ id: "strong", context_window: 128000, supports_vision: true }],
+      vision: {
+        enabled: false,
+        model: "strong",
+        max_tokens: 4096,
+        timeout: "45s",
+        max_concurrency: 3,
+        cache_ttl: "2h",
+        cache_max_entries: 700,
+        prompt: "保留这个提示词",
+      },
+      overload_rules: [{
+        status: 529,
+        body_contains: "busy",
+        max_retries: 2,
+        delay: "1s",
+        jitter: "100ms",
+      }],
+    },
+  });
+  const updates = [];
+  const client = {
+    session: async () => ({ username: "admin", must_change_password: false }),
+    getProfile: async () => profile,
+    listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+    updateProfile: async (_id, payload) => updates.push(payload),
+  };
+  await bootstrap({ root, path: "/_admin/profiles/7/models", client });
+  controlByName(root, "model-0-context-window").value = "256K";
+  await findTag(root, "FORM").dispatch("submit");
+
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].config.models[0].context_window, 256000);
+  assert.equal(updates[0].config.upstream, "https://upstream.example");
+  assert.equal(updates[0].config.vision.prompt, "保留这个提示词");
+  assert.equal(updates[0].config.vision.cache_ttl, "2h");
+  assert.deepEqual(updates[0].config.overload_rules, profile.config.overload_rules);
+});
+
+test("Agent detail generates protocol-specific configuration without a model catalog", async (t) => {
+  const root = installFakeDOM(t);
+  const profile = profileFixture({ id: 7, slug: "coding", display_name: "Coding" });
+  await bootstrap({
+    root,
+    path: "/_admin/profiles/7/agents",
+    client: {
+      session: async () => ({ username: "admin", must_change_password: false }),
+      getProfile: async () => profile,
+      listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+    },
+  });
+
+  await buttonByText(root, "生成配置").dispatch("click");
+  const dialog = findAllTags(root, "DIALOG")[0];
+  assert.ok(dialog.open);
+  assert.deepEqual(
+    controlByName(dialog, "generator-agent").children.map((option) => option.value),
+    ["claude-code", "opencode-anthropic", "generic"],
+  );
+});
+
 function profileListFixture() {
   return {
     default_profile_id: 1,
@@ -2675,6 +2805,14 @@ function buttonByText(root, text) {
   const button = buttonsByText(root, text)[0];
   assert.ok(button, `button ${text} not found`);
   return button;
+}
+
+function linkByText(root, text) {
+  const link = descendants(root).find(
+    (element) => element.tagName === "A" && element.textContent === text,
+  );
+  assert.ok(link, `link ${text} not found`);
+  return link;
 }
 
 function sectionHeadings(root) {

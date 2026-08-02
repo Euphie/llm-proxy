@@ -523,6 +523,114 @@ h3 {
   color: #234d72;
 }
 
+.profile-detail-layout {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.profile-section-nav {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.55rem;
+  border: 1px solid var(--separator);
+  border-radius: 0.82rem;
+  background: rgb(255 255 255 / 56%);
+}
+
+.profile-section-nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.58rem;
+  border-radius: 0.52rem;
+  color: var(--text-muted);
+  font-size: 0.87rem;
+  font-weight: 620;
+  text-decoration: none;
+}
+
+.profile-section-nav a:hover {
+  background: rgb(255 255 255 / 62%);
+  color: var(--text);
+}
+
+.profile-section-nav a[aria-current="page"] {
+  background: rgb(0 109 204 / 12%);
+  color: var(--primary);
+}
+
+.profile-section-state {
+  flex: 0 0 auto;
+  padding: 0.16rem 0.38rem;
+  border-radius: 999px;
+  background: rgb(104 110 118 / 11%);
+  font-size: 0.68rem;
+  font-weight: 680;
+}
+
+.profile-section-state.state-ready {
+  background: var(--success-surface);
+  color: var(--success);
+}
+
+.profile-section-state.state-blocked {
+  background: var(--warning-surface);
+  color: var(--warning);
+}
+
+.profile-section-content {
+  min-width: 0;
+  max-width: 64rem;
+}
+
+.profile-section-form > .editor-section {
+  margin: 0;
+}
+
+.profile-overview-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+
+.profile-overview-facts dt {
+  color: var(--text-muted);
+}
+
+.profile-overview-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: 0.85rem;
+}
+
+.profile-capability-card {
+  align-content: start;
+}
+
+.profile-capability-card h3,
+.profile-capability-card p {
+  margin-bottom: 0;
+}
+
+.dependency-panel {
+  align-items: start;
+  border-color: rgb(255 159 10 / 28%);
+  background: linear-gradient(135deg, rgb(255 255 255 / 92%), rgb(255 248 234 / 88%));
+}
+
 .warning-banner,
 .error-banner {
   padding: 0.82rem 0.95rem;
@@ -1318,6 +1426,10 @@ dialog::backdrop {
     padding-left: 0;
     margin-left: 0;
   }
+
+  .profile-detail-layout {
+    grid-template-columns: 10.5rem minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 48rem) {
@@ -1387,6 +1499,15 @@ dialog::backdrop {
   }
 
   .setup-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-section-nav {
+    position: static;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

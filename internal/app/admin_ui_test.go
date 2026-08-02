@@ -29,6 +29,8 @@ func TestAdminUIAssetsAreServedByApplication(t *testing.T) {
 		"/_admin/assets/current/auth.js":              "text/javascript; charset=utf-8",
 		"/_admin/assets/current/dashboard.js":         "text/javascript; charset=utf-8",
 		"/_admin/assets/current/onboarding.js":        "text/javascript; charset=utf-8",
+		"/_admin/assets/current/profile-editor.js":    "text/javascript; charset=utf-8",
+		"/_admin/assets/current/profile-models.js":    "text/javascript; charset=utf-8",
 		"/_admin/assets/current/profile-draft.js":     "text/javascript; charset=utf-8",
 		"/_admin/assets/current/profile-readiness.js": "text/javascript; charset=utf-8",
 		"/_admin/assets/current/profiles.js":          "text/javascript; charset=utf-8",

@@ -53,7 +53,7 @@ export function profileReadiness(draft, { saved = false } = {}) {
     .filter(([, value]) => value.state === "blocked")
     .map(([section, value]) => ({ section, ...value }));
   return {
-    state: blockers.length === 0 ? "ready" : "blocked",
+    state: connection.state === "ready" ? "ready" : "blocked",
     sections,
     blockers,
   };
@@ -128,6 +128,17 @@ function routingReadiness(auto, models, sectionHref) {
     );
   }
   if (!auto.enabled) {
+    const missingPrices = models
+      .filter((model) => !hasPrices(model))
+      .map((model) => String(model.id || "未命名"));
+    if (missingPrices.length > 0) {
+      return state(
+        "attention",
+        [`模型 ${missingPrices.join("、")} 缺少输入或输出价格；启用智能路由前需要补全。`],
+        "完善模型信息",
+        sectionHref("models"),
+      );
+    }
     return state("disabled", ["智能路由尚未启用。"]);
   }
 

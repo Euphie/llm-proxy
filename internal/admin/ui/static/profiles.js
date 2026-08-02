@@ -3,6 +3,10 @@ import {
   matchModelSuggestions,
   parseTokenLimit,
 } from "./model-catalog.js";
+import {
+  openModelReferenceDialog,
+  validateModelMutation,
+} from "./profile-models.js";
 import { profileIconVisual } from "./visual.js";
 
 const defaultVision = {
@@ -1091,6 +1095,17 @@ export function renderProfileEditor(root, source, actions = {}) {
         }
       }
 
+      function commitModelID() {
+        const mutation = validateModelMutation(working, model.id, id.value);
+        if (!mutation.allowed) {
+          id.value = model.id;
+          refreshRecommendations();
+          openModelReferenceDialog(root, working, model.id, mutation.references);
+          return;
+        }
+        commitRecommendations();
+      }
+
       for (const [field, control] of Object.entries(capabilityControls)) {
         const releaseOwnership = () => {
           delete recommendationState.autoValues[field];
@@ -1102,16 +1117,21 @@ export function renderProfileEditor(root, source, actions = {}) {
         refreshRecommendations();
         refreshAutoModelOptions();
         if (event.inputType === "insertFromPaste") {
-          commitRecommendations();
+          commitModelID();
         }
       });
-      id.addEventListener("change", commitRecommendations);
-      id.addEventListener("blur", commitRecommendations);
+      id.addEventListener("change", commitModelID);
+      id.addEventListener("blur", commitModelID);
       refreshRecommendations();
 
       const controls = element("div", "cluster model-capability-actions");
       const remove = actionButton("删除模型", "button-danger");
       remove.addEventListener("click", () => {
+        const mutation = validateModelMutation(working, model.id, "");
+        if (!mutation.allowed) {
+          openModelReferenceDialog(root, working, model.id, mutation.references);
+          return;
+        }
         syncModelCapabilities();
         working.config.models = removeModelCapability(
           working.config.models,
@@ -1121,6 +1141,8 @@ export function renderProfileEditor(root, source, actions = {}) {
           (_, current) => current !== index,
         );
         renderModelCapabilities();
+        autoEnabled.disabled = working.config.models.length === 0 && !autoEnabled.checked;
+        autoDependency.hidden = working.config.models.length > 0;
       });
       controls.append(remove);
       row.append(legend, fields, recommendation, controls);
@@ -1147,6 +1169,8 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.models = addModelCapability(working.config.models);
     modelRecommendationStates.push({ autoValues: {} });
     renderModelCapabilities();
+    autoEnabled.disabled = false;
+    autoDependency.hidden = true;
   });
   const modelListActions = element("div", "cluster model-list-actions");
   modelListActions.append(addModel);
@@ -1168,6 +1192,13 @@ export function renderProfileEditor(root, source, actions = {}) {
     },
   );
   autoEnabled.checked = Boolean(working.config.auto_routing.enabled);
+  autoEnabled.disabled = working.config.models.length === 0 && !autoEnabled.checked;
+  const autoDependency = textElement(
+    "p",
+    "请先在“模型”页面录入至少一个模型，才能启用智能路由。",
+  );
+  autoDependency.className = "warning-banner";
+  autoDependency.hidden = working.config.models.length > 0;
   const autoDetails = element("div", "stack auto-routing-details");
   const autoRoles = editorSubsection("模型角色");
   const participantList = element("div", "model-participant-list stack");
@@ -1991,7 +2022,7 @@ export function renderProfileEditor(root, source, actions = {}) {
 		budgetSection,
 		lifecycleSection,
 	);
-  autoRouting.append(autoDetails);
+	autoRouting.append(autoHelp, autoDependency, autoDetails);
 
   const vision = editorSection("视觉增强");
   const visionNote = textElement(
