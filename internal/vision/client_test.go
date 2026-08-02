@@ -270,22 +270,6 @@ func TestVisionClientEffectivePrompt(t *testing.T) {
 	}
 }
 
-func TestTruncateDebugContent(t *testing.T) {
-	const short = "short content"
-	if got, truncated := truncateDebugContent(short); got != short || truncated {
-		t.Fatalf("short content=%q truncated=%v", got, truncated)
-	}
-
-	long := strings.Repeat("界", debugLogContentLimit+1)
-	got, truncated := truncateDebugContent(long)
-	if !truncated {
-		t.Fatal("long content was not truncated")
-	}
-	if len([]rune(got)) != debugLogContentLimit {
-		t.Fatalf("truncated runes=%d", len([]rune(got)))
-	}
-}
-
 func TestVisionClientRetriesMatchedOverload(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

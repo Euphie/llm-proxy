@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -335,6 +336,59 @@ func TestVisionEnabledRewritesImageBeforeMainRequest(t *testing.T) {
 	}
 	if bytes.Contains(mainBody, []byte(`"type":"image"`)) {
 		t.Fatalf("main body still contains image block: %s", mainBody)
+	}
+}
+
+func TestExplicitVisionLogsOpaqueRequestAndOwnerTrace(t *testing.T) {
+	visionHeaders := make(chan http.Header, 1)
+	upstream := newVisionUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		visionHeaders <- r.Header.Clone()
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"screen description"}]}`)
+	})
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(visionImageBody))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	upstream.proxy(true).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+
+	var cacheRecord map[string]any
+	var attemptRecord map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		switch record["msg"] {
+		case "vision.image.cache":
+			cacheRecord = record
+		case "vision.shadow.attempt":
+			attemptRecord = record
+		}
+	}
+	requestTrace, _ := cacheRecord["request_trace_id"].(string)
+	ownerTrace, _ := cacheRecord["owner_trace_id"].(string)
+	callID, _ := cacheRecord["call_id"].(string)
+	if requestTrace == "" || ownerTrace != requestTrace || callID == "" {
+		t.Fatalf("cache trace metadata=%v", cacheRecord)
+	}
+	if attemptRecord["request_trace_id"] != requestTrace ||
+		attemptRecord["owner_trace_id"] != ownerTrace || attemptRecord["call_id"] != callID {
+		t.Fatalf("attempt trace metadata=%v, cache=%v", attemptRecord, cacheRecord)
+	}
+	for name, values := range <-visionHeaders {
+		for _, value := range values {
+			if strings.Contains(name, "Trace") || strings.Contains(value, requestTrace) ||
+				strings.Contains(value, callID) {
+				t.Fatalf("vision request forwarded trace metadata: %s=%q", name, value)
+			}
+		}
 	}
 }
 

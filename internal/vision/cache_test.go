@@ -142,7 +142,7 @@ func TestResultCacheDoesNotCacheFailures(t *testing.T) {
 	}
 }
 
-func TestResultCacheOneCanceledWaiterDoesNotCancelSharedLoad(t *testing.T) {
+func TestResultCacheCanceledWaiterDoesNotCancelOwnerLoad(t *testing.T) {
 	cache := newResultCache(8, time.Minute)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -158,22 +158,22 @@ func TestResultCacheOneCanceledWaiterDoesNotCancelSharedLoad(t *testing.T) {
 		}
 	}
 
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	firstResult := make(chan error, 1)
+	ownerResult := make(chan error, 1)
 	go func() {
-		_, _, err := cache.getOrLoad(firstCtx, "key", load)
-		firstResult <- err
+		_, _, err := cache.getOrLoad(context.Background(), "key", load)
+		ownerResult <- err
 	}()
 	<-started
 
-	secondResult := make(chan struct {
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	waiterResult := make(chan struct {
 		value  string
 		source resultSource
 		err    error
 	}, 1)
 	go func() {
-		value, source, err := cache.getOrLoad(context.Background(), "key", load)
-		secondResult <- struct {
+		value, source, err := cache.getOrLoad(waiterCtx, "key", load)
+		waiterResult <- struct {
 			value  string
 			source resultSource
 			err    error
@@ -181,65 +181,109 @@ func TestResultCacheOneCanceledWaiterDoesNotCancelSharedLoad(t *testing.T) {
 	}()
 	waitForResultCacheWaiters(t, cache, "key", 2)
 
-	cancelFirst()
-	if err := <-firstResult; !errors.Is(err, context.Canceled) {
-		t.Fatalf("first waiter error=%v, want context canceled", err)
+	cancelWaiter()
+	if result := <-waiterResult; !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("waiter error=%v, want context canceled", result.err)
 	}
 	select {
 	case <-loaderCanceled:
-		t.Fatal("shared loader was canceled while another waiter remained")
+		t.Fatal("owner loader was canceled by a waiter")
 	default:
 	}
 
 	close(release)
-	second := <-secondResult
-	if second.err != nil || second.value != "description" || second.source != sourceShared {
-		t.Fatalf("second waiter: value=%q source=%v err=%v", second.value, second.source, second.err)
+	if err := <-ownerResult; err != nil {
+		t.Fatalf("owner error=%v", err)
 	}
 }
 
-func TestResultCacheAllCanceledWaitersCancelSharedLoad(t *testing.T) {
+func TestResultCacheOwnerCancellationReelectsLiveWaiter(t *testing.T) {
 	cache := newResultCache(8, time.Minute)
-	started := make(chan struct{})
-	loaderCanceled := make(chan struct{})
-	load := func(ctx context.Context) (string, error) {
-		close(started)
+	ownerStarted := make(chan struct{})
+	ownerCanceled := make(chan struct{})
+	ownerLoad := func(ctx context.Context) (string, error) {
+		close(ownerStarted)
 		<-ctx.Done()
-		close(loaderCanceled)
+		close(ownerCanceled)
 		return "", ctx.Err()
 	}
 
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	secondCtx, cancelSecond := context.WithCancel(context.Background())
-	results := make(chan error, 2)
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	ownerResult := make(chan error, 1)
 	go func() {
-		_, _, err := cache.getOrLoad(firstCtx, "key", load)
-		results <- err
+		_, _, err := cache.getOrLoad(ownerCtx, "key", ownerLoad)
+		ownerResult <- err
 	}()
-	<-started
+	<-ownerStarted
+
+	waiterStarted := make(chan struct{})
+	waiterLoad := func(context.Context) (string, error) {
+		close(waiterStarted)
+		return "replacement", nil
+	}
+	type result struct {
+		value  string
+		source resultSource
+		err    error
+	}
+	waiterResult := make(chan result, 1)
 	go func() {
-		_, _, err := cache.getOrLoad(secondCtx, "key", load)
-		results <- err
+		value, source, err := cache.getOrLoad(context.Background(), "key", waiterLoad)
+		waiterResult <- result{value: value, source: source, err: err}
 	}()
 	waitForResultCacheWaiters(t, cache, "key", 2)
 
-	cancelFirst()
+	cancelOwner()
 	select {
-	case <-loaderCanceled:
-		t.Fatal("loader canceled before the last waiter left")
-	default:
+	case <-ownerCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("owner loader did not observe cancellation")
 	}
-	cancelSecond()
+	select {
+	case <-waiterStarted:
+	case <-time.After(time.Second):
+		t.Fatal("live waiter did not become owner of a replacement load")
+	}
+	if err := <-ownerResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("owner error=%v, want context canceled", err)
+	}
+	waiter := <-waiterResult
+	if waiter.err != nil || waiter.value != "replacement" || waiter.source != sourceLoaded {
+		t.Fatalf("replacement owner: value=%q source=%v err=%v", waiter.value, waiter.source, waiter.err)
+	}
+}
+
+func TestResultCacheCanceledOwnerWaitsForPhysicalLoadCompletion(t *testing.T) {
+	cache := newResultCache(8, time.Minute)
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	load := func(ctx context.Context) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return "ignored success", nil
+	}
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := cache.getOrLoad(ownerCtx, "key", load)
+		result <- err
+	}()
+	<-started
+	cancelOwner()
+	<-canceled
 
 	select {
-	case <-loaderCanceled:
-	case <-time.After(time.Second):
-		t.Fatal("loader was not canceled after all waiters left")
+	case err := <-result:
+		t.Fatalf("owner returned before physical load completion: %v", err)
+	case <-time.After(50 * time.Millisecond):
 	}
-	for range 2 {
-		if err := <-results; !errors.Is(err, context.Canceled) {
-			t.Fatalf("waiter error=%v, want context canceled", err)
-		}
+	close(release)
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("owner error=%v, want context canceled", err)
 	}
 }
 
@@ -278,9 +322,6 @@ func TestResultCacheDoesNotJoinCanceledInflightCall(t *testing.T) {
 	}
 
 	cancelFirst()
-	if err := <-firstResult; !errors.Is(err, context.Canceled) {
-		t.Fatalf("first waiter error=%v, want context canceled", err)
-	}
 	select {
 	case <-oldCanceled:
 	case <-time.After(time.Second):
@@ -327,6 +368,9 @@ func TestResultCacheDoesNotJoinCanceledInflightCall(t *testing.T) {
 
 	oldReleased = true
 	close(releaseOld)
+	if err := <-firstResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first owner error=%v, want context canceled", err)
+	}
 	select {
 	case <-oldCall.done:
 	case <-time.After(time.Second):

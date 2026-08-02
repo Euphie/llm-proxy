@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -826,6 +825,8 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 		authSecret,
 		apiKeySecret,
 		promptSecret,
+		responseSecret,
+		"DESCRIPTION_SECRET",
 		"VERSION_SECRET",
 		"BETA_SECRET",
 	} {
@@ -835,14 +836,12 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 	}
 
 	wantedEvents := map[string]bool{
-		"vision.images.discovered":       false,
-		"vision.image.cache":             false,
-		"vision.image.completed":         false,
-		"vision.image.failed":            false,
-		"vision.rewrite.completed":       false,
-		"vision.shadow.attempt":          false,
-		"vision.debug.description":       false,
-		"vision.debug.upstream_response": false,
+		"vision.images.discovered": false,
+		"vision.image.cache":       false,
+		"vision.image.completed":   false,
+		"vision.image.failed":      false,
+		"vision.rewrite.completed": false,
+		"vision.shadow.attempt":    false,
 	}
 	allowedFields := map[string]bool{
 		"time":                  true,
@@ -862,9 +861,9 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 		"status_code":           true,
 		"response_bytes":        true,
 		"retry_matched":         true,
-		"description":           true,
-		"response_body":         true,
-		"truncated":             true,
+		"request_trace_id":      true,
+		"owner_trace_id":        true,
+		"call_id":               true,
 	}
 	for _, line := range strings.Split(strings.TrimSpace(logText), "\n") {
 		if line == "" {
@@ -899,7 +898,7 @@ func TestVisionLogsStagesWithoutSensitiveValues(t *testing.T) {
 	}
 }
 
-func TestVisionDebugLogsContent(t *testing.T) {
+func TestVisionLogsNeverPersistDescriptionOrUpstreamBody(t *testing.T) {
 	const (
 		description = "debug vision description"
 		failureBody = `{"error":{"type":"invalid_request_error","message":"debug upstream failure"}}`
@@ -939,11 +938,20 @@ func TestVisionDebugLogsContent(t *testing.T) {
 	}
 
 	logText := logs.String()
-	for _, want := range []string{
+	for _, forbidden := range []string{
+		description,
+		failureBody,
 		`"msg":"vision.debug.description"`,
-		`"description":"` + description + `"`,
 		`"msg":"vision.debug.upstream_response"`,
-		`"response_body":` + strconv.Quote(failureBody),
+		`"description":`,
+		`"response_body":`,
+		`"truncated":`,
+	} {
+		if strings.Contains(logText, forbidden) {
+			t.Fatalf("vision logs contain forbidden content %q: %s", forbidden, logText)
+		}
+	}
+	for _, want := range []string{
 		`"model":"sonnet"`,
 		`"status_code":200`,
 		`"status_code":400`,
@@ -1034,17 +1042,26 @@ func TestPreprocessorWaitsForActiveDescriptionsAfterFailure(t *testing.T) {
 	}
 }
 
-func TestPreprocessorCreatorDetachesWhenAnotherRequestSharesLoaderAfterSiblingFailure(t *testing.T) {
+func TestPreprocessorOwnerFailureCancelsSharedLoadAndWaiterReelects(t *testing.T) {
 	describeErr := errors.New("vision failed")
 	sharedStarted := make(chan struct{})
-	releaseShared := make(chan struct{})
+	sharedCanceled := make(chan struct{})
+	releaseCanceled := make(chan struct{})
+	replacementStarted := make(chan struct{})
 	failNow := make(chan struct{})
-	d := describerFunc(func(_ context.Context, _ http.Header, image imageRef) (string, error) {
+	var sharedCalls atomic.Int32
+	d := describerFunc(func(ctx context.Context, _ http.Header, image imageRef) (string, error) {
 		switch image.cachePayload {
 		case "shared":
-			close(sharedStarted)
-			<-releaseShared
-			return "shared description", nil
+			if sharedCalls.Add(1) == 1 {
+				close(sharedStarted)
+				<-ctx.Done()
+				close(sharedCanceled)
+				<-releaseCanceled
+				return "", ctx.Err()
+			}
+			close(replacementStarted)
+			return "replacement description", nil
 		case "bad":
 			<-failNow
 			return "", describeErr
@@ -1073,90 +1090,186 @@ func TestPreprocessorCreatorDetachesWhenAnotherRequestSharesLoaderAfterSiblingFa
 	close(failNow)
 
 	select {
-	case result := <-creatorResult:
-		if result.body != nil || !errors.Is(result.err, describeErr) {
-			t.Fatalf("creator body=%s err=%v", result.body, result.err)
-		}
+	case <-sharedCanceled:
 	case <-time.After(time.Second):
-		close(releaseShared)
-		t.Fatal("creator waited for loader owned by the sharing request")
+		t.Fatal("owner load did not observe sibling cancellation")
 	}
 	select {
-	case result := <-sharerResult:
-		t.Fatalf("sharing request returned before shared loader completed: body=%s err=%v", result.body, result.err)
-	default:
+	case <-replacementStarted:
+	case <-time.After(time.Second):
+		t.Fatal("live waiter did not reelect after owner failure")
 	}
-	close(releaseShared)
 	select {
 	case result := <-sharerResult:
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
-		if got := rewrittenDescriptions(t, result.body); !equalStrings(got, []string{"shared description"}) {
+		if got := rewrittenDescriptions(t, result.body); !equalStrings(got, []string{"replacement description"}) {
 			t.Fatalf("descriptions=%q", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("sharing request did not complete")
 	}
+	select {
+	case result := <-creatorResult:
+		t.Fatalf("creator returned before its physical load exited: %+v", result)
+	default:
+	}
+	close(releaseCanceled)
+	select {
+	case result := <-creatorResult:
+		if result.body != nil || !errors.Is(result.err, describeErr) {
+			t.Fatalf("creator body=%s err=%v", result.body, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("creator did not return after canceled load exited")
+	}
 }
 
-func TestPreprocessorCreatorDetachesWhenAnotherRequestSharesLoaderAfterCancellation(t *testing.T) {
-	sharedStarted := make(chan struct{})
-	releaseShared := make(chan struct{})
-	d := describerFunc(func(_ context.Context, _ http.Header, image imageRef) (string, error) {
-		if image.cachePayload != "shared" {
-			return "", errors.New("unexpected image")
+func TestPreprocessorCancellationReplacementChargesEachOwner(t *testing.T) {
+	ownerStarted := make(chan struct{})
+	ownerCanceled := make(chan struct{})
+	releaseOwner := make(chan struct{})
+	replacementStarted := make(chan struct{})
+	var physicalCalls atomic.Int32
+	d := describerFunc(func(ctx context.Context, _ http.Header, _ imageRef) (string, error) {
+		if physicalCalls.Add(1) == 1 {
+			close(ownerStarted)
+			<-ctx.Done()
+			close(ownerCanceled)
+			<-releaseOwner
+			return "ignored owner result", nil
 		}
-		close(sharedStarted)
-		<-releaseShared
-		return "shared description", nil
+		close(replacementStarted)
+		return "replacement description", nil
 	})
-	p := testPreprocessor(1, d)
+	p := testPreprocessor(2, d)
 	creatorCtx, cancelCreator := context.WithCancel(context.Background())
+	var ownerReservations atomic.Int32
+	var ownerCompletions atomic.Int32
 	creatorResult := make(chan processResult, 1)
 	go func() {
-		body, err := p.Process(creatorCtx, nil, imageRequest("shared"))
+		body, err := p.ProcessOperationTargetWithTickets(
+			creatorCtx, nil, llmrequest.OperationAnthropicMessages,
+			imageRequest("shared"), "https://example.test/v1/messages",
+			func(context.Context, int, int) (CallCompletion, error) {
+				ownerReservations.Add(1)
+				return func(int, string, []byte) { ownerCompletions.Add(1) }, nil
+			},
+		)
 		creatorResult <- processResult{body: body, err: err}
 	}()
 
 	select {
-	case <-sharedStarted:
+	case <-ownerStarted:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for shared description")
+		t.Fatal("timed out waiting for owner description")
 	}
+	var waiterReservations atomic.Int32
+	var waiterCompletions atomic.Int32
 	sharerResult := make(chan processResult, 1)
 	go func() {
-		body, err := p.Process(context.Background(), nil, imageRequest("shared"))
+		body, err := p.ProcessOperationTargetWithTickets(
+			context.Background(), nil, llmrequest.OperationAnthropicMessages,
+			imageRequest("shared"), "https://example.test/v1/messages",
+			func(context.Context, int, int) (CallCompletion, error) {
+				waiterReservations.Add(1)
+				return func(int, string, []byte) { waiterCompletions.Add(1) }, nil
+			},
+		)
 		sharerResult <- processResult{body: body, err: err}
 	}()
 	waitForResultCacheWaiters(t, p.cache, testImageKey(p, "shared"), 2)
 	cancelCreator()
 
 	select {
-	case result := <-creatorResult:
-		if result.body != nil || !errors.Is(result.err, context.Canceled) {
-			t.Fatalf("creator body=%s err=%v", result.body, result.err)
-		}
+	case <-ownerCanceled:
 	case <-time.After(time.Second):
-		close(releaseShared)
-		t.Fatal("canceled creator waited for loader owned by the sharing request")
+		t.Fatal("owner physical call did not observe cancellation")
 	}
 	select {
-	case result := <-sharerResult:
-		t.Fatalf("sharing request returned before shared loader completed: body=%s err=%v", result.body, result.err)
-	default:
+	case <-replacementStarted:
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not start replacement physical call")
 	}
-	close(releaseShared)
 	select {
 	case result := <-sharerResult:
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
-		if got := rewrittenDescriptions(t, result.body); !equalStrings(got, []string{"shared description"}) {
+		if got := rewrittenDescriptions(t, result.body); !equalStrings(got, []string{"replacement description"}) {
 			t.Fatalf("descriptions=%q", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("sharing request did not complete")
+	}
+	if ownerReservations.Load() != 1 || waiterReservations.Load() != 1 ||
+		ownerCompletions.Load() != 0 || waiterCompletions.Load() != 1 {
+		t.Fatalf("before owner exit: reservations=%d/%d completions=%d/%d",
+			ownerReservations.Load(), waiterReservations.Load(),
+			ownerCompletions.Load(), waiterCompletions.Load())
+	}
+	select {
+	case result := <-creatorResult:
+		t.Fatalf("creator returned before completion callback: %+v", result)
+	default:
+	}
+	close(releaseOwner)
+	creator := <-creatorResult
+	if creator.body != nil || !errors.Is(creator.err, context.Canceled) ||
+		ownerCompletions.Load() != 1 || physicalCalls.Load() != 2 {
+		t.Fatalf("creator=%+v calls=%d reservations=%d/%d completions=%d/%d",
+			creator, physicalCalls.Load(), ownerReservations.Load(), waiterReservations.Load(),
+			ownerCompletions.Load(), waiterCompletions.Load())
+	}
+}
+
+func TestPreprocessorSuccessfulSharingChargesOnlyOwner(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var physicalCalls atomic.Int32
+	d := describerFunc(func(context.Context, http.Header, imageRef) (string, error) {
+		physicalCalls.Add(1)
+		close(started)
+		<-release
+		return "shared description", nil
+	})
+	p := testPreprocessor(1, d)
+	body := imageRequest("shared-success")
+	type result struct {
+		body []byte
+		err  error
+	}
+	results := make(chan result, 2)
+	var ownerReservations atomic.Int32
+	var waiterReservations atomic.Int32
+	start := func(reservations *atomic.Int32) {
+		go func() {
+			got, err := p.ProcessOperationTargetWithTickets(
+				context.Background(), nil, llmrequest.OperationAnthropicMessages,
+				body, "https://example.test/v1/messages",
+				func(context.Context, int, int) (CallCompletion, error) {
+					reservations.Add(1)
+					return func(int, string, []byte) {}, nil
+				},
+			)
+			results <- result{body: got, err: err}
+		}()
+	}
+	start(&ownerReservations)
+	<-started
+	start(&waiterReservations)
+	waitForResultCacheWaiters(t, p.cache, testImageKey(p, "shared-success"), 2)
+	close(release)
+	for range 2 {
+		result := <-results
+		if result.err != nil || !equalStrings(rewrittenDescriptions(t, result.body), []string{"shared description"}) {
+			t.Fatalf("result=%+v", result)
+		}
+	}
+	if physicalCalls.Load() != 1 || ownerReservations.Load() != 1 || waiterReservations.Load() != 0 {
+		t.Fatalf("calls=%d reservations=%d/%d",
+			physicalCalls.Load(), ownerReservations.Load(), waiterReservations.Load())
 	}
 }
 

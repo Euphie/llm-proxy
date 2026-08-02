@@ -2,11 +2,8 @@ package proxy
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/routing"
@@ -186,14 +183,4 @@ func (n *autoNodeLease) release() {
 	if n != nil && n.lease != nil {
 		n.lease.ReleaseUnused()
 	}
-}
-
-var fallbackCorrelationSequence atomic.Uint64
-
-func newCallCorrelationID() string {
-	buffer := make([]byte, 12)
-	if _, err := rand.Read(buffer); err == nil {
-		return hex.EncodeToString(buffer)
-	}
-	return fmt.Sprintf("local-%d", fallbackCorrelationSequence.Add(1))
 }

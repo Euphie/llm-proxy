@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -2079,6 +2080,300 @@ func TestAutoRoutingCallLedgerMatchesPhysicalCallSequenceWithoutContent(t *testi
 			t.Fatalf("ledger leaked %q: %s", secret, serialized)
 		}
 	}
+}
+
+func TestAutoVisionUsesLedgerCorrelationAsRequestTrace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		switch {
+		case root["system"] != nil:
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+		case model == "vision":
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"visual evidence"}]}`)
+		default:
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"done"}]}`)
+		}
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, true)
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 4
+	runtime.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 7
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	var rows []routing.CallLedgerEntry
+	proxyHandler.callLedgerSink = func(snapshot []routing.CallLedgerEntry) { rows = snapshot }
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/trace.png"}},{"type":"text","text":"比较这个界面布局"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(rows) == 0 {
+		t.Fatalf("status=%d rows=%+v body=%q", response.Code, rows, response.Body.String())
+	}
+
+	correlation := rows[0].CorrelationID
+	var cacheRecord map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["msg"] == "vision.image.cache" {
+			cacheRecord = record
+			break
+		}
+	}
+	if correlation == "" || cacheRecord["request_trace_id"] != correlation ||
+		cacheRecord["owner_trace_id"] != correlation || cacheRecord["call_id"] == "" {
+		t.Fatalf("correlation=%q cache trace metadata=%v", correlation, cacheRecord)
+	}
+}
+
+func TestAutoVisionSuccessfulSharingChargesOnlyPhysicalOwner(t *testing.T) {
+	visionStarted := make(chan struct{})
+	releaseVision := make(chan struct{})
+	var visionCalls atomic.Int32
+	var answerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		if request.Model == "vision" {
+			if visionCalls.Add(1) == 1 {
+				close(visionStarted)
+			}
+			<-releaseVision
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"shared visual evidence"}]}`)
+			return
+		}
+		answerCalls.Add(1)
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+
+	runtime := autoCompositeSharingRuntime(t, server.URL)
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	ledgers := make(chan []routing.CallLedgerEntry, 2)
+	proxyHandler.callLedgerSink = func(rows []routing.CallLedgerEntry) { ledgers <- rows }
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+	body := autoCompositeSharingBody()
+	serve := func(result chan<- *httptest.ResponseRecorder) {
+		request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		proxyHandler.ServeHTTP(response, request)
+		result <- response
+	}
+	firstResult := make(chan *httptest.ResponseRecorder, 1)
+	secondResult := make(chan *httptest.ResponseRecorder, 1)
+	go serve(firstResult)
+	<-visionStarted
+	go serve(secondResult)
+	time.Sleep(50 * time.Millisecond)
+	if visionCalls.Load() != 1 {
+		close(releaseVision)
+		t.Fatalf("physical vision calls before release=%d, want 1", visionCalls.Load())
+	}
+	close(releaseVision)
+	for _, result := range []<-chan *httptest.ResponseRecorder{firstResult, secondResult} {
+		response := <-result
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+		}
+	}
+
+	firstLedger, secondLedger := <-ledgers, <-ledgers
+	visionRows := 0
+	answerRows := 0
+	correlations := map[string]bool{}
+	visionSucceeded := false
+	for _, rows := range [][]routing.CallLedgerEntry{firstLedger, secondLedger} {
+		for _, row := range rows {
+			if row.CorrelationID == "" {
+				t.Fatalf("ledger row has empty correlation: %+v", row)
+			}
+			correlations[row.CorrelationID] = true
+			switch row.Kind {
+			case routing.CallVision:
+				visionRows++
+				visionSucceeded = row.Outcome == "success"
+			case routing.CallAnswer:
+				answerRows++
+			}
+		}
+	}
+	if visionCalls.Load() != 1 || answerCalls.Load() != 2 || visionRows != 1 ||
+		answerRows != 2 || len(correlations) != 2 || !visionSucceeded {
+		t.Fatalf("physical=%d/%d ledger=%+v %+v correlations=%v",
+			visionCalls.Load(), answerCalls.Load(), firstLedger, secondLedger, correlations)
+	}
+	cacheRecords := visionCacheLogRecords(t, logs.String())
+	if len(cacheRecords) != 2 || cacheRecords[0]["call_id"] == "" ||
+		cacheRecords[0]["call_id"] != cacheRecords[1]["call_id"] ||
+		cacheRecords[0]["owner_trace_id"] != cacheRecords[1]["owner_trace_id"] ||
+		cacheRecords[0]["request_trace_id"] == cacheRecords[1]["request_trace_id"] {
+		t.Fatalf("shared cache trace metadata=%v", cacheRecords)
+	}
+	for _, record := range cacheRecords {
+		traceID, _ := record["request_trace_id"].(string)
+		if !correlations[traceID] {
+			t.Fatalf("request trace %q is not a ledger correlation: %v", traceID, correlations)
+		}
+	}
+}
+
+func TestAutoVisionCanceledOwnerReplacementChargesBothOwners(t *testing.T) {
+	firstVisionStarted := make(chan struct{})
+	firstVisionCanceled := make(chan struct{})
+	replacementStarted := make(chan struct{})
+	var visionCalls atomic.Int32
+	var answerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		if request.Model == "vision" {
+			if visionCalls.Add(1) == 1 {
+				close(firstVisionStarted)
+				<-r.Context().Done()
+				close(firstVisionCanceled)
+				return
+			}
+			close(replacementStarted)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"replacement visual evidence"}]}`)
+			return
+		}
+		answerCalls.Add(1)
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+
+	runtime := autoCompositeSharingRuntime(t, server.URL)
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	ledgers := make(chan []routing.CallLedgerEntry, 2)
+	proxyHandler.callLedgerSink = func(rows []routing.CallLedgerEntry) { ledgers <- rows }
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+	body := autoCompositeSharingBody()
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	serve := func(ctx context.Context, result chan<- *httptest.ResponseRecorder) {
+		request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)).WithContext(ctx)
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		proxyHandler.ServeHTTP(response, request)
+		result <- response
+	}
+	ownerResult := make(chan *httptest.ResponseRecorder, 1)
+	waiterResult := make(chan *httptest.ResponseRecorder, 1)
+	go serve(ownerCtx, ownerResult)
+	<-firstVisionStarted
+	go serve(context.Background(), waiterResult)
+	time.Sleep(50 * time.Millisecond)
+	cancelOwner()
+	select {
+	case <-firstVisionCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("owner physical call did not observe request cancellation")
+	}
+	select {
+	case <-replacementStarted:
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not become replacement physical owner")
+	}
+	<-ownerResult
+	response := <-waiterResult
+	if response.Code != http.StatusOK {
+		t.Fatalf("replacement status=%d body=%q", response.Code, response.Body.String())
+	}
+
+	firstLedger, secondLedger := <-ledgers, <-ledgers
+	visionRows := make([]routing.CallLedgerEntry, 0, 2)
+	answerRows := 0
+	correlations := map[string]bool{}
+	visionOutcomes := map[string]bool{}
+	for _, rows := range [][]routing.CallLedgerEntry{firstLedger, secondLedger} {
+		for _, row := range rows {
+			if row.CorrelationID == "" {
+				t.Fatalf("ledger row has empty correlation: %+v", row)
+			}
+			correlations[row.CorrelationID] = true
+			if row.Kind == routing.CallVision {
+				visionRows = append(visionRows, row)
+				visionOutcomes[row.Outcome] = true
+			}
+			if row.Kind == routing.CallAnswer {
+				answerRows++
+			}
+		}
+	}
+	if visionCalls.Load() != 2 || answerCalls.Load() != 1 || len(visionRows) != 2 ||
+		answerRows != 1 || len(correlations) != 2 ||
+		visionRows[0].CorrelationID == visionRows[1].CorrelationID ||
+		!visionOutcomes["canceled"] || !visionOutcomes["success"] {
+		t.Fatalf("physical=%d/%d vision=%+v ledger=%+v %+v correlations=%v",
+			visionCalls.Load(), answerCalls.Load(), visionRows, firstLedger, secondLedger, correlations)
+	}
+	cacheRecords := visionCacheLogRecords(t, logs.String())
+	if len(cacheRecords) != 2 || cacheRecords[0]["call_id"] == "" ||
+		cacheRecords[1]["call_id"] == "" || cacheRecords[0]["call_id"] == cacheRecords[1]["call_id"] {
+		t.Fatalf("replacement cache trace metadata=%v", cacheRecords)
+	}
+	for _, record := range cacheRecords {
+		traceID, _ := record["request_trace_id"].(string)
+		if traceID == "" || record["owner_trace_id"] != traceID || !correlations[traceID] {
+			t.Fatalf("replacement trace metadata=%v correlations=%v", record, correlations)
+		}
+	}
+}
+
+func visionCacheLogRecords(t *testing.T, logs string) []map[string]any {
+	t.Helper()
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["msg"] == "vision.image.cache" {
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
+func autoCompositeSharingRuntime(t *testing.T, upstream string) profile.Runtime {
+	runtime := autoProxyRuntime(t, upstream, true)
+	strong := runtime.Models["strong"]
+	strong.SupportsVision = false
+	runtime.Models["strong"] = strong
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 3
+	runtime.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 5
+	return runtime
+}
+
+func autoCompositeSharingBody() string {
+	return `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/shared.png"}},{"type":"text","text":"edit the production file"}]}]}`
 }
 
 func TestAutoRoutingVisionCacheHitConsumesOnlyAnalyzerAndAnswer(t *testing.T) {

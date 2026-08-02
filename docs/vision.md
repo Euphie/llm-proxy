@@ -126,7 +126,10 @@ base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前�
 ## 缓存与并发
 
 成功描述保存在当前进程的 TTL + LRU 缓存中，重启后失效；失败结果不缓存。同一
-缓存键的并发未命中会合并为一次影子请求，多图替换顺序仍与原请求一致。
+缓存键的并发未命中会合并为一次影子请求，多图替换顺序仍与原请求一致。每次加载有一个
+不可变的请求 owner；owner 的 context 控制物理调用。owner 取消时，仍存活的 waiter 会重新
+竞选并使用自己的调用预算发起替代调用，已经开始的调用不会转移给 waiter。单独取消 waiter
+不会影响 owner。
 
 缓存键隔离以下内容：
 
@@ -149,11 +152,9 @@ base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前�
 - `vision.image.cache`
 - `vision.shadow.attempt`
 - `vision.image.completed` / `vision.image.failed`
-- `vision.debug.description`
-- `vision.debug.upstream_response`
 - `vision.rewrite.completed`
 
-视觉描述和 Upstream 非成功响应正文会写入调试日志，最多保留 4096 个 Unicode
-code point。代理不会主动把鉴权头、原始 base64、URL、file ID 或自定义提示词
-作为独立结构化字段记录；但这些输入以及同消息用户文本会发送给 Upstream，可能被其
-回显到错误响应或视觉描述中。因此应把所有视觉日志视为敏感数据，限制访问、留存和导出范围。
+日志只保留 Profile、传输、模型、图片索引/来源、状态、字节数、重试匹配、耗时、缓存来源，
+以及随机生成的 `request_trace_id`、`owner_trace_id` 和 `call_id`。视觉描述、Upstream 响应正文、
+鉴权头、原始 base64、URL、file ID、自定义提示词和用户文本均不写入持久日志。trace ID 只存在于
+代理 context 和日志中，不作为请求头转发给 Upstream。

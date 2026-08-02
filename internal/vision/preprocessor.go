@@ -299,6 +299,8 @@ func (p *Preprocessor) processTargetWithBudget(
 	reserveCall CallReservation,
 	parse func(map[string]json.RawMessage) (requestDocument, error),
 ) ([]byte, error) {
+	ctx = ensureRequestTrace(ctx)
+	requestTrace := requestTraceID(ctx)
 	root, err := parseRequestRoot(body)
 	if err != nil {
 		return nil, &processError{
@@ -308,12 +310,14 @@ func (p *Preprocessor) processTargetWithBudget(
 	}
 	model, ok := requestModel(root)
 	if !ok {
-		slog.Debug("vision.skipped", "profile", p.profile, "reason", "invalid_model")
+		slog.Debug("vision.skipped", "profile", p.profile,
+			"request_trace_id", requestTrace, "reason", "invalid_model")
 		return body, nil
 	}
 	enhance, reason := p.shouldEnhance(model)
 	if !enhance {
-		slog.Debug("vision.skipped", "profile", p.profile, "model", model, "reason", reason)
+		slog.Debug("vision.skipped", "profile", p.profile,
+			"request_trace_id", requestTrace, "model", model, "reason", reason)
 		return body, nil
 	}
 	doc, err := parse(root)
@@ -345,6 +349,7 @@ func (p *Preprocessor) processTargetWithBudget(
 	slog.Info("vision.images.discovered",
 		"profile", p.profile,
 		"transport", p.transport,
+		"request_trace_id", requestTrace,
 		"image_count", len(images))
 
 	workCtx, cancel := context.WithCancel(ctx)
@@ -367,7 +372,7 @@ func (p *Preprocessor) processTargetWithBudget(
 			imageStarted := time.Now()
 			imagePrompt := promptForImage(p.prompt, image)
 
-			description, source, err := p.cache.getOrLoad(
+			description, source, loadTrace, err := p.cache.getOrLoadTrace(
 				workCtx,
 				scopedImageCacheKey(
 					p.cacheKey,
@@ -429,22 +434,20 @@ func (p *Preprocessor) processTargetWithBudget(
 			slog.Info("vision.image.cache",
 				"profile", p.profile,
 				"transport", p.transport,
+				"request_trace_id", requestTrace,
+				"owner_trace_id", loadTrace.ownerTraceID,
+				"call_id", loadTrace.callID,
 				"image_index", i,
 				"source_type", image.sourceType,
 				"cache_source", cacheSource)
 			if err == nil {
 				descriptions[i] = description
-				debugDescription, truncated := truncateDebugContent(description)
-				slog.Info("vision.debug.description",
-					"profile", p.profile,
-					"transport", p.transport,
-					"image_index", i,
-					"source_type", image.sourceType,
-					"description", debugDescription,
-					"truncated", truncated)
 				slog.Info("vision.image.completed",
 					"profile", p.profile,
 					"transport", p.transport,
+					"request_trace_id", requestTrace,
+					"owner_trace_id", loadTrace.ownerTraceID,
+					"call_id", loadTrace.callID,
 					"image_index", i,
 					"source_type", image.sourceType,
 					"cache_source", cacheSource,
@@ -456,6 +459,9 @@ func (p *Preprocessor) processTargetWithBudget(
 			slog.Warn("vision.image.failed",
 				"profile", p.profile,
 				"transport", p.transport,
+				"request_trace_id", requestTrace,
+				"owner_trace_id", loadTrace.ownerTraceID,
+				"call_id", loadTrace.callID,
 				"image_index", i,
 				"source_type", image.sourceType,
 				"cache_source", cacheSource,
@@ -498,6 +504,7 @@ func (p *Preprocessor) processTargetWithBudget(
 		slog.Warn("vision.rewrite.incomplete",
 			"profile", p.profile,
 			"transport", p.transport,
+			"request_trace_id", requestTrace,
 			"unhandled_image_count", unhandledImageCount)
 		return nil, &processError{
 			status: http.StatusBadGateway,
@@ -510,6 +517,7 @@ func (p *Preprocessor) processTargetWithBudget(
 	slog.Info("vision.rewrite.completed",
 		"profile", p.profile,
 		"transport", p.transport,
+		"request_trace_id", requestTrace,
 		"image_count", len(images),
 		"unhandled_image_count", unhandledImageCount,
 		"duration_ms", time.Since(processStarted).Milliseconds())

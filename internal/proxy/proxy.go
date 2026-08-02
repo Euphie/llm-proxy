@@ -110,7 +110,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	requestCtx := r.Context()
+	requestCtx, requestTraceID := vision.NewRequestTrace(r.Context())
 	var budget *routing.AttemptBudget
 	var plan routing.ExecutionPlan
 	var classification routing.Classification
@@ -151,9 +151,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		autoStream = routeRequest.Facts.Stream
 		var cancel context.CancelFunc
-		budget, requestCtx, cancel = h.routing.NewAttemptBudget(r.Context())
+		budget, requestCtx, cancel = h.routing.NewAttemptBudget(requestCtx)
 		defer cancel()
-		callLedger = routing.NewCallLedger(newCallCorrelationID())
+		callLedger = routing.NewCallLedger(requestTraceID)
 		requestCtx = routing.WithCallLedger(requestCtx, callLedger)
 		defer func() {
 			calls := callLedger.Snapshot()
