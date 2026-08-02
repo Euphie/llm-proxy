@@ -210,8 +210,13 @@ func (s *StrategyService) StartCanary(
 	if _, err := s.profile(ctx, profileID); err != nil {
 		return strategy.Snapshot{}, err
 	}
-	snapshot, err := s.strategies.StartCanary(ctx, profileID, strategyID, canaryBPS, expectedRevision)
-	return s.publish(ctx, snapshot, err)
+	publication, err := s.strategies.PrepareStartCanary(
+		ctx, profileID, strategyID, canaryBPS, expectedRevision,
+	)
+	if err != nil {
+		return strategy.Snapshot{}, err
+	}
+	return s.coordinator.PublishStrategy(ctx, publication)
 }
 
 func (s *StrategyService) CancelCanary(
@@ -222,8 +227,11 @@ func (s *StrategyService) CancelCanary(
 	if _, err := s.profile(ctx, profileID); err != nil {
 		return strategy.Snapshot{}, err
 	}
-	snapshot, err := s.strategies.CancelCanary(ctx, profileID, expectedRevision)
-	return s.publish(ctx, snapshot, err)
+	publication, err := s.strategies.PrepareCancelCanary(ctx, profileID, expectedRevision)
+	if err != nil {
+		return strategy.Snapshot{}, err
+	}
+	return s.coordinator.PublishStrategy(ctx, publication)
 }
 
 func (s *StrategyService) Promote(
@@ -234,8 +242,11 @@ func (s *StrategyService) Promote(
 	if _, err := s.profile(ctx, profileID); err != nil {
 		return strategy.Snapshot{}, err
 	}
-	snapshot, err := s.strategies.Promote(ctx, profileID, expectedRevision)
-	return s.publish(ctx, snapshot, err)
+	publication, err := s.strategies.PreparePromote(ctx, profileID, expectedRevision)
+	if err != nil {
+		return strategy.Snapshot{}, err
+	}
+	return s.coordinator.PublishStrategy(ctx, publication)
 }
 
 func (s *StrategyService) Rollback(
@@ -246,8 +257,11 @@ func (s *StrategyService) Rollback(
 	if _, err := s.profile(ctx, profileID); err != nil {
 		return strategy.Snapshot{}, err
 	}
-	snapshot, err := s.strategies.Rollback(ctx, profileID, expectedRevision)
-	return s.publish(ctx, snapshot, err)
+	publication, err := s.strategies.PrepareRollback(ctx, profileID, expectedRevision)
+	if err != nil {
+		return strategy.Snapshot{}, err
+	}
+	return s.coordinator.PublishStrategy(ctx, publication)
 }
 
 func (s *StrategyService) profile(ctx context.Context, profileID int64) (profile.Record, error) {
@@ -263,18 +277,4 @@ func (s *StrategyService) profile(ctx context.Context, profileID int64) (profile
 		return profile.Record{}, err
 	}
 	return record, nil
-}
-
-func (s *StrategyService) publish(
-	ctx context.Context,
-	snapshot strategy.Snapshot,
-	err error,
-) (strategy.Snapshot, error) {
-	if err != nil {
-		return strategy.Snapshot{}, err
-	}
-	if err := s.coordinator.Reload(ctx); err != nil {
-		return snapshot, err
-	}
-	return snapshot, nil
 }

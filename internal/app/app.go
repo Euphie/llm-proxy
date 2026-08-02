@@ -82,12 +82,8 @@ func New(options Options) (*App, error) {
 	strategies := strategy.NewStore(db, time.Now)
 	registry := gateway.NewRegistry()
 	client := &http.Client{Timeout: 10 * time.Minute}
-	build := func(record profile.Record) (http.Handler, error) {
-		resolved, snapshot, err := strategies.ResolveRecord(context.Background(), record)
-		if err != nil {
-			return nil, fmt.Errorf("resolve strategy for Profile %q: %w", record.Slug, err)
-		}
-		runtime, err := resolved.Resolve()
+	buildResolved := func(record profile.Record, snapshot strategy.Snapshot) (http.Handler, error) {
+		runtime, err := record.Resolve()
 		if err != nil {
 			return nil, fmt.Errorf("resolve Profile %q: %w", record.Slug, err)
 		}
@@ -95,7 +91,7 @@ func New(options Options) (*App, error) {
 		if snapshot.Canary == nil {
 			return active, nil
 		}
-		canaryRecord := resolved
+		canaryRecord := record
 		canaryRecord.Config.AutoRouting.Strategy = snapshot.Canary.Config
 		canaryRuntime, err := canaryRecord.Resolve()
 		if err != nil {
@@ -106,7 +102,21 @@ func New(options Options) (*App, error) {
 			active, canary, routingSessions, record.ID, snapshot.Canary.ID, snapshot.CanaryBPS,
 		), nil
 	}
-	coordinator := gateway.NewCoordinator(profiles, registry, build)
+	buildStrategy := func(record profile.Record, snapshot strategy.Snapshot) (http.Handler, error) {
+		record.Config.AutoRouting.Strategy = snapshot.Active.Config
+		return buildResolved(record, snapshot)
+	}
+	build := func(record profile.Record) (http.Handler, error) {
+		if !record.Config.AutoRouting.Enabled {
+			return buildResolved(record, strategy.Snapshot{})
+		}
+		resolved, snapshot, err := strategies.ResolveRecord(context.Background(), record)
+		if err != nil {
+			return nil, fmt.Errorf("resolve strategy for Profile %q: %w", record.Slug, err)
+		}
+		return buildResolved(resolved, snapshot)
+	}
+	coordinator := gateway.NewCoordinator(profiles, registry, build, buildStrategy)
 
 	account, _, err := accounts.EnsureDefault(context.Background())
 	if err != nil {

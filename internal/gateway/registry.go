@@ -26,6 +26,10 @@ type Registry struct {
 	current atomic.Pointer[snapshot]
 }
 
+type preparedSnapshot struct {
+	next *snapshot
+}
+
 func NewRegistry() *Registry {
 	registry := &Registry{}
 	registry.current.Store(emptySnapshot(0))
@@ -71,6 +75,38 @@ func (r *Registry) Upsert(record profile.Record, defaultID int64, build Builder)
 	next.bySlug[record.Slug] = item
 	r.current.Store(next)
 	return nil
+}
+
+func (r *Registry) prepareUpsert(
+	record profile.Record,
+	defaultID int64,
+	build Builder,
+) (*preparedSnapshot, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	current := r.load()
+	next := &snapshot{
+		defaultID: defaultID,
+		byID:      cloneRuntimeMap(current.byID),
+		bySlug:    cloneRuntimeMap(current.bySlug),
+	}
+	if previous := next.byID[record.ID]; previous != nil {
+		delete(next.bySlug, previous.record.Slug)
+	}
+	item, err := buildRuntime(record, build)
+	if err != nil {
+		return nil, err
+	}
+	next.byID[record.ID] = item
+	next.bySlug[record.Slug] = item
+	return &preparedSnapshot{next: next}, nil
+}
+
+func (r *Registry) publishPrepared(prepared *preparedSnapshot) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.current.Store(prepared.next)
 }
 
 func (r *Registry) Delete(id, defaultID int64) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,69 @@ type Snapshot struct {
 	Canary        *Version `json:"canary,omitempty"`
 	CanaryBPS     int      `json:"canary_bps"`
 	LastKnownGood *Version `json:"last_known_good,omitempty"`
+}
+
+func (s Snapshot) Clone() Snapshot {
+	return cloneSnapshot(s)
+}
+
+type publicationStateChange struct {
+	strategyID int64
+	from       State
+	to         State
+}
+
+type Publication struct {
+	store            *Store
+	profileID        int64
+	expectedRevision int64
+	prospective      Snapshot
+	stateChanges     []publicationStateChange
+	eventStrategyID  int64
+	eventAction      string
+	eventFrom        State
+	eventTo          State
+	now              string
+}
+
+func (p Publication) Snapshot() Snapshot {
+	return p.prospective.Clone()
+}
+
+func cloneSnapshot(source Snapshot) Snapshot {
+	cloned := source
+	cloned.Active = cloneVersion(source.Active)
+	if source.Canary != nil {
+		version := cloneVersion(*source.Canary)
+		cloned.Canary = &version
+	}
+	if source.LastKnownGood != nil {
+		version := cloneVersion(*source.LastKnownGood)
+		cloned.LastKnownGood = &version
+	}
+	return cloned
+}
+
+func cloneVersion(source Version) Version {
+	cloned := source
+	cloned.Config.TaskRoutes = append([]profile.TaskRouteConfig(nil), source.Config.TaskRoutes...)
+	cloned.Config.Routes = make([]profile.RouteConfig, len(source.Config.Routes))
+	for index, route := range source.Config.Routes {
+		route.Candidates = append([]profile.RouteCandidateConfig(nil), route.Candidates...)
+		cloned.Config.Routes[index] = route
+	}
+	return cloned
+}
+
+func (p Publication) ProfileID() int64 {
+	return p.profileID
+}
+
+func (p Publication) Commit(ctx context.Context) (Snapshot, error) {
+	if p.store == nil {
+		return Snapshot{}, ErrInvalidTransition
+	}
+	return p.store.commit(ctx, p)
 }
 
 type Store struct {
@@ -334,40 +398,158 @@ func (s *Store) StartCanary(
 	canaryBPS int,
 	expectedRevision int64,
 ) (Snapshot, error) {
-	if canaryBPS <= 0 || canaryBPS >= 10_000 {
-		return Snapshot{}, ErrInvalidTransition
+	publication, err := s.PrepareStartCanary(ctx, profileID, id, canaryBPS, expectedRevision)
+	if err != nil {
+		return Snapshot{}, err
 	}
-	return s.updatePointers(ctx, profileID, expectedRevision, func(
-		tx *sql.Tx,
-		current Snapshot,
-		now string,
-	) error {
+	return publication.Commit(ctx)
+}
+
+func (s *Store) PrepareStartCanary(
+	ctx context.Context,
+	profileID int64,
+	id int64,
+	canaryBPS int,
+	expectedRevision int64,
+) (Publication, error) {
+	if canaryBPS <= 0 || canaryBPS >= 10_000 {
+		return Publication{}, ErrInvalidTransition
+	}
+	now := strategyTime(s.now())
+	prospective, err := s.previewPointers(ctx, profileID, expectedRevision, func(tx *sql.Tx, current Snapshot) (Snapshot, error) {
 		if current.Canary != nil {
-			return ErrConflict
+			return Snapshot{}, ErrConflict
 		}
 		candidate, err := getVersion(ctx, tx, profileID, id)
 		if err != nil {
-			return err
+			return Snapshot{}, err
 		}
 		if candidate.State != StateReady {
-			return ErrInvalidTransition
+			return Snapshot{}, ErrInvalidTransition
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE routing_strategies SET state = 'canary', updated_at = ? WHERE id = ?`, now, id); err != nil {
-			return fmt.Errorf("mark canary strategy: %w", err)
-		}
-		result, err := tx.ExecContext(ctx, `
-			UPDATE routing_strategy_pointers
-			SET canary_strategy_id = ?, canary_bps = ?, revision = revision + 1, updated_at = ?
-			WHERE profile_id = ? AND revision = ?
-		`, id, canaryBPS, now, profileID, expectedRevision)
-		if err != nil {
-			return fmt.Errorf("publish canary pointer: %w", err)
-		}
-		if err := requireOneCAS(result); err != nil {
-			return err
-		}
-		return insertEvent(ctx, tx, profileID, id, "start_canary", StateReady, StateCanary, expectedRevision+1, now)
+		candidate.State = StateCanary
+		candidate.UpdatedAt = mustStrategyTime(now)
+		current.Revision++
+		current.Canary = &candidate
+		current.CanaryBPS = canaryBPS
+		return current, nil
 	})
+	if err != nil {
+		return Publication{}, err
+	}
+	return Publication{
+		store:     s,
+		profileID: profileID, expectedRevision: expectedRevision, prospective: prospective,
+		stateChanges:    []publicationStateChange{{strategyID: id, from: StateReady, to: StateCanary}},
+		eventStrategyID: id, eventAction: "start_canary", eventFrom: StateReady, eventTo: StateCanary,
+		now: now,
+	}, nil
+}
+
+func (s *Store) PreparePromote(
+	ctx context.Context,
+	profileID int64,
+	expectedRevision int64,
+) (Publication, error) {
+	now := strategyTime(s.now())
+	prospective, err := s.previewPointers(ctx, profileID, expectedRevision, func(_ *sql.Tx, current Snapshot) (Snapshot, error) {
+		if current.Canary == nil {
+			return Snapshot{}, ErrInvalidTransition
+		}
+		previousActive := current.Active
+		previousActive.State = StateReady
+		previousActive.UpdatedAt = mustStrategyTime(now)
+		nextActive := *current.Canary
+		nextActive.State = StateActive
+		nextActive.UpdatedAt = mustStrategyTime(now)
+		current.Revision++
+		current.Active = nextActive
+		current.Canary = nil
+		current.CanaryBPS = 0
+		current.LastKnownGood = &previousActive
+		return current, nil
+	})
+	if err != nil {
+		return Publication{}, err
+	}
+	return Publication{
+		store:     s,
+		profileID: profileID, expectedRevision: expectedRevision, prospective: prospective,
+		stateChanges: []publicationStateChange{
+			{strategyID: prospective.LastKnownGood.ID, from: StateActive, to: StateReady},
+			{strategyID: prospective.Active.ID, from: StateCanary, to: StateActive},
+		},
+		eventStrategyID: prospective.Active.ID, eventAction: "promote", eventFrom: StateCanary, eventTo: StateActive,
+		now: now,
+	}, nil
+}
+
+func (s *Store) PrepareCancelCanary(
+	ctx context.Context,
+	profileID int64,
+	expectedRevision int64,
+) (Publication, error) {
+	now := strategyTime(s.now())
+	var canaryID int64
+	prospective, err := s.previewPointers(ctx, profileID, expectedRevision, func(_ *sql.Tx, current Snapshot) (Snapshot, error) {
+		if current.Canary == nil {
+			return Snapshot{}, ErrInvalidTransition
+		}
+		canaryID = current.Canary.ID
+		current.Revision++
+		current.Canary = nil
+		current.CanaryBPS = 0
+		return current, nil
+	})
+	if err != nil {
+		return Publication{}, err
+	}
+	return Publication{
+		store:     s,
+		profileID: profileID, expectedRevision: expectedRevision, prospective: prospective,
+		stateChanges:    []publicationStateChange{{strategyID: canaryID, from: StateCanary, to: StateReady}},
+		eventStrategyID: canaryID, eventAction: "cancel_canary", eventFrom: StateCanary, eventTo: StateReady,
+		now: now,
+	}, nil
+}
+
+func (s *Store) PrepareRollback(
+	ctx context.Context,
+	profileID int64,
+	expectedRevision int64,
+) (Publication, error) {
+	now := strategyTime(s.now())
+	prospective, err := s.previewPointers(ctx, profileID, expectedRevision, func(_ *sql.Tx, current Snapshot) (Snapshot, error) {
+		if current.Canary != nil {
+			return Snapshot{}, ErrInvalidTransition
+		}
+		if current.LastKnownGood == nil || current.LastKnownGood.ID == current.Active.ID {
+			return Snapshot{}, ErrNoLastKnownGood
+		}
+		previousActive := current.Active
+		previousActive.State = StateReady
+		previousActive.UpdatedAt = mustStrategyTime(now)
+		nextActive := *current.LastKnownGood
+		nextActive.State = StateActive
+		nextActive.UpdatedAt = mustStrategyTime(now)
+		current.Revision++
+		current.Active = nextActive
+		current.LastKnownGood = &previousActive
+		return current, nil
+	})
+	if err != nil {
+		return Publication{}, err
+	}
+	return Publication{
+		store:     s,
+		profileID: profileID, expectedRevision: expectedRevision, prospective: prospective,
+		stateChanges: []publicationStateChange{
+			{strategyID: prospective.LastKnownGood.ID, from: StateActive, to: StateReady},
+			{strategyID: prospective.Active.ID, from: StateReady, to: StateActive},
+		},
+		eventStrategyID: prospective.Active.ID, eventAction: "rollback", eventFrom: StateReady, eventTo: StateActive,
+		now: now,
+	}, nil
 }
 
 func (s *Store) Promote(
@@ -375,38 +557,11 @@ func (s *Store) Promote(
 	profileID int64,
 	expectedRevision int64,
 ) (Snapshot, error) {
-	return s.updatePointers(ctx, profileID, expectedRevision, func(
-		tx *sql.Tx,
-		current Snapshot,
-		now string,
-	) error {
-		if current.Canary == nil {
-			return ErrInvalidTransition
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE routing_strategies SET state = 'ready', updated_at = ? WHERE id = ?`, now, current.Active.ID); err != nil {
-			return fmt.Errorf("retire active strategy: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE routing_strategies SET state = 'active', updated_at = ? WHERE id = ?`, now, current.Canary.ID); err != nil {
-			return fmt.Errorf("activate canary strategy: %w", err)
-		}
-		result, err := tx.ExecContext(ctx, `
-			UPDATE routing_strategy_pointers
-			SET active_strategy_id = canary_strategy_id,
-			    canary_strategy_id = NULL,
-			    last_known_good_strategy_id = active_strategy_id,
-			    canary_bps = 0,
-			    revision = revision + 1,
-			    updated_at = ?
-			WHERE profile_id = ? AND revision = ?
-		`, now, profileID, expectedRevision)
-		if err != nil {
-			return fmt.Errorf("promote strategy pointer: %w", err)
-		}
-		if err := requireOneCAS(result); err != nil {
-			return err
-		}
-		return insertEvent(ctx, tx, profileID, current.Canary.ID, "promote", StateCanary, StateActive, expectedRevision+1, now)
-	})
+	publication, err := s.PreparePromote(ctx, profileID, expectedRevision)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return publication.Commit(ctx)
 }
 
 func (s *Store) CancelCanary(
@@ -414,33 +569,11 @@ func (s *Store) CancelCanary(
 	profileID int64,
 	expectedRevision int64,
 ) (Snapshot, error) {
-	return s.updatePointers(ctx, profileID, expectedRevision, func(
-		tx *sql.Tx,
-		current Snapshot,
-		now string,
-	) error {
-		if current.Canary == nil {
-			return ErrInvalidTransition
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE routing_strategies SET state = 'ready', updated_at = ? WHERE id = ?`, now, current.Canary.ID); err != nil {
-			return fmt.Errorf("restore canary strategy to ready: %w", err)
-		}
-		result, err := tx.ExecContext(ctx, `
-			UPDATE routing_strategy_pointers
-			SET canary_strategy_id = NULL,
-			    canary_bps = 0,
-			    revision = revision + 1,
-			    updated_at = ?
-			WHERE profile_id = ? AND revision = ?
-		`, now, profileID, expectedRevision)
-		if err != nil {
-			return fmt.Errorf("cancel canary pointer: %w", err)
-		}
-		if err := requireOneCAS(result); err != nil {
-			return err
-		}
-		return insertEvent(ctx, tx, profileID, current.Canary.ID, "cancel_canary", StateCanary, StateReady, expectedRevision+1, now)
-	})
+	publication, err := s.PrepareCancelCanary(ctx, profileID, expectedRevision)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return publication.Commit(ctx)
 }
 
 func (s *Store) Rollback(
@@ -448,50 +581,112 @@ func (s *Store) Rollback(
 	profileID int64,
 	expectedRevision int64,
 ) (Snapshot, error) {
-	return s.updatePointers(ctx, profileID, expectedRevision, func(
-		tx *sql.Tx,
-		current Snapshot,
-		now string,
-	) error {
-		if current.Canary != nil {
-			return ErrInvalidTransition
-		}
-		if current.LastKnownGood == nil || current.LastKnownGood.ID == current.Active.ID {
-			return ErrNoLastKnownGood
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE routing_strategies SET state = 'ready', updated_at = ? WHERE id = ?`, now, current.Active.ID); err != nil {
-			return fmt.Errorf("retire rolled back strategy: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE routing_strategies SET state = 'active', updated_at = ? WHERE id = ?`, now, current.LastKnownGood.ID); err != nil {
-			return fmt.Errorf("restore last-known-good strategy: %w", err)
-		}
-		result, err := tx.ExecContext(ctx, `
-			UPDATE routing_strategy_pointers
-			SET active_strategy_id = last_known_good_strategy_id,
-			    last_known_good_strategy_id = active_strategy_id,
-			    revision = revision + 1,
-			    updated_at = ?
-			WHERE profile_id = ? AND revision = ?
-		`, now, profileID, expectedRevision)
-		if err != nil {
-			return fmt.Errorf("rollback strategy pointer: %w", err)
-		}
-		if err := requireOneCAS(result); err != nil {
-			return err
-		}
-		return insertEvent(ctx, tx, profileID, current.LastKnownGood.ID, "rollback", StateReady, StateActive, expectedRevision+1, now)
-	})
+	publication, err := s.PrepareRollback(ctx, profileID, expectedRevision)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return publication.Commit(ctx)
 }
 
-func (s *Store) updatePointers(
+func (s *Store) commit(
 	ctx context.Context,
-	profileID int64,
-	expectedRevision int64,
-	update func(*sql.Tx, Snapshot, string) error,
+	publication Publication,
 ) (snapshot Snapshot, err error) {
+	if publication.profileID <= 0 || publication.prospective.Revision != publication.expectedRevision+1 ||
+		publication.eventStrategyID <= 0 || publication.eventAction == "" || publication.now == "" {
+		return Snapshot{}, ErrInvalidTransition
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("begin strategy publication: %w", err)
+	}
+	defer rollback(tx)
+	current, err := readSnapshot(ctx, tx, publication.profileID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if current.Revision != publication.expectedRevision {
+		return Snapshot{}, ErrConflict
+	}
+	for _, change := range publication.stateChanges {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE routing_strategies
+			SET state = ?, updated_at = ?
+			WHERE id = ? AND profile_id = ? AND state = ?
+		`, change.to, publication.now, change.strategyID, publication.profileID, change.from)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("apply routing strategy state: %w", err)
+		}
+		if err := requireOneCAS(result); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE routing_strategy_pointers
+		SET active_strategy_id = ?,
+		    canary_strategy_id = ?,
+		    last_known_good_strategy_id = ?,
+		    canary_bps = ?,
+		    revision = ?,
+		    updated_at = ?
+		WHERE profile_id = ? AND revision = ?
+	`, publication.prospective.Active.ID,
+		nullableVersionID(publication.prospective.Canary),
+		nullableVersionID(publication.prospective.LastKnownGood),
+		publication.prospective.CanaryBPS,
+		publication.prospective.Revision,
+		publication.now,
+		publication.profileID,
+		publication.expectedRevision,
+	)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("publish strategy pointers: %w", err)
+	}
+	if err := requireOneCAS(result); err != nil {
+		return Snapshot{}, err
+	}
+	if err := insertEvent(
+		ctx,
+		tx,
+		publication.profileID,
+		publication.eventStrategyID,
+		publication.eventAction,
+		publication.eventFrom,
+		publication.eventTo,
+		publication.prospective.Revision,
+		publication.now,
+	); err != nil {
+		return Snapshot{}, err
+	}
+	snapshot, err = readSnapshot(ctx, tx, publication.profileID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !reflect.DeepEqual(snapshot, publication.prospective) {
+		return Snapshot{}, fmt.Errorf("strategy publication prospective snapshot drifted")
+	}
+	if err = tx.Commit(); err != nil {
+		return Snapshot{}, fmt.Errorf("commit strategy publication: %w", err)
+	}
+	return snapshot, nil
+}
+
+func nullableVersionID(version *Version) any {
+	if version == nil {
+		return nil
+	}
+	return version.ID
+}
+
+func (s *Store) previewPointers(
+	ctx context.Context,
+	profileID int64,
+	expectedRevision int64,
+	preview func(*sql.Tx, Snapshot) (Snapshot, error),
+) (snapshot Snapshot, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("begin strategy publication preview: %w", err)
 	}
 	defer rollback(tx)
 	current, err := readSnapshot(ctx, tx, profileID)
@@ -501,15 +696,12 @@ func (s *Store) updatePointers(
 	if current.Revision != expectedRevision {
 		return Snapshot{}, ErrConflict
 	}
-	if err := update(tx, current, strategyTime(s.now())); err != nil {
-		return Snapshot{}, err
-	}
-	snapshot, err = readSnapshot(ctx, tx, profileID)
+	snapshot, err = preview(tx, current)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err = tx.Commit(); err != nil {
-		return Snapshot{}, fmt.Errorf("commit strategy publication: %w", err)
+	if err := tx.Commit(); err != nil {
+		return Snapshot{}, fmt.Errorf("commit strategy publication preview: %w", err)
 	}
 	return snapshot, nil
 }

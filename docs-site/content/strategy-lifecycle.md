@@ -22,15 +22,16 @@ Draft 可以修改；一旦发布成策略版本，其参与模型、模型角�
 
 ## 热加载
 
-发布时先校验完整配置，再用 CAS 原子切换 active 指针。运行时监听版本变化，加载成功后一次性替换只读快照：
+发布时先生成 prospective Snapshot，并基于最新 Profile 预构建完整 handler；构建成功后才用 CAS
+提交同一策略组合，最后一次性替换只读 Registry 快照：
 
 - 新请求使用新快照；
 - 已进入执行的请求继续固定旧快照；
-- 加载失败保留 last-known-good，不暴露半成品。
+- 构建失败或 CAS 冲突时，数据库状态、事件和 Registry 都不变。
 
 ## 灰度与回滚
 
-管理员设置 canary 比例并观察 Route 质量门槛、完整成本、严重错误和稳定性。提升为 active 必须手动确认。若命中已授权的可靠性硬门槛，系统可以自动 CAS 回滚到精确的 last-known-good；没有可用 LKG 时停用 `auto` 并返回明确错误。
+管理员设置 canary 比例并观察 Route 质量门槛、完整成本、严重错误和稳定性。提升为 active 必须手动确认。
 
 当前实现使用调用方鉴权域、可选 Session ID、Profile 和候选策略 ID 生成 HMAC 稳定分组。能够识别的同一调用方会稳定命中 active 或 canary；没有受支持鉴权头的请求留在 active。灰度、发布、取消灰度和回滚都携带 revision，过期操作返回冲突。
 

@@ -232,6 +232,10 @@ draft → evaluating → ready → canary → active
 Registry：新请求使用新快照，已经开始的请求继续固定旧快照。
 这就是策略的原子热加载；后续每次切换仍必须携带最新 revision 通过 CAS。
 
+每次切换先生成不落库的 prospective Snapshot，并用锁内读取的最新 Profile 预构建完整 handler；
+构建成功后才提交同一份 Publication 的 SQLite CAS，最后只做一次不会失败的 Registry 指针交换。
+构建失败或 CAS 冲突时，策略指针、版本状态、revision、事件表和 Registry 都保持不变。
+
 灰度按 HMAC 生成稳定的 0–9999 分组，输入包含调用方鉴权域、可选 Session ID、Profile 和候选
 策略 ID。无法识别鉴权域的请求不进入灰度。正式发布会把旧 active 保存为 last-known-good，管理员
 可以精确回滚；自动发布和紧急模型停用仍未实现。

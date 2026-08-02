@@ -13,6 +13,7 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/database"
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/strategy"
 )
 
 func TestCoordinatorSerializesCommitThroughRuntimePublish(t *testing.T) {
@@ -211,6 +212,310 @@ func TestCoordinatorPublishesModelCapabilitySnapshotAtomically(t *testing.T) {
 	if oldResponse.Code != http.StatusOK || oldResponse.Body.String() != "bypass" {
 		t.Fatalf("in-flight request status=%d body=%q", oldResponse.Code, oldResponse.Body.String())
 	}
+}
+
+// Break caught: a strategy publication prepared from a stale Profile can resurrect an old slug or configuration.
+func TestCoordinatorStrategyPublicationBuildsFromLatestProfileInsideWriterLock(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := profile.NewStore(db)
+	initial := saveCoordinatorRecord(t, store, "initial", true)
+	registry := NewRegistry()
+	if err := registry.Load([]profile.Record{initial}, initial.ID, upstreamBuilder); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Save(context.Background(), profile.SaveInput{
+		ID: initial.ID, Slug: "latest", DisplayName: initial.DisplayName, Enabled: true,
+		Config: profile.NewConfig(profile.ProtocolAnthropic, "https://latest.example"),
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated.Config.AutoRouting.Enabled = true
+	coordinator := NewCoordinator(
+		&coordinatorSnapshotStore{ProfileStore: store, records: []profile.Record{updated}, defaultID: updated.ID},
+		registry,
+		upstreamBuilder,
+		func(record profile.Record, _ strategy.Snapshot) (http.Handler, error) {
+			return upstreamBuilder(record)
+		},
+	)
+	prospective := strategy.Snapshot{Revision: 2, Active: strategy.Version{ID: 22}}
+	committed, err := coordinator.publishStrategy(
+		context.Background(), initial.ID, prospective,
+		func(context.Context) (strategy.Snapshot, error) { return prospective, nil },
+	)
+	if err != nil || committed.Revision != prospective.Revision {
+		t.Fatalf("committed=%+v err=%v", committed, err)
+	}
+	assertCoordinatorRoute(t, registry, "/latest/v1/messages", http.StatusOK, updated.Config.Upstream)
+	assertCoordinatorRoute(t, registry, "/initial/v1/messages", http.StatusNotFound, "")
+}
+
+// Break caught: caller cancellation between preparation and CAS can commit DB state without swapping runtime.
+func TestCoordinatorStrategyPublicationUsesBoundedContextIndependentOfCallerCancellation(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := profile.NewStore(db)
+	record := saveCoordinatorRecord(t, store, "strategy", true)
+	registry := NewRegistry()
+	if err := registry.Load([]profile.Record{record}, record.ID, upstreamBuilder); err != nil {
+		t.Fatal(err)
+	}
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	prospective := strategy.Snapshot{Revision: 2, Active: strategy.Version{ID: 22}}
+	record.Config.AutoRouting.Enabled = true
+	coordinator := NewCoordinator(
+		&coordinatorSnapshotStore{ProfileStore: store, records: []profile.Record{record}, defaultID: record.ID},
+		registry,
+		upstreamBuilder,
+		func(profile.Record, strategy.Snapshot) (http.Handler, error) {
+			cancelCaller()
+			return responseHandler("strategy-revision-2"), nil
+		},
+	)
+	if err := coordinator.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	commitCalled := false
+	committed, err := coordinator.publishStrategy(
+		callerCtx, record.ID, prospective,
+		func(ctx context.Context) (strategy.Snapshot, error) {
+			commitCalled = true
+			if err := ctx.Err(); err != nil {
+				t.Fatalf("publication context inherited caller cancellation: %v", err)
+			}
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 6*time.Second {
+				t.Fatalf("publication context has invalid deadline: %v %t", deadline, ok)
+			}
+			return prospective, nil
+		},
+	)
+	if err != nil || !commitCalled || committed.Revision != prospective.Revision {
+		t.Fatalf("committed=%+v commitCalled=%t err=%v", committed, commitCalled, err)
+	}
+	if !coordinator.Ready() {
+		t.Fatal("Coordinator became unready after successful strategy publication")
+	}
+	assertCoordinatorRoute(t, registry, "/v1/messages", http.StatusOK, "strategy-revision-2")
+}
+
+// Break caught: a builder mutating aliased strategy slices can publish a runtime different from the committed Snapshot.
+func TestCoordinatorRejectsStrategyBuilderMutationBeforeCommit(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := profile.NewStore(db)
+	record := saveCoordinatorRecord(t, store, "strategy", true)
+	record.Config.AutoRouting.Enabled = true
+	registry := NewRegistry()
+	if err := registry.Load([]profile.Record{record}, record.ID, upstreamBuilder); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := NewCoordinator(
+		&coordinatorSnapshotStore{ProfileStore: store, records: []profile.Record{record}, defaultID: record.ID},
+		registry,
+		upstreamBuilder,
+		func(_ profile.Record, snapshot strategy.Snapshot) (http.Handler, error) {
+			snapshot.Active.Config.TaskRoutes[0].Route = "mutated"
+			snapshot.Active.Config.Routes[0].Candidates[0].Model = "mutated"
+			return responseHandler("mutated-runtime"), nil
+		},
+	)
+	if err := coordinator.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := registry.current.Load()
+	prospective := strategy.Snapshot{
+		Revision: 2,
+		Active: strategy.Version{ID: 22, Config: profile.RoutingStrategyConfig{
+			TaskRoutes: []profile.TaskRouteConfig{{TaskType: "simple", Route: "balanced"}},
+			Routes: []profile.RouteConfig{{
+				ID: "balanced", Candidates: []profile.RouteCandidateConfig{{Model: "fast"}},
+			}},
+		}},
+	}
+	commitCalled := false
+	committed, err := coordinator.publishStrategy(
+		context.Background(), record.ID, prospective,
+		func(context.Context) (strategy.Snapshot, error) {
+			commitCalled = true
+			return prospective, nil
+		},
+	)
+	if err == nil || commitCalled || committed.Revision != 0 {
+		t.Fatalf("committed=%+v commitCalled=%t err=%v", committed, commitCalled, err)
+	}
+	if registry.current.Load() != before {
+		t.Fatal("mutating builder changed Registry")
+	}
+	if !coordinator.Ready() {
+		t.Fatal("mutating builder made Coordinator unready")
+	}
+}
+
+// Break caught: a stale strategy request can publish after a concurrent Profile update disables Auto routing.
+func TestCoordinatorRejectsStrategyPublicationWhenLatestProfileDisablesAuto(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := profile.NewStore(db)
+	record := saveCoordinatorRecord(t, store, "strategy", true)
+	registry := NewRegistry()
+	if err := registry.Load([]profile.Record{record}, record.ID, upstreamBuilder); err != nil {
+		t.Fatal(err)
+	}
+	buildCalled := false
+	coordinator := NewCoordinator(
+		&coordinatorSnapshotStore{ProfileStore: store, records: []profile.Record{record}, defaultID: record.ID},
+		registry,
+		upstreamBuilder,
+		func(profile.Record, strategy.Snapshot) (http.Handler, error) {
+			buildCalled = true
+			return responseHandler("must-not-publish"), nil
+		},
+	)
+	if err := coordinator.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := registry.current.Load()
+	commitCalled := false
+	_, err = coordinator.publishStrategy(
+		context.Background(), record.ID,
+		strategy.Snapshot{Revision: 2, Active: strategy.Version{ID: 22}},
+		func(context.Context) (strategy.Snapshot, error) {
+			commitCalled = true
+			return strategy.Snapshot{}, nil
+		},
+	)
+	if !errors.Is(err, profile.ErrInvalidConfig) || buildCalled || commitCalled {
+		t.Fatalf("buildCalled=%t commitCalled=%t err=%v", buildCalled, commitCalled, err)
+	}
+	if registry.current.Load() != before || !coordinator.Ready() {
+		t.Fatal("rejected strategy publication changed runtime readiness or Registry")
+	}
+}
+
+// Break caught: disabled Profiles still need their prospective strategy validated before DB commit.
+func TestCoordinatorRejectsDisabledProfileStrategyWhenRuntimeBuildFails(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := profile.NewStore(db)
+	record := saveCoordinatorRecord(t, store, "strategy", true)
+	record.Enabled = false
+	record.Config.AutoRouting.Enabled = true
+	registry := NewRegistry()
+	if err := registry.Load([]profile.Record{record}, record.ID, upstreamBuilder); err != nil {
+		t.Fatal(err)
+	}
+	buildErr := errors.New("prospective strategy is incompatible with latest model catalog")
+	buildCalled := false
+	coordinator := NewCoordinator(
+		&coordinatorSnapshotStore{ProfileStore: store, records: []profile.Record{record}, defaultID: record.ID},
+		registry,
+		upstreamBuilder,
+		func(got profile.Record, _ strategy.Snapshot) (http.Handler, error) {
+			buildCalled = true
+			if got.Enabled {
+				t.Fatal("strategy builder did not receive disabled latest Profile")
+			}
+			return nil, buildErr
+		},
+	)
+	if err := coordinator.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := registry.current.Load()
+	commitCalled := false
+	committed, err := coordinator.publishStrategy(
+		context.Background(), record.ID,
+		strategy.Snapshot{Revision: 2, Active: strategy.Version{ID: 22}},
+		func(context.Context) (strategy.Snapshot, error) {
+			commitCalled = true
+			return strategy.Snapshot{}, nil
+		},
+	)
+	if !errors.Is(err, buildErr) || !buildCalled || commitCalled || committed.Revision != 0 {
+		t.Fatalf("committed=%+v buildCalled=%t commitCalled=%t err=%v", committed, buildCalled, commitCalled, err)
+	}
+	if registry.current.Load() != before || !coordinator.Ready() {
+		t.Fatal("rejected disabled-Profile strategy publication changed runtime readiness or Registry")
+	}
+}
+
+func TestCoordinatorPublishesDisabledProfileWithoutInstallingBuiltHandler(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := profile.NewStore(db)
+	record := saveCoordinatorRecord(t, store, "strategy", true)
+	record.Enabled = false
+	record.Config.AutoRouting.Enabled = true
+	registry := NewRegistry()
+	if err := registry.Load([]profile.Record{record}, record.ID, upstreamBuilder); err != nil {
+		t.Fatal(err)
+	}
+	buildCalls := 0
+	coordinator := NewCoordinator(
+		&coordinatorSnapshotStore{ProfileStore: store, records: []profile.Record{record}, defaultID: record.ID},
+		registry,
+		upstreamBuilder,
+		func(profile.Record, strategy.Snapshot) (http.Handler, error) {
+			buildCalls++
+			return responseHandler("validated"), nil
+		},
+	)
+	if err := coordinator.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prospective := strategy.Snapshot{Revision: 2, Active: strategy.Version{ID: 22}}
+	commitCalls := 0
+	committed, err := coordinator.publishStrategy(
+		context.Background(), record.ID, prospective,
+		func(context.Context) (strategy.Snapshot, error) {
+			commitCalls++
+			return prospective, nil
+		},
+	)
+	if err != nil || committed.Revision != prospective.Revision || buildCalls != 1 || commitCalls != 1 {
+		t.Fatalf(
+			"committed=%+v buildCalls=%d commitCalls=%d err=%v",
+			committed, buildCalls, commitCalls, err,
+		)
+	}
+	item := registry.current.Load().byID[record.ID]
+	if item == nil || item.record.Enabled || item.handler != nil {
+		t.Fatalf("disabled runtime=%+v, want disabled record with nil handler", item)
+	}
+	if !coordinator.Ready() {
+		t.Fatal("Coordinator became unready after valid disabled-Profile publication")
+	}
+}
+
+type coordinatorSnapshotStore struct {
+	ProfileStore
+	records   []profile.Record
+	defaultID int64
+}
+
+func (s *coordinatorSnapshotStore) LoadSnapshot(context.Context) ([]profile.Record, int64, error) {
+	return append([]profile.Record(nil), s.records...), s.defaultID, nil
 }
 
 func TestCoordinatorResyncsAfterIncrementalPublishFailure(t *testing.T) {

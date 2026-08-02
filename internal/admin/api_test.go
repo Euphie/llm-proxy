@@ -1267,7 +1267,7 @@ func newTestAPIWithActivation(
 	strategyStore := strategy.NewStore(db, func() time.Time { return now })
 	evidenceStore := evaluation.NewStore(db, func() time.Time { return now })
 	registry := gateway.NewRegistry()
-	coordinator := gateway.NewCoordinator(store, registry, func(record profile.Record) (http.Handler, error) {
+	build := func(record profile.Record) (http.Handler, error) {
 		resolved, _, err := strategyStore.ResolveRecord(context.Background(), record)
 		if err != nil {
 			return nil, err
@@ -1276,7 +1276,25 @@ func newTestAPIWithActivation(
 			return nil, err
 		}
 		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
-	})
+	}
+	coordinator := gateway.NewCoordinator(
+		store,
+		registry,
+		build,
+		func(record profile.Record, snapshot strategy.Snapshot) (http.Handler, error) {
+			record.Config.AutoRouting.Strategy = snapshot.Active.Config
+			if _, err := record.Resolve(); err != nil {
+				return nil, err
+			}
+			if snapshot.Canary != nil {
+				record.Config.AutoRouting.Strategy = snapshot.Canary.Config
+				if _, err := record.Resolve(); err != nil {
+					return nil, err
+				}
+			}
+			return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
+		},
+	)
 	logs := &bytes.Buffer{}
 	handler := NewAPI(Dependencies{
 		Auth:             auth,

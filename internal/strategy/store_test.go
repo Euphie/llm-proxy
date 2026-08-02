@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -130,6 +131,114 @@ func TestStoreKeepsPublishedVersionsImmutableAndUsesCASLifecycle(t *testing.T) {
 		rolledBack.LastKnownGood == nil || rolledBack.LastKnownGood.ID != candidate.ID {
 		t.Fatalf("rolled back=%+v", rolledBack)
 	}
+}
+
+func TestPreparedPublicationsCommitExactlyTheirProspectiveSnapshot(t *testing.T) {
+	store, record := newStrategyTestStore(t)
+	initial, err := store.Bootstrap(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateConfig := record.Config.AutoRouting.Strategy
+	candidateConfig.Name = "20260802-002"
+	candidate, err := store.CreateDraft(context.Background(), record, candidateConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Advance(context.Background(), record.ID, candidate.ID, StateDraft, StateEvaluating); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Advance(context.Background(), record.ID, candidate.ID, StateEvaluating, StateReady); err != nil {
+		t.Fatal(err)
+	}
+
+	start, err := store.PrepareStartCanary(context.Background(), record.ID, candidate.ID, 1000, initial.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canary := commitPreparedPublication(t, start)
+	cancel, err := store.PrepareCancelCanary(context.Background(), record.ID, canary.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled := commitPreparedPublication(t, cancel)
+	start, err = store.PrepareStartCanary(context.Background(), record.ID, candidate.ID, 2000, canceled.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canary = commitPreparedPublication(t, start)
+	promote, err := store.PreparePromote(context.Background(), record.ID, canary.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoted := commitPreparedPublication(t, promote)
+	rollback, err := store.PrepareRollback(context.Background(), record.ID, promoted.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolledBack := commitPreparedPublication(t, rollback)
+	if rolledBack.Active.ID != initial.Active.ID || rolledBack.Revision != initial.Revision+5 {
+		t.Fatalf("rolled back=%+v", rolledBack)
+	}
+}
+
+func TestPublicationSnapshotCannotMutatePreparedCommit(t *testing.T) {
+	store, record := newStrategyTestStore(t)
+	initial, err := store.Bootstrap(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateConfig := record.Config.AutoRouting.Strategy
+	candidateConfig.Name = "20260802-002"
+	candidate, err := store.CreateDraft(context.Background(), record, candidateConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Advance(context.Background(), record.ID, candidate.ID, StateDraft, StateEvaluating); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Advance(context.Background(), record.ID, candidate.ID, StateEvaluating, StateReady); err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.PrepareStartCanary(
+		context.Background(), record.ID, candidate.ID, 1000, initial.Revision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := publication.Snapshot()
+	mutated.Active.Config.TaskRoutes[0].Route = "mutated"
+	mutated.Active.Config.Routes[0].Candidates[0].Model = "mutated"
+	mutated.Canary.Config.Routes[0].ID = "mutated"
+	mutated.Canary.State = StateActive
+
+	pristine := publication.Snapshot()
+	if pristine.Active.Config.TaskRoutes[0].Route != "balanced" ||
+		pristine.Active.Config.Routes[0].Candidates[0].Model != "fast" ||
+		pristine.Canary.Config.Routes[0].ID != "balanced" ||
+		pristine.Canary.State != StateCanary {
+		t.Fatalf("Publication snapshot was mutated through an alias: %+v", pristine)
+	}
+	committed, err := publication.Commit(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(committed, pristine) {
+		t.Fatalf("committed snapshot changed through an alias: pristine=%+v committed=%+v", pristine, committed)
+	}
+}
+
+func commitPreparedPublication(t *testing.T, publication Publication) Snapshot {
+	t.Helper()
+	prospective := publication.Snapshot()
+	committed, err := publication.Commit(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(committed, prospective) {
+		t.Fatalf("committed snapshot drifted from prospective: prospective=%+v committed=%+v", prospective, committed)
+	}
+	return committed
 }
 
 func TestStoreRejectsStrategyThatCannotResolveInItsProfile(t *testing.T) {
