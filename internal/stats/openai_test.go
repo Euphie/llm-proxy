@@ -21,6 +21,7 @@ func TestOpenAIParserParsesResponsesJSON(t *testing.T) {
 		t.Fatal("Responses usage was not parsed")
 	}
 	want := Usage{
+		Present: true, InputPresent: true, OutputPresent: true,
 		Model:               "gpt-5.4",
 		InputTokens:         41,
 		OutputTokens:        23,
@@ -43,6 +44,7 @@ func TestOpenAIParserParsesCompletedResponsesSSE(t *testing.T) {
 		t.Fatal("streaming Responses usage was not parsed")
 	}
 	want := Usage{
+		Present: true, InputPresent: true, OutputPresent: true,
 		Model:               "gpt-5.4",
 		InputTokens:         31,
 		OutputTokens:        19,
@@ -51,5 +53,16 @@ func TestOpenAIParserParsesCompletedResponsesSSE(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("usage=%+v, want %+v", got, want)
+	}
+}
+
+func TestOpenAIParserRecognizesExplicitZeroUsageAndRejectsNegativeTokens(t *testing.T) {
+	usage, ok := (OpenAIParser{}).Parse([]byte(`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`))
+	if !ok || !usage.Present || !usage.InputPresent || !usage.OutputPresent ||
+		usage.InputTokens != 0 || usage.OutputTokens != 0 {
+		t.Fatalf("usage=%+v ok=%v", usage, ok)
+	}
+	if _, ok := (OpenAIParser{}).Parse([]byte(`{"usage":{"input_tokens":3,"output_tokens":-1}}`)); ok {
+		t.Fatal("negative token usage was accepted")
 	}
 }

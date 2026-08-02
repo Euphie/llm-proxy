@@ -14,7 +14,11 @@ var (
 
 const defaultRoutingSessionTTL = 24 * time.Hour
 
-const VisionImagePromptReserveTokens = 4096
+const (
+	VisionImagePromptReserveTokens        = 4096
+	VisionDescriptionBytesPerToken        = 4
+	VisionDescriptionWrapperReserveTokens = 64
+)
 
 const maxDynamicOptimizationTaskTimeout = 10 * time.Minute
 

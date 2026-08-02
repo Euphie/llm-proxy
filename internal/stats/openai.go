@@ -68,43 +68,56 @@ func accumulateOpenAIUsage(u *Usage, obj map[string]json.RawMessage) {
 
 	if raw, ok := obj["usage"]; ok {
 		var usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			InputTokens      int `json:"input_tokens"`
-			OutputTokens     int `json:"output_tokens"`
+			PromptTokens     *int `json:"prompt_tokens"`
+			CompletionTokens *int `json:"completion_tokens"`
+			InputTokens      *int `json:"input_tokens"`
+			OutputTokens     *int `json:"output_tokens"`
 			PromptDetails    struct {
-				CachedTokens     int `json:"cached_tokens"`
-				CacheWriteTokens int `json:"cache_write_tokens"`
+				CachedTokens     *int `json:"cached_tokens"`
+				CacheWriteTokens *int `json:"cache_write_tokens"`
 			} `json:"prompt_tokens_details"`
 			InputDetails struct {
-				CachedTokens     int `json:"cached_tokens"`
-				CacheWriteTokens int `json:"cache_write_tokens"`
+				CachedTokens     *int `json:"cached_tokens"`
+				CacheWriteTokens *int `json:"cache_write_tokens"`
 			} `json:"input_tokens_details"`
 		}
-		if json.Unmarshal(raw, &usage) == nil {
-			if usage.PromptTokens > 0 {
-				u.InputTokens = usage.PromptTokens
+		if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) && json.Unmarshal(raw, &usage) == nil {
+			u.Present = true
+			if anyNegative(
+				usage.PromptTokens, usage.CompletionTokens, usage.InputTokens, usage.OutputTokens,
+				usage.PromptDetails.CachedTokens, usage.PromptDetails.CacheWriteTokens,
+				usage.InputDetails.CachedTokens, usage.InputDetails.CacheWriteTokens,
+			) {
+				u.invalid = true
+				return
 			}
-			if usage.InputTokens > 0 {
-				u.InputTokens = usage.InputTokens
+			if usage.PromptTokens != nil {
+				u.InputPresent = true
+				u.InputTokens = *usage.PromptTokens
 			}
-			if usage.CompletionTokens > 0 {
-				u.OutputTokens = usage.CompletionTokens
+			if usage.InputTokens != nil {
+				u.InputPresent = true
+				u.InputTokens = *usage.InputTokens
 			}
-			if usage.OutputTokens > 0 {
-				u.OutputTokens = usage.OutputTokens
+			if usage.CompletionTokens != nil {
+				u.OutputPresent = true
+				u.OutputTokens = *usage.CompletionTokens
 			}
-			if usage.PromptDetails.CachedTokens > 0 {
-				u.CacheReadTokens = usage.PromptDetails.CachedTokens
+			if usage.OutputTokens != nil {
+				u.OutputPresent = true
+				u.OutputTokens = *usage.OutputTokens
 			}
-			if usage.InputDetails.CachedTokens > 0 {
-				u.CacheReadTokens = usage.InputDetails.CachedTokens
+			if usage.PromptDetails.CachedTokens != nil {
+				u.CacheReadTokens = *usage.PromptDetails.CachedTokens
 			}
-			if usage.PromptDetails.CacheWriteTokens > 0 {
-				u.CacheCreationTokens = usage.PromptDetails.CacheWriteTokens
+			if usage.InputDetails.CachedTokens != nil {
+				u.CacheReadTokens = *usage.InputDetails.CachedTokens
 			}
-			if usage.InputDetails.CacheWriteTokens > 0 {
-				u.CacheCreationTokens = usage.InputDetails.CacheWriteTokens
+			if usage.PromptDetails.CacheWriteTokens != nil {
+				u.CacheCreationTokens = *usage.PromptDetails.CacheWriteTokens
+			}
+			if usage.InputDetails.CacheWriteTokens != nil {
+				u.CacheCreationTokens = *usage.InputDetails.CacheWriteTokens
 			}
 		}
 	}
@@ -118,8 +131,9 @@ func accumulateOpenAIUsage(u *Usage, obj map[string]json.RawMessage) {
 }
 
 func validOpenAIUsage(u Usage) (Usage, bool) {
-	if u.InputTokens == 0 && u.OutputTokens == 0 {
+	if !u.Present || u.invalid {
 		return Usage{}, false
 	}
+	u.invalid = false
 	return u, true
 }

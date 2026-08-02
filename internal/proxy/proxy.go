@@ -78,14 +78,17 @@ func NewWithEvaluation(
 }
 
 type handler struct {
-	cfg        profile.Runtime
-	client     *http.Client
-	stats      *stats.DB
-	parser     stats.Parser
-	vision     *vision.Preprocessor
-	routing    *routing.Engine
-	sessions   *routing.SessionStore
-	evaluation evaluationSubmitter
+	cfg                profile.Runtime
+	client             *http.Client
+	stats              *stats.DB
+	parser             stats.Parser
+	vision             *vision.Preprocessor
+	routing            *routing.Engine
+	sessions           *routing.SessionStore
+	evaluation         evaluationSubmitter
+	callLedgerSink     func([]routing.CallLedgerEntry)
+	budgetSnapshotSink func(routing.AttemptBudgetSnapshot)
+	beforeAutoAnswer   func(context.Context)
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +119,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var modelAttempts []routing.ModelAttemptPlan
 	var currentAttempt routing.ModelAttemptPlan
 	var currentTargets []routing.TargetPlan
+	var autoExecutor *autoExecution
+	var currentNodeLease *autoNodeLease
+	var callLedger *routing.CallLedger
+	initialModel := ""
+	initialTargetID := currentTargetID
+	visionCached := false
 	currentTargetIndex := 0
 	modelAttemptIndex := 0
 	isAuto := false
@@ -145,6 +154,46 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var cancel context.CancelFunc
 		budget, requestCtx, cancel = h.routing.NewAttemptBudget(r.Context())
 		defer cancel()
+		callLedger = routing.NewCallLedger(newCallCorrelationID())
+		requestCtx = routing.WithCallLedger(requestCtx, callLedger)
+		defer func() {
+			calls := callLedger.Snapshot()
+			if h.callLedgerSink != nil {
+				h.callLedgerSink(calls)
+			}
+			snapshot := budget.Snapshot()
+			if h.budgetSnapshotSink != nil {
+				h.budgetSnapshotSink(snapshot)
+			}
+			if h.stats == nil {
+				return
+			}
+			aggregate := callLedger.Aggregate()
+			h.stats.RecordRoutingTraceWithCallsAsync(stats.RoutingTrace{
+				CorrelationID: aggregate.CorrelationID,
+				ProfileID:     h.cfg.ID, ProfileSlug: label,
+				Protocol: string(h.cfg.Protocol), Path: r.URL.Path,
+				Strategy: plan.Strategy(), Route: plan.Route(),
+				TaskType: classification.TaskType, Risk: string(classification.Risk),
+				ClassificationSource: string(classification.Source),
+				InitialModel:         initialModel, FinalModel: currentAttempt.Model(),
+				InitialTarget: initialTargetID, FinalTarget: currentTargetID,
+				VisionMode:                    string(currentAttempt.VisionMode()),
+				StatusCode:                    responseState.statusCode,
+				ClientCommitted:               responseState.committed,
+				AnswerAttempts:                snapshot.AnswerAttempts,
+				AuxiliaryCalls:                snapshot.AuxiliaryCalls,
+				TotalOutboundCalls:            snapshot.TotalOutboundCalls,
+				ModelSwitches:                 snapshot.ModelSwitches,
+				TargetSwitches:                snapshot.TargetSwitches,
+				PlannedWorstCaseCostMicroUSD:  plan.WorstCaseCostMicroUSD(),
+				ConsumedEstimatedCostMicroUSD: aggregate.EstimatedConsumedMicroUSD,
+				HeldCostMicroUSD:              snapshot.HeldCostMicroUSD,
+				KnownActualCostMicroUSD:       aggregate.KnownActualMicroUSD,
+				AllActualCostsKnown:           aggregate.AllActualCostsKnown,
+				ElapsedMilliseconds:           time.Since(start).Milliseconds(),
+			}, physicalCallsForStats(calls))
+		}()
 		plan, classification, routeErr = h.routing.RouteWithPreference(
 			requestCtx,
 			r.Header,
@@ -188,6 +237,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		modelAttempts = plan.ModelAttempts()
+		visionUsageParser := stats.NewParser("anthropic")
+		if h.cfg.Vision.Transport != profile.VisionTransportAnthropicMessages {
+			visionUsageParser = stats.NewParser("openai")
+		}
+		autoExecutor = newAutoExecution(
+			plan, budget, callLedger, h.cfg.Models, h.parser, visionUsageParser,
+		)
 		if len(modelAttempts) == 0 {
 			writeRoutingError(w, routing.ErrNoCapableModel)
 			return
@@ -200,34 +256,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		currentTargetID = currentTargets[0].ID()
 		target = targetURL(currentTargets[0].Upstream(), requestURI)
-		initialModel := currentAttempt.Model()
-		initialTargetID := currentTargetID
-		defer func() {
-			if h.stats == nil {
-				return
-			}
-			snapshot := budget.Snapshot()
-			h.stats.RecordRoutingTraceAsync(stats.RoutingTrace{
-				ProfileID: h.cfg.ID, ProfileSlug: label,
-				Protocol: string(h.cfg.Protocol), Path: r.URL.Path,
-				Strategy: plan.Strategy(), Route: plan.Route(),
-				TaskType: classification.TaskType, Risk: string(classification.Risk),
-				ClassificationSource: string(classification.Source),
-				InitialModel:         initialModel, FinalModel: currentAttempt.Model(),
-				InitialTarget: initialTargetID, FinalTarget: currentTargetID,
-				VisionMode:                   string(currentAttempt.VisionMode()),
-				StatusCode:                   responseState.statusCode,
-				ClientCommitted:              responseState.committed,
-				AnswerAttempts:               snapshot.AnswerAttempts,
-				AuxiliaryCalls:               snapshot.AuxiliaryCalls,
-				TotalOutboundCalls:           snapshot.TotalOutboundCalls,
-				ModelSwitches:                snapshot.ModelSwitches,
-				TargetSwitches:               snapshot.TargetSwitches,
-				PlannedWorstCaseCostMicroUSD: plan.WorstCaseCostMicroUSD(),
-				ReservedCostMicroUSD:         snapshot.WorstCaseCostMicroUSD,
-				ElapsedMilliseconds:          time.Since(start).Milliseconds(),
-			})
-		}()
+		initialModel = currentAttempt.Model()
+		initialTargetID = currentTargetID
 		slog.Info("routing.plan.created",
 			"profile", label,
 			"strategy", plan.Strategy(),
@@ -254,7 +284,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			modelAttempts,
 			modelAttemptIndex,
 			currentTargetIndex,
-			budget,
+			autoExecutor,
+			visionCached,
 		)
 		if prepareErr != nil {
 			writeAutoPreparationError(w, requestCtx, prepareErr)
@@ -267,6 +298,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		currentTargetID = prepared.target.ID()
 		target = prepared.targetURL
 		body = prepared.body
+		currentNodeLease = prepared.nodeLease
+		visionCached = currentAttempt.VisionMode() == routing.VisionComposite
+		defer func() { currentNodeLease.release() }()
 	} else if preprocessVision {
 		var reserveVisionCall func(context.Context) error
 		body, err = h.vision.ProcessOperationTargetWithBudget(
@@ -293,110 +327,93 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if requestCtx.Err() != nil {
 		return
 	}
-	if budget != nil {
-		if err := budget.ReserveCall(requestCtx, routing.CallAnswer, currentAttempt.AnswerCallCostMicroUSD()); err != nil {
-			writeRoutingError(w, err)
-			return
-		}
-	}
-
-	answerAttempts := 1
-	switchTarget := func() (bool, error) {
-		if !isAuto || currentTargetIndex+1 >= len(currentTargets) {
+	answerAttempts := 0
+	nodeAnswerRetryIndex := 0
+	switchAfterFailure := func() (bool, error) {
+		if !isAuto {
 			return false, nil
 		}
-		next := currentTargets[currentTargetIndex+1]
-		if err := budget.CanReserveTargetSwitchCall(
-			requestCtx,
-			currentAttempt.AnswerCallCostMicroUSD(),
-		); err != nil {
+		previousModel := currentAttempt.Model()
+		previousTarget := currentTargetID
+		nextModelIndex := modelAttemptIndex
+		nextTargetIndex := currentTargetIndex + 1
+		if nextTargetIndex >= len(currentTargets) {
+			nextModelIndex++
+			nextTargetIndex = 0
+		}
+		if nextModelIndex >= len(modelAttempts) {
 			return false, nil
 		}
-		if err := budget.ReserveTargetSwitchCall(
-			requestCtx,
-			currentAttempt.AnswerCallCostMicroUSD(),
-		); err != nil {
-			return false, err
-		}
-		previous := currentTargetID
-		currentTargetIndex++
-		answerAttempts++
-		currentTargetID = next.ID()
-		target = targetURL(next.Upstream(), requestURI)
-		slog.Info("routing.target.switched",
-			"profile", label,
-			"strategy", plan.Strategy(),
-			"route", plan.Route(),
-			"model", currentAttempt.Model(),
-			"from_target", previous,
-			"to_target", currentTargetID)
-		return true, nil
-	}
-	switchModel := func() (bool, error) {
-		if !isAuto || modelAttemptIndex+1 >= len(modelAttempts) {
-			return false, nil
-		}
-		next := modelAttempts[modelAttemptIndex+1]
-		if err := budget.CanReserveModelSwitchCall(
-			requestCtx,
-			next.AnswerCallCostMicroUSD(),
-		); err != nil {
-			return false, nil
-		}
-		if err := budget.ReserveModelSwitch(); err != nil {
-			return false, err
-		}
+		currentNodeLease.release()
 		prepared, err := h.prepareAutoAttemptSequence(
 			requestCtx,
 			r.Header,
 			requestURI,
 			routeRequest,
 			modelAttempts,
-			modelAttemptIndex+1,
-			0,
-			budget,
+			nextModelIndex,
+			nextTargetIndex,
+			autoExecutor,
+			visionCached,
 		)
 		if err != nil {
 			return false, err
 		}
-		if err := budget.ReserveCall(
-			requestCtx,
-			routing.CallAnswer,
-			prepared.attempt.AnswerCallCostMicroUSD(),
-		); err != nil {
-			return false, err
-		}
-		previous := currentAttempt.Model()
 		modelAttemptIndex = prepared.modelIndex
-		answerAttempts++
 		currentAttempt = prepared.attempt
 		currentTargets = prepared.targets
 		currentTargetIndex = prepared.targetIndex
 		currentTargetID = prepared.target.ID()
 		target = prepared.targetURL
 		body = prepared.body
-		slog.Info("routing.model.switched",
-			"profile", label,
-			"strategy", plan.Strategy(),
-			"route", plan.Route(),
-			"from_model", previous,
-			"to_model", currentAttempt.Model(),
-			"target", currentTargetID,
-			"vision_mode", currentAttempt.VisionMode())
-		return true, nil
-	}
-	switchAfterFailure := func() (bool, error) {
-		if switched, err := switchTarget(); switched || err != nil {
-			return switched, err
+		currentNodeLease = prepared.nodeLease
+		visionCached = visionCached || currentAttempt.VisionMode() == routing.VisionComposite
+		nodeAnswerRetryIndex = 0
+		if previousModel == currentAttempt.Model() {
+			slog.Info("routing.target.switched",
+				"profile", label,
+				"strategy", plan.Strategy(),
+				"route", plan.Route(),
+				"model", currentAttempt.Model(),
+				"from_target", previousTarget,
+				"to_target", currentTargetID)
+		} else {
+			slog.Info("routing.model.switched",
+				"profile", label,
+				"strategy", plan.Strategy(),
+				"route", plan.Route(),
+				"from_model", previousModel,
+				"to_model", currentAttempt.Model(),
+				"target", currentTargetID,
+				"vision_mode", currentAttempt.VisionMode())
 		}
-		return switchModel()
+		return true, nil
 	}
 
 	var rule *provider.Rule
 	retries := 0
+	answerRetryAllowed := func(retryIndex int) bool {
+		return !isAuto || currentNodeLease.allowsAnswerRetry(retryIndex)
+	}
 	for {
+		completeAnswer := func(int, string, []byte) {}
+		if isAuto {
+			if h.beforeAutoAnswer != nil {
+				h.beforeAutoAnswer(requestCtx)
+			}
+			_, completion, ticketErr := currentNodeLease.beginAnswer(
+				requestCtx, nodeAnswerRetryIndex,
+			)
+			if ticketErr != nil {
+				writeRoutingError(w, ticketErr)
+				return
+			}
+			completeAnswer = completion
+		}
+		answerAttempts++
 		resp, err := h.do(requestCtx, r.Method, target, r.Header, body)
 		if err != nil {
+			completeAnswer(0, "network", nil)
 			if requestCtx.Err() != nil {
 				return
 			}
@@ -408,9 +425,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if recoverable &&
 				rule != nil && retries < rule.MaxRetries &&
-				h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
+				answerRetryAllowed(nodeAnswerRetryIndex+1) {
 				retries++
-				answerAttempts++
+				nodeAnswerRetryIndex++
 				if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
 					return
 				}
@@ -434,12 +451,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-
 		if resp.StatusCode < 400 {
 			var captured []byte
 			if isAuto {
 				result := relayAutoSuccess(w, resp, autoStream)
 				if result.err != nil {
+					completeAnswer(resp.StatusCode, "response_io", result.captured)
 					if result.committed {
 						slog.Warn("routing.client_stream.failed_after_commit",
 							"profile", label,
@@ -460,9 +477,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 					if recoverable &&
 						rule != nil && retries < rule.MaxRetries &&
-						h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
+						answerRetryAllowed(nodeAnswerRetryIndex+1) {
 						retries++
-						answerAttempts++
+						nodeAnswerRetryIndex++
 						if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
 							return
 						}
@@ -483,6 +500,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "upstream stream failed before client commit", http.StatusBadGateway)
 					return
 				}
+				completeAnswer(resp.StatusCode, "success", result.captured)
 				captured = result.captured
 			} else {
 				captured = stream(w, resp)
@@ -512,8 +530,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Error response: buffer to check for overload
-		errBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		errBody, readErr := io.ReadAll(resp.Body)
+		closeErr := resp.Body.Close()
+		if readErr != nil || closeErr != nil {
+			completeAnswer(resp.StatusCode, "response_io", errBody)
+		} else {
+			completeAnswer(resp.StatusCode, "upstream", errBody)
+		}
 
 		failure := provider.ClassifyHTTPFailure(
 			h.cfg.OverloadRules,
@@ -528,9 +551,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				rule = matched
 			}
 			if retries < rule.MaxRetries &&
-				h.reserveRetry(requestCtx, budget, currentTargetID, currentAttempt.AnswerCallCostMicroUSD()) {
+				answerRetryAllowed(nodeAnswerRetryIndex+1) {
 				retries++
-				answerAttempts++
+				nodeAnswerRetryIndex++
 				if !waitForRetry(requestCtx, label, r.URL.Path, rule, retries) {
 					return
 				}
@@ -1002,25 +1025,13 @@ func hasCompleteSSEEvent(buffer []byte) (bool, error) {
 	}
 }
 
-func (h *handler) reserveRetry(
-	ctx context.Context,
-	budget *routing.AttemptBudget,
-	target string,
-	answerCallCostMicroUSD int64,
-) bool {
-	if budget == nil {
-		return true
-	}
-	return budget.ReserveRetry(ctx, target, answerCallCostMicroUSD) == nil
-}
-
 func (h *handler) prepareAutoAttempt(
 	ctx context.Context,
 	headers http.Header,
 	target string,
 	request routing.Request,
 	attempt routing.ModelAttemptPlan,
-	budget *routing.AttemptBudget,
+	nodeLease *autoNodeLease,
 ) ([]byte, error) {
 	body, err := request.WithModel(attempt.Model())
 	if err != nil {
@@ -1032,19 +1043,13 @@ func (h *handler) prepareAutoAttempt(
 	if h.vision == nil {
 		return nil, routing.ErrNoCapableModel
 	}
-	return h.vision.ProcessOperationTargetWithBudget(
+	return h.vision.ProcessOperationTargetWithTickets(
 		ctx,
 		headers,
 		request.Operation,
 		body,
 		target,
-		func(callCtx context.Context) error {
-			return budget.ReserveCall(
-				callCtx,
-				routing.CallVision,
-				attempt.VisionCallCostMicroUSD(),
-			)
-		},
+		nodeLease.visionReservation(h.cfg.Vision.Model),
 	)
 }
 
@@ -1056,6 +1061,7 @@ type preparedAutoAttempt struct {
 	target      routing.TargetPlan
 	targetURL   string
 	body        []byte
+	nodeLease   *autoNodeLease
 }
 
 func (h *handler) prepareAutoAttemptSequence(
@@ -1066,13 +1072,14 @@ func (h *handler) prepareAutoAttemptSequence(
 	attempts []routing.ModelAttemptPlan,
 	modelIndex int,
 	targetIndex int,
-	budget *routing.AttemptBudget,
+	execution *autoExecution,
+	visionCached bool,
 ) (preparedAutoAttempt, error) {
 	for modelIndex < len(attempts) {
 		attempt := attempts[modelIndex]
 		targets := attempt.Targets()
 		if targetIndex >= len(targets) {
-			if modelIndex+1 >= len(attempts) || budget.ReserveModelSwitch() != nil {
+			if modelIndex+1 >= len(attempts) {
 				return preparedAutoAttempt{}, routing.ErrNoCapableModel
 			}
 			modelIndex++
@@ -1081,34 +1088,45 @@ func (h *handler) prepareAutoAttemptSequence(
 		}
 		target := targets[targetIndex]
 		attemptTarget := targetURL(target.Upstream(), requestURI)
-		body, err := h.prepareAutoAttempt(ctx, headers, attemptTarget, request, attempt, budget)
+		nodeLease, reserveErr := execution.reserveNode(
+			ctx, modelIndex, targetIndex, visionCached,
+		)
+		if reserveErr != nil {
+			if modelIndex == 0 && targetIndex == 0 {
+				return preparedAutoAttempt{}, reserveErr
+			}
+			if modelIndex+1 < len(attempts) {
+				modelIndex++
+				targetIndex = 0
+				continue
+			}
+			return preparedAutoAttempt{}, reserveErr
+		}
+		body, err := h.prepareAutoAttempt(ctx, headers, attemptTarget, request, attempt, nodeLease)
 		if err == nil {
+			nodeLease.releaseUnusedVision()
 			return preparedAutoAttempt{
 				modelIndex: modelIndex, targetIndex: targetIndex,
 				attempt: attempt, targets: targets, target: target,
-				targetURL: attemptTarget, body: body,
+				targetURL: attemptTarget, body: body, nodeLease: nodeLease,
 			}, nil
 		}
+		nodeLease.release()
 		if ctx.Err() != nil || !recoverableVisionFailure(err) {
 			return preparedAutoAttempt{}, err
 		}
 		if targetIndex+1 < len(targets) {
-			if switchErr := budget.ReserveTargetSwitch(); switchErr == nil {
-				slog.Info(
-					"routing.vision.target_fallback",
-					"profile", h.cfg.Slug,
-					"model", attempt.Model(),
-					"from_target", target.ID(),
-					"to_target", targets[targetIndex+1].ID(),
-				)
-				targetIndex++
-				continue
-			}
+			slog.Info(
+				"routing.vision.target_fallback",
+				"profile", h.cfg.Slug,
+				"model", attempt.Model(),
+				"from_target", target.ID(),
+				"to_target", targets[targetIndex+1].ID(),
+			)
+			targetIndex++
+			continue
 		}
 		if modelIndex+1 >= len(attempts) {
-			return preparedAutoAttempt{}, err
-		}
-		if switchErr := budget.ReserveModelSwitch(); switchErr != nil {
 			return preparedAutoAttempt{}, err
 		}
 		slog.Info(

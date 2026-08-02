@@ -59,7 +59,7 @@ func (e *Engine) RouteWithPreference(
 	resolvePreference func(routeID string) SessionPreference,
 ) (ExecutionPlan, Classification, error) {
 	if classification, matched := ClassifyLocal(request, e.baseline); matched {
-		plan, err := e.plan(request, classification, resolvePreference)
+		plan, err := e.plan(request, classification, resolvePreference, budget)
 		return plan, classification, err
 	}
 
@@ -89,10 +89,10 @@ func (e *Engine) RouteWithPreference(
 			TaskType: "high_risk", Risk: RiskHigh,
 			Source: ClassificationSourceFallback,
 		}
-		plan, planErr := e.plan(request, fallback, resolvePreference)
+		plan, planErr := e.plan(request, fallback, resolvePreference, budget)
 		return plan, fallback, planErr
 	}
-	plan, err := e.plan(request, classification, resolvePreference)
+	plan, err := e.plan(request, classification, resolvePreference, budget)
 	return plan, classification, err
 }
 
@@ -100,10 +100,14 @@ func (e *Engine) plan(
 	request Request,
 	classification Classification,
 	resolvePreference func(routeID string) SessionPreference,
+	budget *AttemptBudget,
 ) (ExecutionPlan, error) {
 	preference := SessionPreference{}
 	if resolvePreference != nil {
 		preference = resolvePreference(e.planner.RouteID(classification))
 	}
-	return e.planner.PlanWithPreference(request, classification, preference)
+	if budget == nil {
+		return e.planner.PlanWithPreference(request, classification, preference)
+	}
+	return e.planner.PlanWithBudget(request, classification, preference, budget.Snapshot())
 }

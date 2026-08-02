@@ -1,12 +1,593 @@
 package routing
 
 import (
+	"context"
 	"errors"
+	"math"
 	"net/http"
 	"testing"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
+
+func TestPlannerRejectsGraphThatDoesNotFitBudgetRemainingAfterAnalyzer(t *testing.T) {
+	config := routingConfig(false)
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 1
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 1
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 2
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 600
+	runtime := resolveRoutingRuntime(t, config)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, ctx, cancel := NewAttemptBudget(context.Background(), runtime.AutoRouting.Strategy.Budget)
+	defer cancel()
+	if err := budget.ReserveCall(ctx, CallAnalyzer, 250); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = planner.PlanWithBudget(
+		autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+		Classification{TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceAnalyzer},
+		SessionPreference{},
+		budget.Snapshot(),
+	)
+	if !errors.Is(err, ErrAttemptBudgetExceeded) {
+		t.Fatalf("PlanWithBudget() error=%v, want ErrAttemptBudgetExceeded", err)
+	}
+}
+
+func TestPlannerWorstCaseIncludesVisionRetriesForEveryCompositeModelAttempt(t *testing.T) {
+	config := routingConfig(true)
+	unsupported := false
+	config.Models[1].SupportsVision = &unsupported
+	config.OverloadRules = []profile.RetryRule{{
+		Status: 503, MaxRetries: 2, Delay: "0s", Jitter: "0s",
+	}}
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 2
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 6
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 8
+	config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 1_000_000
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe"},
+			{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}}
+		]}]
+	}`)
+
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := plan.CallGraph()
+	if len(graph.Attempts) != 2 {
+		t.Fatalf("graph attempts=%+v", graph.Attempts)
+	}
+	for _, attempt := range graph.Attempts {
+		if len(attempt.VisionCallsPerImage) != 1 || attempt.VisionCallsPerImage[0] != 3 {
+			t.Fatalf("attempt=%+v, want three vision calls for one image", attempt)
+		}
+		reservation := attempt.Reservation()
+		if reservation.Model != attempt.Model || reservation.Target != attempt.TargetID ||
+			len(reservation.VisionCallsPerImage) != 1 || reservation.VisionCallsPerImage[0] != 3 ||
+			reservation.AnswerCallCostMicroUSD <= 0 || reservation.VisionCallCostMicroUSD <= 0 {
+			t.Fatalf("attempt reservation=%+v", reservation)
+		}
+	}
+	visionCost := plan.ModelAttempts()[0].VisionCallCostMicroUSD()
+	fastAnswerCost := plan.ModelAttempts()[0].AnswerCallCostMicroUSD()
+	strongAnswerCost := plan.ModelAttempts()[1].AnswerCallCostMicroUSD()
+	wantWorst := max(
+		visionCost*6+strongAnswerCost,
+		visionCost*3+fastAnswerCost+strongAnswerCost,
+	)
+	if graph.WorstCaseCostMicroUSD != wantWorst ||
+		plan.WorstCaseCostMicroUSD() != wantWorst {
+		t.Fatalf("worst cost graph=%d plan=%d want=%d", graph.WorstCaseCostMicroUSD, plan.WorstCaseCostMicroUSD(), wantWorst)
+	}
+}
+
+func TestPlannerCompositeAnswerCostAndContextIncludeBoundedVisionDescriptions(t *testing.T) {
+	config := routingConfig(true)
+	unsupported := false
+	config.Models[1].SupportsVision = &unsupported
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 1_000_000
+	runtime := resolveRoutingRuntime(t, config)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe"},
+			{"type":"image","source":{"type":"url","url":"https://example.test/a.png"}},
+			{"type":"image","source":{"type":"url","url":"https://example.test/b.png"}}
+		]}]
+	}`)
+	plan, err := planner.Plan(request, Classification{TaskType: "simple", Risk: RiskNormal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputBound, ok := compositeAnswerInputTokens(request.Facts, runtime.Vision)
+	if !ok {
+		t.Fatal("composite input bound overflowed")
+	}
+	model := runtime.Models[plan.Model()]
+	wantCost := estimateCallCost(inputBound, 1000, model)
+	if plan.AnswerCallCostMicroUSD() != wantCost || inputBound <= request.Facts.EstimatedInputTokens {
+		t.Fatalf("answer_cost=%d want=%d input_bound=%d base=%d",
+			plan.AnswerCallCostMicroUSD(), wantCost, inputBound, request.Facts.EstimatedInputTokens)
+	}
+
+	tooSmall := inputBound + 999
+	configuredOutput := 1000
+	for index := range config.Models[:2] {
+		config.Models[index].ContextWindow = &tooSmall
+		config.Models[index].MaxOutputTokens = &configuredOutput
+	}
+	planner, err = NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planner.Plan(request, Classification{TaskType: "simple", Risk: RiskNormal}); !errors.Is(err, ErrNoCapableModel) {
+		t.Fatalf("Plan() error=%v, want ErrNoCapableModel", err)
+	}
+}
+
+func TestPlannerPathEnvelopeKeepsVisualFallbackWithOneAnswerSlot(t *testing.T) {
+	config := routingConfig(true)
+	unsupported := false
+	config.Models[1].SupportsVision = &unsupported
+	config.ProviderID = "acme-ai"
+	config.CredentialScope = "team-a"
+	config.Targets = []profile.TargetConfig{{
+		ID: "region-b", Upstream: "https://region-b.example",
+		ProviderID: "acme-ai", CredentialScope: "team-a",
+		Models: []string{"strong", "vision"},
+	}}
+	config.OverloadRules = []profile.RetryRule{{
+		Status: 503, MaxRetries: 1, Delay: "0s", Jitter: "0s",
+	}}
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 1
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 4
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 5
+	config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	config.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 1_000_000
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":[
+			{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},
+			{"type":"text","text":"inspect production access"}
+		]}]
+	}`)
+
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "high_risk", Risk: RiskHigh, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := plan.CallGraph()
+	if len(graph.Attempts) != 2 || graph.AnswerCalls != 1 ||
+		graph.AuxiliaryCalls != 4 || graph.TotalOutboundCalls != 5 {
+		t.Fatalf("path envelope=%+v", graph)
+	}
+	if graph.Attempts[0].TargetID != profile.PrimaryTargetID ||
+		graph.Attempts[1].TargetID != "region-b" {
+		t.Fatalf("attempts=%+v", graph.Attempts)
+	}
+	want := plan.VisionCallCostMicroUSD()*4 + plan.AnswerCallCostMicroUSD()
+	if graph.WorstCaseCostMicroUSD != want {
+		t.Fatalf("worst=%d want=%d", graph.WorstCaseCostMicroUSD, want)
+	}
+}
+
+func TestPlannerPathEnvelopeDoesNotSumMutuallyExclusiveCompositeBranches(t *testing.T) {
+	config := routingConfig(true)
+	unsupported := false
+	config.Models[1].SupportsVision = &unsupported
+	config.ProviderID = "acme-ai"
+	config.CredentialScope = "team-a"
+	config.Targets = []profile.TargetConfig{{
+		ID: "region-b", Upstream: "https://region-b.example",
+		ProviderID: "acme-ai", CredentialScope: "team-a",
+		Models: []string{"strong", "vision"},
+	}}
+	config.OverloadRules = []profile.RetryRule{{
+		Status: 503, MaxRetries: 1, Delay: "0s", Jitter: "0s",
+	}}
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 2
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 4
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 5
+	config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	config.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 1_000_000
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":[
+			{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},
+			{"type":"text","text":"inspect production access"}
+		]}]
+	}`)
+
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "high_risk", Risk: RiskHigh, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := plan.CallGraph()
+	if len(graph.Attempts) != 2 || graph.AnswerCalls != 2 ||
+		graph.AuxiliaryCalls != 4 || graph.TotalOutboundCalls != 5 {
+		t.Fatalf("path envelope=%+v", graph)
+	}
+	visionCost := plan.VisionCallCostMicroUSD()
+	answerCost := plan.AnswerCallCostMicroUSD()
+	wantWorst := max(visionCost*4+answerCost, visionCost*2+answerCost*2)
+	if graph.WorstCaseCostMicroUSD != wantWorst {
+		t.Fatalf("worst=%d want=%d", graph.WorstCaseCostMicroUSD, wantWorst)
+	}
+}
+
+func TestPlannerUncachedCompositeSuccessRequiresPhysicalVisionCall(t *testing.T) {
+	config := routingConfig(true)
+	unsupported := false
+	config.Models[1].SupportsVision = &unsupported
+	config.ProviderID = "acme-ai"
+	config.CredentialScope = "team-a"
+	config.Targets = []profile.TargetConfig{{
+		ID: "region-b", Upstream: "https://region-b.example",
+		ProviderID: "acme-ai", CredentialScope: "team-a",
+		Models: []string{"strong", "vision"},
+	}}
+	config.OverloadRules = []profile.RetryRule{{
+		Status: 503, MaxRetries: 0, Delay: "0s", Jitter: "0s",
+	}}
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 2
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 1
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 2
+	config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	config.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 1_000_000
+	runtime := resolveRoutingRuntime(t, config)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":[
+			{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},
+			{"type":"text","text":"inspect production access"}
+		]}]
+	}`)
+	classification := Classification{
+		TaskType: "high_risk", Risk: RiskHigh, Source: ClassificationSourceRule,
+	}
+
+	plan, err := planner.Plan(request, classification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := plan.CallGraph()
+	if len(graph.Attempts) != 1 || graph.AuxiliaryCalls != 1 ||
+		graph.AnswerCalls != 1 || graph.TotalOutboundCalls != 2 {
+		t.Fatalf("impossible zero-call success made fallback reachable: %+v", graph)
+	}
+	if graph.WorstCaseCostMicroUSD < plan.VisionCallCostMicroUSD()+plan.AnswerCallCostMicroUSD() {
+		t.Fatalf("worst cost omitted required visual call: %+v", graph)
+	}
+
+	_, err = planner.PlanWithBudget(
+		request,
+		classification,
+		SessionPreference{},
+		AttemptBudgetSnapshot{
+			AuxiliaryCalls: 1, TotalOutboundCalls: 1,
+			WorstCaseCostMicroUSD: plan.VisionCallCostMicroUSD(),
+		},
+	)
+	if !errors.Is(err, ErrAttemptBudgetExceeded) {
+		t.Fatalf("PlanWithBudget() error=%v, want exhausted auxiliary rejection", err)
+	}
+
+	twoImageRequest := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":[
+			{"type":"image","source":{"type":"url","url":"https://example.test/a.png"}},
+			{"type":"image","source":{"type":"url","url":"https://example.test/b.png"}},
+			{"type":"text","text":"compare"}
+		]}]
+	}`)
+	_, err = planner.Plan(twoImageRequest, classification)
+	if !errors.Is(err, ErrAttemptBudgetExceeded) {
+		t.Fatalf("two-image Plan() error=%v, want per-image visual admission rejection", err)
+	}
+}
+
+func TestPlannerKeepsFallbackReachableThroughShorterConfiguredRetryRule(t *testing.T) {
+	config := routingConfig(false)
+	config.ProviderID = "acme-ai"
+	config.CredentialScope = "team-a"
+	config.Targets = []profile.TargetConfig{{
+		ID: "region-b", Upstream: "https://region-b.example",
+		ProviderID: "acme-ai", CredentialScope: "team-a",
+		Models: []string{"strong"},
+	}}
+	config.OverloadRules = []profile.RetryRule{
+		{Status: 429, MaxRetries: 1, Delay: "0s", Jitter: "0s"},
+		{Status: 503, MaxRetries: 3, Delay: "0s", Jitter: "0s"},
+	}
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 3
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 3
+	config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 3
+	config.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 1_000_000
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(
+		autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"delete production data"}]}`),
+		Classification{TaskType: "high_risk", Risk: RiskHigh, Source: ClassificationSourceRule},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := plan.CallGraph()
+	if len(graph.Attempts) != 2 || graph.AnswerCalls != 3 || graph.TotalOutboundCalls != 3 {
+		t.Fatalf("short retry branch did not retain backup: %+v", graph)
+	}
+}
+
+func TestPlannerChargesConsumedAnalyzerExactlyOnce(t *testing.T) {
+	runtime := routingRuntime(t, false)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, ctx, cancel := NewAttemptBudget(context.Background(), runtime.AutoRouting.Strategy.Budget)
+	defer cancel()
+	if err := budget.ReserveCall(ctx, CallAnalyzer, 250); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.PlanWithBudget(
+		autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+		Classification{TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceAnalyzer},
+		SessionPreference{},
+		budget.Snapshot(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := plan.CallGraph()
+	wantEstimated := int64(250) + plan.AnswerCallCostMicroUSD()
+	if plan.EstimatedCostMicroUSD() != wantEstimated {
+		t.Fatalf("estimated=%d want=%d", plan.EstimatedCostMicroUSD(), wantEstimated)
+	}
+	if graph.ConsumedBeforePlanMicroUSD != 250 ||
+		plan.WorstCaseCostMicroUSD() != 250+graph.WorstCaseCostMicroUSD {
+		t.Fatalf("plan=%+v graph=%+v", plan.Snapshot(), graph)
+	}
+}
+
+func TestPlannerKeepsFallbackWhenExactPerNodeCostFits(t *testing.T) {
+	config := routingConfig(false)
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 2
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 1
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 2
+	config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 16_000
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(
+		autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+		Classification{TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := plan.CallGraph()
+	if len(graph.Attempts) != 2 || graph.Attempts[0].Model != "fast" ||
+		graph.Attempts[1].Model != "strong" {
+		t.Fatalf("graph attempts=%+v", graph.Attempts)
+	}
+	want := plan.ModelAttempts()[0].AnswerCallCostMicroUSD() +
+		plan.ModelAttempts()[1].AnswerCallCostMicroUSD()
+	if graph.WorstCaseCostMicroUSD != want {
+		t.Fatalf("worst=%d want=%d", graph.WorstCaseCostMicroUSD, want)
+	}
+}
+
+func TestPlannerTruncatesOptionalFallbackThatDoesNotFitRemainingCost(t *testing.T) {
+	config := routingConfig(false)
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 2
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 1
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 2
+	config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 1_000
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(
+		autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+		Classification{TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule},
+	)
+	if err != nil {
+		t.Fatalf("optional strong fallback should be truncated: %v", err)
+	}
+	graph := plan.CallGraph()
+	if len(graph.Attempts) != 1 || graph.Attempts[0].Model != "fast" {
+		t.Fatalf("graph attempts=%+v", graph.Attempts)
+	}
+	if attempts := plan.ModelAttempts(); len(attempts) != 1 || attempts[0].Model() != "fast" {
+		t.Fatalf("executable model attempts=%+v", attempts)
+	}
+	if graph.WorstCaseCostMicroUSD != plan.AnswerCallCostMicroUSD() {
+		t.Fatalf("worst=%d answer=%d", graph.WorstCaseCostMicroUSD, plan.AnswerCallCostMicroUSD())
+	}
+}
+
+func TestPlannerGraphAppliesTargetModelAndAnswerRetryLimits(t *testing.T) {
+	t.Run("target and model switches", func(t *testing.T) {
+		config := routingConfig(false)
+		config.ProviderID = "acme-ai"
+		config.CredentialScope = "team-a"
+		config.Targets = []profile.TargetConfig{
+			{ID: "region-b", Upstream: "https://region-b.example", ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"fast", "strong"}},
+			{ID: "region-c", Upstream: "https://region-c.example", ProviderID: "acme-ai", CredentialScope: "team-a", Models: []string{"fast", "strong"}},
+		}
+		config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 4
+		config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 4
+		config.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+		config.AutoRouting.Strategy.Budget.MaxModelSwitches = 0
+		planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := planner.Plan(
+			autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+			Classification{TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		graph := plan.CallGraph()
+		if len(graph.Attempts) != 2 || graph.ModelSwitches != 0 || graph.TargetSwitches != 1 ||
+			graph.Attempts[0].TargetID != profile.PrimaryTargetID || graph.Attempts[1].TargetID != "region-b" {
+			t.Fatalf("graph=%+v", graph)
+		}
+	})
+
+	t.Run("answer retries", func(t *testing.T) {
+		config := routingConfig(false)
+		config.OverloadRules = []profile.RetryRule{{
+			Status: 503, MaxRetries: 4, Delay: "0s", Jitter: "0s",
+		}}
+		config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 3
+		config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 3
+		config.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 2
+		planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := planner.Plan(
+			autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"delete production data"}]}`),
+			Classification{TaskType: "high_risk", Risk: RiskHigh, Source: ClassificationSourceRule},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		graph := plan.CallGraph()
+		if len(graph.Attempts) != 1 || graph.Attempts[0].AnswerCalls != 3 || graph.AnswerCalls != 3 {
+			t.Fatalf("graph=%+v", graph)
+		}
+		want := plan.AnswerCallCostMicroUSD() * 3
+		if graph.WorstCaseCostMicroUSD != want {
+			t.Fatalf("worst=%d want=%d", graph.WorstCaseCostMicroUSD, want)
+		}
+	})
+}
+
+func TestPlannerGraphFailsClosedOnImageCallCountOverflow(t *testing.T) {
+	config := routingConfig(true)
+	unsupported := false
+	config.Models[1].SupportsVision = &unsupported
+	config.OverloadRules = []profile.RetryRule{{
+		Status: 503, MaxRetries: 1, Delay: "0s", Jitter: "0s",
+	}}
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Request{
+		Operation: OperationAnthropicMessages,
+		Model:     AutoModel,
+		Facts: RequestFacts{
+			EstimatedInputTokens: 1, RequestedOutputTokens: 1,
+			HasImages: true, ImageCount: math.MaxInt,
+		},
+	}
+	_, err = planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if !errors.Is(err, ErrAttemptBudgetExceeded) && !errors.Is(err, ErrNoCapableModel) {
+		t.Fatalf("Plan() error=%v, want overflow rejection", err)
+	}
+}
+
+func TestPlannerGraphFailsClosedOnOverflowedBudgetSnapshot(t *testing.T) {
+	planner, err := NewPlanner(routingRuntime(t, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = planner.PlanWithBudget(
+		autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+		Classification{TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule},
+		SessionPreference{},
+		AttemptBudgetSnapshot{
+			WorstCaseCostMicroUSD: math.MaxInt64,
+			HeldCostMicroUSD:      math.MaxInt64,
+		},
+	)
+	if !errors.Is(err, ErrAttemptBudgetExceeded) {
+		t.Fatalf("PlanWithBudget() error=%v, want overflow rejection", err)
+	}
+}
+
+func TestPlannerSelectsBudgetCompatibleNativeFallbackWhenCompositeEnvelopeDoesNotFit(t *testing.T) {
+	config := routingConfig(true)
+	config.OverloadRules = []profile.RetryRule{{
+		Status: 503, MaxRetries: 10, Delay: "0s", Jitter: "0s",
+	}}
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 1
+	config.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 11
+	config.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 12
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 20_000
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(
+		autoAnthropicRequest(t, `{
+			"model":"auto","max_tokens":1000,
+			"messages":[{"role":"user","content":[
+				{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},
+				{"type":"text","text":"inspect"}
+			]}]
+		}`),
+		Classification{TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Model() != "strong" || plan.VisionMode() != VisionNative ||
+		len(plan.CallGraph().Attempts) != 1 {
+		t.Fatalf("plan=%+v graph=%+v", plan.Snapshot(), plan.CallGraph())
+	}
+}
 
 func TestPlannerChoosesLowestCostQualifiedCandidate(t *testing.T) {
 	runtime := routingRuntime(t, false)
@@ -96,8 +677,9 @@ func TestPlannerFreezesPrimaryAndStrongFallbackAttempts(t *testing.T) {
 	if len(attempts) != 2 || attempts[0].Model() != "fast" || attempts[1].Model() != "strong" {
 		t.Fatalf("attempts=%+v", attempts)
 	}
-	if plan.WorstCaseCostMicroUSD() < attempts[1].AnswerCallCostMicroUSD()*int64(plan.Budget().MaxAnswerAttempts) {
-		t.Fatalf("worst cost=%d does not cover strong fallback attempts", plan.WorstCaseCostMicroUSD())
+	wantWorst := attempts[0].AnswerCallCostMicroUSD() + attempts[1].AnswerCallCostMicroUSD()
+	if plan.WorstCaseCostMicroUSD() != wantWorst {
+		t.Fatalf("worst cost=%d want exact per-node sum=%d", plan.WorstCaseCostMicroUSD(), wantWorst)
 	}
 
 	attempts[0] = attempts[1]
@@ -108,6 +690,8 @@ func TestPlannerFreezesPrimaryAndStrongFallbackAttempts(t *testing.T) {
 
 func TestPlannerFreezesOrderedTargetsForEveryModelAttempt(t *testing.T) {
 	config := routingConfig(false)
+	config.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 5
+	config.AutoRouting.Strategy.Budget.MaxTargetSwitches = 3
 	config.ProviderID = "acme-ai"
 	config.CredentialScope = "team-a"
 	config.Targets = []profile.TargetConfig{
@@ -355,6 +939,7 @@ func TestPlannerExcludesFileIDCompositeOverChatTransport(t *testing.T) {
 
 func TestPlannerFreezesOnlyTargetsServingAnswerAndVisionModels(t *testing.T) {
 	config := routingConfig(true)
+	config.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
 	config.ProviderID = "acme-ai"
 	config.CredentialScope = "team-a"
 	config.Targets = []profile.TargetConfig{

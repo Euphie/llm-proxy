@@ -2,11 +2,15 @@ package stats
 
 // Usage holds the token counts and model name extracted from an API response.
 type Usage struct {
-	InputTokens          int
-	OutputTokens         int
-	CacheReadTokens      int
-	CacheCreationTokens  int
-	Model                string
+	Present             bool
+	InputPresent        bool
+	OutputPresent       bool
+	InputTokens         int
+	OutputTokens        int
+	CacheReadTokens     int
+	CacheCreationTokens int
+	Model               string
+	invalid             bool
 }
 
 // Parser extracts token usage from a raw API response body.

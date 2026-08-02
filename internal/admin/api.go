@@ -129,6 +129,7 @@ func (a *API) routes() []apiRoute {
 		{method: http.MethodPut, pattern: "/_admin/api/default-profile", handler: a.setDefaultProfile},
 		{method: http.MethodGet, pattern: "/_admin/api/stats", handler: a.getStats},
 		{method: http.MethodGet, pattern: "/_admin/api/routing-traces", handler: a.getRoutingTraces},
+		{method: http.MethodGet, pattern: "/_admin/api/routing-calls", handler: a.getRoutingCalls},
 		{method: http.MethodGet, pattern: "/_admin/api/system", handler: a.getSystem},
 	}
 }

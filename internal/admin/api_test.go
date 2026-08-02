@@ -874,7 +874,7 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"data_dir":             fixture.dataDir,
 		"database_file":        "llm-proxy.db",
 		"database_bytes":       float64(databaseInfo.Size()),
-		"schema_version":       float64(6),
+		"schema_version":       float64(7),
 		"default_profile_id":   float64(first.ID),
 		"password_must_change": false,
 	}
@@ -920,6 +920,46 @@ func TestAPIRoutingTracesReturnsAnEmptyListAndValidatesLimit(t *testing.T) {
 	)
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestAPIRoutingCallsRequiresFilterAndReturnsBoundedStructuredRows(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+	store := stats.New(fixture.db)
+	store.RecordRoutingTraceWithCallsAsync(stats.RoutingTrace{
+		CorrelationID: "admin-correlation", ProfileSlug: "test", Protocol: "anthropic",
+		Path: "/v1/messages", StatusCode: 200, AllActualCostsKnown: true,
+	}, []stats.PhysicalCall{{
+		Sequence: 1, Kind: "answer", Model: "fast", Target: "primary",
+		ImageIndex: -1, EstimatedMicroUSD: 7, ActualCostKnown: true,
+		ActualMicroUSD: 5, StatusCode: 200, Outcome: "success",
+	}})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	response := fixture.request(t, http.MethodGet,
+		"/_admin/api/routing-calls?correlation_id=admin-correlation&limit=10", "", cookies, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var rows []stats.RoutingCallRow
+	decodeTestJSON(t, response, &rows)
+	if len(rows) != 1 || rows[0].CorrelationID != "admin-correlation" ||
+		rows[0].Kind != "answer" || !rows[0].ActualCostKnown || rows[0].ActualMicroUSD != 5 {
+		t.Fatalf("rows=%+v", rows)
+	}
+
+	for _, path := range []string{
+		"/_admin/api/routing-calls?limit=10",
+		"/_admin/api/routing-calls?trace_id=0",
+		"/_admin/api/routing-calls?correlation_id=admin-correlation&limit=501",
+	} {
+		invalid := fixture.request(t, http.MethodGet, path, "", cookies, "")
+		if invalid.Code != http.StatusBadRequest {
+			t.Fatalf("path=%q status=%d body=%s", path, invalid.Code, invalid.Body.String())
+		}
 	}
 }
 

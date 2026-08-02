@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 var schemaV1 = []string{
 	`CREATE TABLE admin_account (
@@ -198,6 +198,37 @@ var schemaV6 = []string{
 	`ALTER TABLE routing_traces ADD COLUMN final_target TEXT NOT NULL DEFAULT 'primary'`,
 }
 
+var schemaV7 = []string{
+	`ALTER TABLE routing_traces RENAME COLUMN reserved_cost_micro_usd TO consumed_estimated_cost_micro_usd`,
+	`ALTER TABLE routing_traces ADD COLUMN correlation_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE routing_traces ADD COLUMN held_cost_micro_usd INTEGER NOT NULL DEFAULT 0 CHECK (held_cost_micro_usd >= 0)`,
+	`ALTER TABLE routing_traces ADD COLUMN known_actual_cost_micro_usd INTEGER NOT NULL DEFAULT 0 CHECK (known_actual_cost_micro_usd >= 0)`,
+	`ALTER TABLE routing_traces ADD COLUMN all_actual_costs_known INTEGER NOT NULL DEFAULT 0 CHECK (all_actual_costs_known IN (0, 1))`,
+	`CREATE INDEX routing_traces_correlation_idx ON routing_traces(correlation_id)`,
+	`CREATE TABLE routing_calls (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at               TEXT NOT NULL,
+        trace_id                 INTEGER NOT NULL REFERENCES routing_traces(id) ON DELETE CASCADE,
+        correlation_id           TEXT NOT NULL,
+        sequence                 INTEGER NOT NULL CHECK (sequence > 0),
+        kind                     TEXT NOT NULL CHECK (kind IN ('analyzer', 'vision', 'answer')),
+        logical_model            TEXT NOT NULL DEFAULT '',
+        target                   TEXT NOT NULL DEFAULT '',
+        image_index              INTEGER NOT NULL DEFAULT -1 CHECK (image_index >= -1),
+        retry_index              INTEGER NOT NULL DEFAULT 0 CHECK (retry_index >= 0),
+        model_switch_index       INTEGER NOT NULL DEFAULT 0 CHECK (model_switch_index >= 0),
+        target_switch_index      INTEGER NOT NULL DEFAULT 0 CHECK (target_switch_index >= 0),
+        estimated_cost_micro_usd INTEGER NOT NULL CHECK (estimated_cost_micro_usd >= 0),
+        actual_cost_known        INTEGER NOT NULL CHECK (actual_cost_known IN (0, 1)),
+        actual_cost_micro_usd    INTEGER NOT NULL DEFAULT 0 CHECK (actual_cost_micro_usd >= 0),
+        status_code              INTEGER NOT NULL CHECK (status_code BETWEEN 0 AND 599),
+        outcome                  TEXT NOT NULL DEFAULT '',
+		UNIQUE(trace_id, sequence)
+    )`,
+	`CREATE INDEX routing_calls_trace_idx ON routing_calls(trace_id, sequence)`,
+	`CREATE INDEX routing_calls_correlation_idx ON routing_calls(correlation_id, sequence)`,
+}
+
 func Migrate(db *sql.DB) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -273,10 +304,17 @@ func Migrate(db *sql.DB) (err error) {
 			}
 		}
 	}
+	if version < 7 {
+		for _, statement := range schemaV7 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v7: %w", err)
+			}
+		}
+	}
 	if err := ensureRoutingSessionHMACKey(tx); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 6`); err != nil {
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

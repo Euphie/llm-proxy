@@ -198,7 +198,7 @@ function routingTraceTable(rows) {
       visionModeLabel(row.vision_mode),
       `${Number(row.status_code ?? 0)} · ${row.client_committed ? "已提交" : "未提交"}`,
       `回答 ${Number(row.answer_attempts ?? 0)} / 辅助 ${Number(row.auxiliary_calls ?? 0)} / 模型切换 ${Number(row.model_switches ?? 0)} / Target 切换 ${Number(row.target_switches ?? 0)}`,
-      `计划上限 ${formatMicroUSD(row.planned_worst_case_cost_micro_usd)} / 已预留 ${formatMicroUSD(row.reserved_cost_micro_usd)}`,
+      `计划上限 ${formatMicroUSD(row.planned_worst_case_cost_micro_usd)} / 已消费估算 ${formatMicroUSD(row.consumed_estimated_cost_micro_usd)} / 持有 ${formatMicroUSD(row.held_cost_micro_usd)} / ${row.all_actual_costs_known ? "实际" : "已知实际（部分）"} ${formatMicroUSD(row.known_actual_cost_micro_usd)}`,
       `${Number(row.elapsed_ms ?? 0)} ms`,
     ]) {
       tableRow.append(textElement("td", value));

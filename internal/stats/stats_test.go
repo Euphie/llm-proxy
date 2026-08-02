@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,7 +119,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		StatusCode: 200, ClientCommitted: true, AnswerAttempts: 2,
 		AuxiliaryCalls: 1, TotalOutboundCalls: 3, ModelSwitches: 1,
 		TargetSwitches: 0, PlannedWorstCaseCostMicroUSD: 30126,
-		ReservedCostMicroUSD: 15500, ElapsedMilliseconds: 42,
+		ConsumedEstimatedCostMicroUSD: 15500, ElapsedMilliseconds: 42,
 	})
 	waitForUsageWrite(t, done)
 
@@ -131,7 +132,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		       vision_mode, status_code, client_committed, answer_attempts,
 		       auxiliary_calls, total_outbound_calls, model_switches,
 		       target_switches, planned_worst_case_cost_micro_usd,
-		       reserved_cost_micro_usd, elapsed_ms
+		       consumed_estimated_cost_micro_usd, elapsed_ms
 		FROM routing_traces
 	`).Scan(
 		&got.ProfileID, &got.ProfileSlug, &got.Protocol, &got.Path,
@@ -141,7 +142,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		&got.VisionMode, &got.StatusCode, &committed, &got.AnswerAttempts,
 		&got.AuxiliaryCalls, &got.TotalOutboundCalls, &got.ModelSwitches,
 		&got.TargetSwitches, &got.PlannedWorstCaseCostMicroUSD,
-		&got.ReservedCostMicroUSD, &got.ElapsedMilliseconds,
+		&got.ConsumedEstimatedCostMicroUSD, &got.ElapsedMilliseconds,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +153,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		got.InitialTarget != "primary" || got.FinalTarget != "region_b" ||
 		!got.ClientCommitted || got.TotalOutboundCalls != 3 ||
 		got.PlannedWorstCaseCostMicroUSD != 30126 ||
-		got.ReservedCostMicroUSD != 15500 || got.ElapsedMilliseconds != 42 {
+		got.ConsumedEstimatedCostMicroUSD != 15500 || got.ElapsedMilliseconds != 42 {
 		t.Fatalf("trace=%+v", got)
 	}
 
@@ -166,8 +167,117 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID <= 0 || rows[0].ProfileSlug != "coding" ||
 		rows[0].Strategy != "20260802-001" || rows[0].FinalModel != "strong" ||
 		rows[0].InitialTarget != "primary" || rows[0].FinalTarget != "region_b" ||
-		rows[0].ReservedCostMicroUSD != 15500 {
+		rows[0].ConsumedEstimatedCostMicroUSD != 15500 {
 		t.Fatalf("queried traces=%+v", rows)
+	}
+}
+
+func TestRecordRoutingTraceWithCallsAsyncPersistsExactPhysicalSequenceAndPrivacy(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	insertProfiles(t, db, 9)
+
+	store := New(db)
+	done := make(chan struct{}, 1)
+	store.afterWrite = func() { done <- struct{}{} }
+	trace := RoutingTrace{
+		CorrelationID: "route-abc", ProfileID: 9, ProfileSlug: "coding",
+		Protocol: "anthropic", Path: "/v1/messages", Strategy: "20260802-001",
+		Route: "balanced", TaskType: "simple", Risk: "normal",
+		ClassificationSource: "analyzer", InitialModel: "fast", FinalModel: "fast",
+		InitialTarget: "primary", FinalTarget: "primary", VisionMode: "composite",
+		StatusCode: 502, AnswerAttempts: 2, AuxiliaryCalls: 3, TotalOutboundCalls: 5,
+		PlannedWorstCaseCostMicroUSD: 100, ConsumedEstimatedCostMicroUSD: 73,
+		HeldCostMicroUSD: 0, KnownActualCostMicroUSD: 11, AllActualCostsKnown: false,
+	}
+	calls := []PhysicalCall{
+		{Sequence: 1, Kind: "analyzer", Model: "classifier", Target: "primary", ImageIndex: -1, EstimatedMicroUSD: 5, ActualCostKnown: true, ActualMicroUSD: 2, StatusCode: 200, Outcome: "success"},
+		{Sequence: 2, Kind: "vision", Model: "vision", Target: "primary", ImageIndex: 0, RetryIndex: 0, EstimatedMicroUSD: 17, StatusCode: 503, Outcome: "overload"},
+		{Sequence: 3, Kind: "vision", Model: "vision", Target: "primary", ImageIndex: 0, RetryIndex: 1, EstimatedMicroUSD: 17, ActualCostKnown: true, ActualMicroUSD: 4, StatusCode: 200, Outcome: "success"},
+		{Sequence: 4, Kind: "answer", Model: "fast", Target: "primary", ImageIndex: -1, RetryIndex: 0, EstimatedMicroUSD: 17, StatusCode: 503, Outcome: "upstream"},
+		{Sequence: 5, Kind: "answer", Model: "fast", Target: "primary", ImageIndex: -1, RetryIndex: 1, EstimatedMicroUSD: 17, ActualCostKnown: true, ActualMicroUSD: 5, StatusCode: 200, Outcome: "success"},
+	}
+	store.RecordRoutingTraceWithCallsAsync(trace, calls)
+	waitForUsageWrite(t, done)
+
+	var traceID int64
+	if err := db.QueryRow(`SELECT id FROM routing_traces WHERE correlation_id = ?`, "route-abc").Scan(&traceID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.QueryRoutingCalls(context.Background(), RoutingCallFilter{
+		CorrelationID: "route-abc", Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 5 {
+		t.Fatalf("rows=%+v", rows)
+	}
+	for index, row := range rows {
+		if row.TraceID != traceID || row.CorrelationID != "route-abc" || row.Sequence != index+1 {
+			t.Fatalf("row[%d]=%+v", index, row)
+		}
+	}
+	if rows[1].Outcome != "overload" || rows[1].ActualCostKnown ||
+		!rows[2].ActualCostKnown || rows[2].ActualMicroUSD != 4 {
+		t.Fatalf("vision rows=%+v", rows[1:3])
+	}
+	var serialized string
+	if err := db.QueryRow(`SELECT group_concat(quote(value), '|') FROM (
+		SELECT correlation_id AS value FROM routing_calls
+		UNION ALL SELECT logical_model FROM routing_calls
+		UNION ALL SELECT target FROM routing_calls
+		UNION ALL SELECT outcome FROM routing_calls
+	)`).Scan(&serialized); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"fixture prompt secret", "fixture image secret", "Authorization: secret", "fixture response secret"} {
+		if strings.Contains(serialized, secret) {
+			t.Fatalf("physical accounting leaked %q: %s", secret, serialized)
+		}
+	}
+}
+
+func TestQueryRoutingCallsRequiresBoundedTraceOrCorrelationFilter(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := New(db)
+	if _, err := store.QueryRoutingCalls(context.Background(), RoutingCallFilter{Limit: 10}); err == nil {
+		t.Fatal("unfiltered call query succeeded")
+	}
+	if _, err := store.QueryRoutingCalls(context.Background(), RoutingCallFilter{CorrelationID: "x", Limit: 501}); err == nil {
+		t.Fatal("oversized call query succeeded")
+	}
+}
+
+func TestRecordRoutingTraceWithCallsRejectsNonContiguousSequenceAtomically(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := New(db)
+	done := make(chan struct{}, 1)
+	store.afterWrite = func() { done <- struct{}{} }
+	store.RecordRoutingTraceWithCallsAsync(RoutingTrace{CorrelationID: "bad-sequence"}, []PhysicalCall{{
+		Sequence: 2, Kind: "answer", ImageIndex: -1,
+	}})
+	waitForUsageWrite(t, done)
+	var traces, calls int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM routing_traces`).Scan(&traces); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM routing_calls`).Scan(&calls); err != nil {
+		t.Fatal(err)
+	}
+	if traces != 0 || calls != 0 {
+		t.Fatalf("traces=%d calls=%d", traces, calls)
 	}
 }
 

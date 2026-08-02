@@ -137,6 +137,37 @@ func TestVisionClientRequestHeadersResponseAndUsage(t *testing.T) {
 	}
 }
 
+func TestVisionClientRejectsDescriptionBeyondPlannedOutputBound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"12345"}],"usage":{"input_tokens":1,"output_tokens":5}}`)
+	}))
+	defer server.Close()
+	config := testVisionConfig(server.URL)
+	config.Vision.MaxTokens = 1
+	_, err := newVisionClient(config, server.Client(), nil).Describe(
+		context.Background(), nil, testImage(),
+	)
+	class, ok := provider.FailureClassOf(err)
+	if !ok || class != provider.FailureMalformedResponse {
+		t.Fatalf("error=%v class=%q", err, class)
+	}
+}
+
+func TestVisionClientAcceptsMultibyteDescriptionWithinPlannedByteBound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"你"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	config := testVisionConfig(server.URL)
+	config.Vision.MaxTokens = 1
+	description, err := newVisionClient(config, server.Client(), nil).Describe(
+		context.Background(), nil, testImage(),
+	)
+	if err != nil || description != "你" {
+		t.Fatalf("description=%q error=%v", description, err)
+	}
+}
+
 func TestVisionClientRecordsPrettyJSONUsageThroughStatsDB(t *testing.T) {
 	responseBody := []byte(`{
 	  "model": "sonnet",

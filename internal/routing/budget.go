@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
+	"time"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
+
+const maxCost = math.MaxInt64
 
 var ErrAttemptBudgetExceeded = errors.New("attempt budget exceeded")
 
@@ -20,9 +24,12 @@ const (
 )
 
 type AttemptBudget struct {
-	mu     sync.Mutex
-	limits profile.AttemptBudgetRuntime
-	used   AttemptBudgetSnapshot
+	mu       sync.Mutex
+	limits   profile.AttemptBudgetRuntime
+	used     AttemptBudgetSnapshot
+	held     budgetCapacity
+	deadline time.Time
+	context  context.Context
 }
 
 type AttemptBudgetSnapshot struct {
@@ -33,6 +40,18 @@ type AttemptBudgetSnapshot struct {
 	TargetSwitches        int
 	WorstCaseCostMicroUSD int64
 	RetriesByTarget       map[string]int
+	HeldAnswerAttempts    int
+	HeldAuxiliaryCalls    int
+	HeldOutboundCalls     int
+	HeldCostMicroUSD      int64
+	Deadline              time.Time
+}
+
+type budgetCapacity struct {
+	answerAttempts int
+	auxiliaryCalls int
+	totalCalls     int
+	costMicroUSD   int64
 }
 
 func NewAttemptBudget(
@@ -40,8 +59,11 @@ func NewAttemptBudget(
 	limits profile.AttemptBudgetRuntime,
 ) (*AttemptBudget, context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(parent, limits.Deadline)
+	deadline, _ := ctx.Deadline()
 	return &AttemptBudget{
-		limits: limits,
+		limits:   limits,
+		deadline: deadline,
+		context:  ctx,
 		used: AttemptBudgetSnapshot{
 			RetriesByTarget: make(map[string]int),
 		},
@@ -49,12 +71,12 @@ func NewAttemptBudget(
 }
 
 func (b *AttemptBudget) ReserveCall(ctx context.Context, kind CallKind, cost int64) error {
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	return b.reserveCallLocked(kind, cost)
@@ -65,12 +87,12 @@ func (b *AttemptBudget) ReserveRetry(
 	target string,
 	cost int64,
 ) error {
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	if target == "" || b.used.RetriesByTarget[target] >= b.limits.MaxRetriesPerTarget {
@@ -98,12 +120,12 @@ func (b *AttemptBudget) CanReserveModelSwitchCall(
 	ctx context.Context,
 	cost int64,
 ) error {
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	return b.canReserveModelSwitchCallLocked(cost)
@@ -113,12 +135,12 @@ func (b *AttemptBudget) ReserveModelSwitchCall(
 	ctx context.Context,
 	cost int64,
 ) error {
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	if err := b.canReserveModelSwitchCallLocked(cost); err != nil {
@@ -143,27 +165,37 @@ func (b *AttemptBudget) CanReserveTargetSwitchCall(
 	ctx context.Context,
 	cost int64,
 ) error {
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	return b.canReserveTargetSwitchCallLocked(cost)
+}
+
+func (b *AttemptBudget) contextError(caller context.Context) error {
+	if err := caller.Err(); err != nil {
+		return err
+	}
+	if b.context != nil {
+		return b.context.Err()
+	}
+	return nil
 }
 
 func (b *AttemptBudget) ReserveTargetSwitchCall(
 	ctx context.Context,
 	cost int64,
 ) error {
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := b.contextError(ctx); err != nil {
 		return err
 	}
 	if err := b.canReserveTargetSwitchCallLocked(cost); err != nil {
@@ -182,6 +214,11 @@ func (b *AttemptBudget) Snapshot() AttemptBudgetSnapshot {
 	for target, retries := range b.used.RetriesByTarget {
 		snapshot.RetriesByTarget[target] = retries
 	}
+	snapshot.HeldAnswerAttempts = b.held.answerAttempts
+	snapshot.HeldAuxiliaryCalls = b.held.auxiliaryCalls
+	snapshot.HeldOutboundCalls = b.held.totalCalls
+	snapshot.HeldCostMicroUSD = b.held.costMicroUSD
+	snapshot.Deadline = b.deadline
 	return snapshot
 }
 
@@ -197,23 +234,25 @@ func (b *AttemptBudget) canReserveCallLocked(kind CallKind, cost int64) error {
 	if cost < 0 {
 		return fmt.Errorf("%w: negative cost", ErrAttemptBudgetExceeded)
 	}
-	if b.used.TotalOutboundCalls >= b.limits.MaxTotalOutboundCalls {
+	if exceedsCount(b.used.TotalOutboundCalls, b.held.totalCalls, 1, b.limits.MaxTotalOutboundCalls) {
 		return fmt.Errorf("%w: total outbound calls", ErrAttemptBudgetExceeded)
 	}
 	switch kind {
 	case CallAnalyzer, CallVision:
-		if b.used.AuxiliaryCalls >= b.limits.MaxAuxiliaryCalls {
+		if exceedsCount(b.used.AuxiliaryCalls, b.held.auxiliaryCalls, 1, b.limits.MaxAuxiliaryCalls) {
 			return fmt.Errorf("%w: auxiliary calls", ErrAttemptBudgetExceeded)
 		}
 	case CallAnswer:
-		if b.used.AnswerAttempts >= b.limits.MaxAnswerAttempts {
+		if exceedsCount(b.used.AnswerAttempts, b.held.answerAttempts, 1, b.limits.MaxAnswerAttempts) {
 			return fmt.Errorf("%w: answer attempts", ErrAttemptBudgetExceeded)
 		}
 	default:
 		return fmt.Errorf("%w: unknown call kind %q", ErrAttemptBudgetExceeded, kind)
 	}
-	nextCost := addCost(b.used.WorstCaseCostMicroUSD, cost)
-	if nextCost > b.limits.MaxWorstCaseCostMicroUSD {
+	usedAndHeld := addCost(b.used.WorstCaseCostMicroUSD, b.held.costMicroUSD)
+	nextCost := addCost(usedAndHeld, cost)
+	if usedAndHeld == maxCost || nextCost == maxCost ||
+		nextCost > b.limits.MaxWorstCaseCostMicroUSD {
 		return fmt.Errorf("%w: worst-case cost", ErrAttemptBudgetExceeded)
 	}
 	return nil

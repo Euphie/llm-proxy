@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -811,6 +812,11 @@ func TestAutoRoutingRetryBudgetPreventsExtraFinalRequest(t *testing.T) {
 	defer server.Close()
 	runtime := autoProxyRuntime(t, server.URL, false)
 	runtime.OverloadRules[0].MaxRetries = 5
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	var rows []routing.CallLedgerEntry
+	var snapshot routing.AttemptBudgetSnapshot
+	proxyHandler.callLedgerSink = func(got []routing.CallLedgerEntry) { rows = got }
+	proxyHandler.budgetSnapshotSink = func(got routing.AttemptBudgetSnapshot) { snapshot = got }
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/messages",
@@ -819,10 +825,16 @@ func TestAutoRoutingRetryBudgetPreventsExtraFinalRequest(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
-	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+	proxyHandler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusServiceUnavailable || calls.Load() != 2 {
 		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls.Load(), response.Body.String())
+	}
+	if len(rows) != 2 || rows[0].Kind != routing.CallAnswer || rows[0].RetryIndex != 0 ||
+		rows[1].Kind != routing.CallAnswer || rows[1].RetryIndex != 1 ||
+		snapshot.AnswerAttempts != 2 || snapshot.TotalOutboundCalls != 2 ||
+		snapshot.RetriesByTarget[profile.PrimaryTargetID] != 1 {
+		t.Fatalf("rows=%+v snapshot=%+v", rows, snapshot)
 	}
 }
 
@@ -1011,8 +1023,7 @@ func TestAutoRoutingFallsBackTargetAfterTransientVisionFailureBeforeAnswer(t *te
 		}
 		if model == "vision" {
 			primaryVisionCalls.Add(1)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = io.WriteString(w, `{"error":"vision overloaded"}`)
+			_, _ = io.WriteString(w, `{"content":[]}`)
 			return
 		}
 		primaryAnswerCalls.Add(1)
@@ -1049,9 +1060,17 @@ func TestAutoRoutingFallsBackTargetAfterTransientVisionFailureBeforeAnswer(t *te
 	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
 		ID: "region_b", Upstream: backup.URL, Models: []string{"fast", "vision"},
 	})
-	runtime.OverloadRules[0].MaxRetries = 0
-	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 3
+	runtime.OverloadRules[0].MaxRetries = 2
+	runtime.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 3
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 7
+	runtime.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 10
+	runtime.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 2
 	runtime.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	proxyHandler := New(runtime, primary.Client(), nil).(*handler)
+	var rows []routing.CallLedgerEntry
+	var snapshot routing.AttemptBudgetSnapshot
+	proxyHandler.callLedgerSink = func(got []routing.CallLedgerEntry) { rows = got }
+	proxyHandler.budgetSnapshotSink = func(got routing.AttemptBudgetSnapshot) { snapshot = got }
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/messages",
@@ -1060,7 +1079,7 @@ func TestAutoRoutingFallsBackTargetAfterTransientVisionFailureBeforeAnswer(t *te
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
-	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+	proxyHandler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK ||
 		primaryAnalyzerCalls.Load() != 1 || primaryVisionCalls.Load() != 1 ||
@@ -1072,6 +1091,26 @@ func TestAutoRoutingFallsBackTargetAfterTransientVisionFailureBeforeAnswer(t *te
 			primaryAnalyzerCalls.Load(), primaryVisionCalls.Load(), primaryAnswerCalls.Load(),
 			backupVisionCalls.Load(), backupAnswerCalls.Load(), response.Body.String(),
 		)
+	}
+	if len(rows) != 4 ||
+		rows[0].Sequence != 1 || rows[0].Kind != routing.CallAnalyzer ||
+		rows[0].Target != profile.PrimaryTargetID || rows[0].Outcome != "success" ||
+		rows[1].Sequence != 2 || rows[1].Kind != routing.CallVision ||
+		rows[1].Target != profile.PrimaryTargetID || rows[1].RetryIndex != 0 ||
+		rows[1].Outcome != "malformed" ||
+		rows[2].Sequence != 3 || rows[2].Kind != routing.CallVision ||
+		rows[2].Target != "region_b" || rows[2].RetryIndex != 0 ||
+		rows[2].Outcome != "success" ||
+		rows[3].Sequence != 4 || rows[3].Kind != routing.CallAnswer ||
+		rows[3].Target != "region_b" || rows[3].RetryIndex != 0 ||
+		rows[3].Outcome != "success" {
+		t.Fatalf("ledger=%+v", rows)
+	}
+	if snapshot.AnswerAttempts != 1 || snapshot.AuxiliaryCalls != 3 ||
+		snapshot.TotalOutboundCalls != 4 || snapshot.TargetSwitches != 1 ||
+		snapshot.HeldAnswerAttempts != 0 || snapshot.HeldAuxiliaryCalls != 0 ||
+		snapshot.HeldOutboundCalls != 0 || snapshot.HeldCostMicroUSD != 0 {
+		t.Fatalf("snapshot=%+v", snapshot)
 	}
 }
 
@@ -1249,6 +1288,125 @@ func TestAutoRoutingFallsBackTargetWhilePreparingSwitchedModel(t *testing.T) {
 	}
 }
 
+func TestAutoRoutingRejectsCompositeNodeBeforeVisionWhenAnswerCannotFit(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	var visionCalls atomic.Int32
+	var answerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		if _, analyzer := root["system"]; analyzer {
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			return
+		}
+		if model == "vision" {
+			visionCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"must not run"}]}`)
+			return
+		}
+		answerCalls.Add(1)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"must not answer"}]}`)
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, true)
+	strong := runtime.Models["strong"]
+	strong.SupportsVision = false
+	runtime.Models["strong"] = strong
+	runtime.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 2_700
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},{"type":"text","text":"比较这个布局并解释取舍"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusTooManyRequests || analyzerCalls.Load() != 1 ||
+		visionCalls.Load() != 0 || answerCalls.Load() != 0 {
+		t.Fatalf("status=%d analyzer=%d vision=%d answer=%d body=%q",
+			response.Code, analyzerCalls.Load(), visionCalls.Load(), answerCalls.Load(), response.Body.String())
+	}
+}
+
+func TestAutoRoutingDoesNotEnterBackupAfterFinalAnswerSlotWasConsumed(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	var visionCalls atomic.Int32
+	var fastAnswerCalls atomic.Int32
+	var strongCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		if _, analyzer := root["system"]; analyzer {
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			return
+		}
+		switch model {
+		case "vision":
+			visionCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"visual evidence"}]}`)
+		case "fast":
+			fastAnswerCalls.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"answer overloaded"}`)
+		default:
+			strongCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"must not run"}]}`)
+		}
+	}))
+	defer primary.Close()
+
+	var backupCalls atomic.Int32
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupCalls.Add(1)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"must not run"}]}`)
+	}))
+	defer backup.Close()
+
+	runtime := autoProxyRuntime(t, primary.URL, true)
+	fast := runtime.Models["fast"]
+	fast.SupportsVision = false
+	runtime.Models["fast"] = fast
+	strong := runtime.Models["strong"]
+	strong.SupportsVision = false
+	runtime.Models["strong"] = strong
+	runtime.Targets = append(runtime.Targets, profile.TargetRuntime{
+		ID: "region_b", Upstream: backup.URL, Models: []string{"strong", "vision"},
+	})
+	runtime.OverloadRules[0].MaxRetries = 0
+	runtime.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 1
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 4
+	runtime.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 5
+	runtime.AutoRouting.Strategy.Budget.MaxRetriesPerTarget = 0
+	runtime.AutoRouting.Strategy.Budget.MaxTargetSwitches = 1
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},{"type":"text","text":"比较这个布局并解释取舍"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, primary.Client(), nil).ServeHTTP(response, request)
+
+	if analyzerCalls.Load() != 1 || visionCalls.Load() != 1 ||
+		fastAnswerCalls.Load() != 1 || strongCalls.Load() != 0 || backupCalls.Load() != 0 {
+		t.Fatalf("status=%d analyzer=%d vision=%d fast=%d strong=%d backup=%d body=%q",
+			response.Code, analyzerCalls.Load(), visionCalls.Load(), fastAnswerCalls.Load(),
+			strongCalls.Load(), backupCalls.Load(), response.Body.String())
+	}
+}
+
 func TestAutoRoutingPersistsStructuredRouteTrace(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -1319,6 +1477,140 @@ func TestAutoRoutingPersistsStructuredRouteTrace(t *testing.T) {
 	}
 }
 
+func TestAutoRoutingPersistsAnalyzerWhenPlanIsRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":5}}`)
+	}))
+	defer server.Close()
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := stats.New(db)
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 1
+	runtime.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 1
+	runtime.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 1
+	request := httptest.NewRequest(
+		http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"比较两个分布式方案并说明取舍"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	New(runtime, server.Client(), store).ServeHTTP(response, request)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var traceID int64
+	var strategy string
+	if err := db.QueryRow(`SELECT id, strategy_name FROM routing_traces`).Scan(&traceID, &strategy); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.QueryRoutingCalls(context.Background(), stats.RoutingCallFilter{TraceID: &traceID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Code == http.StatusOK || strategy != "" || len(rows) != 1 ||
+		rows[0].Kind != string(routing.CallAnalyzer) || !rows[0].ActualCostKnown {
+		t.Fatalf("status=%d strategy=%q calls=%+v body=%q", response.Code, strategy, rows, response.Body.String())
+	}
+}
+
+func TestAutoRoutingPersistsEveryRetriedPhysicalCallAndRouteAggregate(t *testing.T) {
+	var visionCalls atomic.Int32
+	var answerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		switch {
+		case root["system"] != nil:
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":5}}`)
+		case model == "vision":
+			if visionCalls.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"visual evidence"}],"usage":{"input_tokens":9,"output_tokens":3}}`)
+		default:
+			if answerCalls.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":20,"output_tokens":4}}`)
+		}
+	}))
+	defer server.Close()
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := stats.New(db)
+	runtime := autoProxyRuntime(t, server.URL, true)
+	runtime.OverloadRules[0].MaxRetries = 1
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 3
+	runtime.AutoRouting.Strategy.Budget.MaxAnswerAttempts = 2
+	runtime.AutoRouting.Strategy.Budget.MaxTotalOutboundCalls = 5
+	request := httptest.NewRequest(
+		http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/private.png"}},{"type":"text","text":"比较布局取舍"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	New(runtime, server.Client(), store).ServeHTTP(response, request)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var traceID int64
+	var correlation string
+	var consumed, held, knownActual int64
+	var allKnown, totalCalls int
+	if err := db.QueryRow(`
+		SELECT id, correlation_id, consumed_estimated_cost_micro_usd,
+		       held_cost_micro_usd, known_actual_cost_micro_usd,
+		       all_actual_costs_known, total_outbound_calls
+		FROM routing_traces
+	`).Scan(&traceID, &correlation, &consumed, &held, &knownActual, &allKnown, &totalCalls); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.QueryRoutingCalls(context.Background(), stats.RoutingCallFilter{TraceID: &traceID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKinds := []string{"analyzer", "vision", "vision", "answer", "answer"}
+	wantRetries := []int{0, 0, 1, 0, 1}
+	var wantConsumed, wantKnownActual int64
+	for _, row := range rows {
+		wantConsumed += row.EstimatedMicroUSD
+		if row.ActualCostKnown {
+			wantKnownActual += row.ActualMicroUSD
+		}
+	}
+	if response.Code != http.StatusOK || correlation == "" || len(rows) != len(wantKinds) ||
+		consumed != wantConsumed || held != 0 || knownActual != wantKnownActual ||
+		allKnown != 0 || totalCalls != len(rows) {
+		t.Fatalf("status=%d correlation=%q consumed=%d/%d held=%d known=%d/%d all=%d total=%d rows=%+v",
+			response.Code, correlation, consumed, wantConsumed, held,
+			knownActual, wantKnownActual, allKnown, totalCalls, rows)
+	}
+	for index, row := range rows {
+		if row.Sequence != index+1 || row.Kind != wantKinds[index] || row.RetryIndex != wantRetries[index] ||
+			row.CorrelationID != correlation {
+			t.Fatalf("row[%d]=%+v", index, row)
+		}
+	}
+	if rows[1].ActualCostKnown || !rows[2].ActualCostKnown ||
+		rows[3].ActualCostKnown || !rows[4].ActualCostKnown {
+		t.Fatalf("actual flags=%+v", rows)
+	}
+}
+
 func TestOpenAIChatAutoRoutingUsesCompositeVisionAfterModelSelection(t *testing.T) {
 	var analyzerCalls atomic.Int32
 	var visionCalls atomic.Int32
@@ -1338,23 +1630,24 @@ func TestOpenAIChatAutoRoutingUsesCompositeVisionAfterModelSelection(t *testing.
 		switch {
 		case root.Model == "vision":
 			visionCalls.Add(1)
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"按钮与输入框重叠"}}]}`)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"按钮与输入框重叠"}}],"usage":{"prompt_tokens":8,"completion_tokens":4}}`)
 		case len(root.Messages) > 0 && root.Messages[0].Role == "system":
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9000}"}}]}`)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9000}"}}],"usage":{"prompt_tokens":12,"completion_tokens":6}}`)
 		default:
 			answerCalls.Add(1)
 			if root.Model != "fast" || bytes.Contains(body, []byte(`"type":"image_url"`)) ||
 				!bytes.Contains(body, []byte("按钮与输入框重叠")) {
 				t.Errorf("main body=%s", body)
 			}
-			_, _ = io.WriteString(w, `{"model":"fast","choices":[{"message":{"content":"done"}}]}`)
+			_, _ = io.WriteString(w, `{"model":"fast","choices":[{"message":{"content":"done"}}],"usage":{"prompt_tokens":20,"completion_tokens":2}}`)
 		}
 	}))
 	defer server.Close()
 	runtime := autoProxyRuntime(t, server.URL, true)
 	runtime.Protocol = profile.ProtocolOpenAI
 	runtime.Vision.Transport = profile.VisionTransportOpenAIChatCompletions
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 3
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/chat/completions",
@@ -1363,12 +1656,204 @@ func TestOpenAIChatAutoRoutingUsesCompositeVisionAfterModelSelection(t *testing.
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
-	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	var ledger []routing.CallLedgerEntry
+	proxyHandler.callLedgerSink = func(rows []routing.CallLedgerEntry) { ledger = rows }
+	proxyHandler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK || analyzerCalls.Load() != 1 ||
 		visionCalls.Load() != 1 || answerCalls.Load() != 1 {
 		t.Fatalf("status=%d analyzer=%d vision=%d answer=%d body=%q",
 			response.Code, analyzerCalls.Load(), visionCalls.Load(), answerCalls.Load(), response.Body.String())
+	}
+	if len(ledger) != 3 || !ledger[0].ActualCostKnown ||
+		!ledger[1].ActualCostKnown || !ledger[2].ActualCostKnown {
+		t.Fatalf("ledger=%+v", ledger)
+	}
+}
+
+func TestOpenAIResponsesAutoRoutingRecordsStreamingUsageActual(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"event: response.created\n"+
+				`data: {"type":"response.created","response":{"model":"fast","usage":null}}`+"\n\n"+
+				"event: response.completed\n"+
+				`data: {"type":"response.completed","response":{"model":"fast","usage":{"input_tokens":31,"output_tokens":19}}}`+"\n\n",
+		)
+	}))
+	defer server.Close()
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.Protocol = profile.ProtocolOpenAI
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	var ledger []routing.CallLedgerEntry
+	proxyHandler.callLedgerSink = func(rows []routing.CallLedgerEntry) { ledger = rows }
+	request := httptest.NewRequest(
+		http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"auto","max_output_tokens":1000,"stream":true,"input":"你好，请简单回答"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(ledger) != 1 ||
+		ledger[0].Kind != routing.CallAnswer || !ledger[0].ActualCostKnown ||
+		ledger[0].ActualMicroUSD <= 0 {
+		t.Fatalf("status=%d ledger=%+v body=%q", response.Code, ledger, response.Body.String())
+	}
+}
+
+func TestAutoRoutingCallLedgerMatchesPhysicalCallSequenceWithoutContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		switch {
+		case root["system"] != nil:
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":6}}`)
+		case model == "vision":
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"private visual description"}],"usage":{"input_tokens":8,"output_tokens":4}}`)
+		default:
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"private answer"}],"usage":{"input_tokens":20,"output_tokens":3}}`)
+		}
+	}))
+	defer server.Close()
+	runtime := autoProxyRuntime(t, server.URL, true)
+	runtime.OverloadRules[0].MaxRetries = 0
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 2
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	var rows []routing.CallLedgerEntry
+	proxyHandler.callLedgerSink = func(snapshot []routing.CallLedgerEntry) {
+		rows = snapshot
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/private-image.png"}},{"type":"text","text":"private prompt"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	proxyHandler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || len(rows) != 3 {
+		t.Fatalf("status=%d rows=%+v body=%q", response.Code, rows, response.Body.String())
+	}
+	wantKinds := []routing.CallKind{routing.CallAnalyzer, routing.CallVision, routing.CallAnswer}
+	for index, row := range rows {
+		if row.Sequence != index+1 || row.Kind != wantKinds[index] ||
+			row.EstimatedMicroUSD <= 0 || !row.ActualCostKnown || row.ActualMicroUSD <= 0 ||
+			row.StatusCode != http.StatusOK || row.Outcome != "success" ||
+			row.CorrelationID == "" {
+			t.Fatalf("row[%d]=%+v", index, row)
+		}
+	}
+	serialized := fmt.Sprintf("%+v", rows)
+	for _, secret := range []string{"private prompt", "private-image", "private visual description", "private answer"} {
+		if strings.Contains(serialized, secret) {
+			t.Fatalf("ledger leaked %q: %s", secret, serialized)
+		}
+	}
+}
+
+func TestAutoRoutingVisionCacheHitConsumesOnlyAnalyzerAndAnswer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		switch {
+		case root["system"] != nil:
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+		case model == "vision":
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"cached visual evidence"}]}`)
+		default:
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"answer"}]}`)
+		}
+	}))
+	defer server.Close()
+	runtime := autoProxyRuntime(t, server.URL, true)
+	runtime.OverloadRules[0].MaxRetries = 0
+	runtime.AutoRouting.Strategy.Budget.MaxAuxiliaryCalls = 2
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := stats.New(db)
+	proxyHandler := New(runtime, server.Client(), store).(*handler)
+	var rows []routing.CallLedgerEntry
+	var snapshot routing.AttemptBudgetSnapshot
+	proxyHandler.callLedgerSink = func(got []routing.CallLedgerEntry) { rows = got }
+	proxyHandler.budgetSnapshotSink = func(got routing.AttemptBudgetSnapshot) { snapshot = got }
+	body := `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/cache.png"}},{"type":"text","text":"compare this layout"}]}]}`
+	for range 2 {
+		request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		proxyHandler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Kind != routing.CallAnalyzer ||
+		rows[1].Kind != routing.CallAnswer {
+		t.Fatalf("cache-hit ledger=%+v", rows)
+	}
+	if snapshot.AuxiliaryCalls != 1 || snapshot.AnswerAttempts != 1 ||
+		snapshot.TotalOutboundCalls != 2 || snapshot.HeldAuxiliaryCalls != 0 ||
+		snapshot.HeldAnswerAttempts != 0 || snapshot.HeldOutboundCalls != 0 ||
+		snapshot.HeldCostMicroUSD != 0 {
+		t.Fatalf("cache-hit snapshot=%+v", snapshot)
+	}
+	traces, err := store.QueryRoutingTraces(context.Background(), stats.RoutingTraceFilter{Limit: 2})
+	if err != nil || len(traces) != 2 {
+		t.Fatalf("traces=%+v error=%v", traces, err)
+	}
+	latestID := traces[0].ID
+	physical, err := store.QueryRoutingCalls(context.Background(), stats.RoutingCallFilter{TraceID: &latestID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(physical) != 2 || physical[0].Kind != "analyzer" || physical[1].Kind != "answer" {
+		t.Fatalf("cache-hit physical rows=%+v", physical)
+	}
+}
+
+func TestAutoRoutingDeadlineAfterNodeLeasePreventsAnswerNetworkCall(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"must not run"}]}`)
+	}))
+	defer server.Close()
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.Strategy.Budget.Deadline = 5 * time.Millisecond
+	proxyHandler := New(runtime, server.Client(), nil).(*handler)
+	var snapshot routing.AttemptBudgetSnapshot
+	proxyHandler.budgetSnapshotSink = func(got routing.AttemptBudgetSnapshot) { snapshot = got }
+	proxyHandler.beforeAutoAnswer = func(ctx context.Context) { <-ctx.Done() }
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"delete production data"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	proxyHandler.ServeHTTP(response, request)
+
+	if calls.Load() != 0 {
+		t.Fatalf("answer calls=%d status=%d body=%q", calls.Load(), response.Code, response.Body.String())
+	}
+	if snapshot.TotalOutboundCalls != 0 || snapshot.HeldOutboundCalls != 0 ||
+		snapshot.HeldAnswerAttempts != 0 || snapshot.HeldCostMicroUSD != 0 {
+		t.Fatalf("deadline snapshot=%+v", snapshot)
 	}
 }
 

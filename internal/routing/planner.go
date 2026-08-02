@@ -51,11 +51,13 @@ const (
 )
 
 type Planner struct {
-	models   profile.ModelCatalog
-	targets  map[string][]TargetPlan
-	vision   profile.VisionRuntime
-	auto     profile.AutoRoutingRuntime
-	strategy profile.RoutingStrategyRuntime
+	models                profile.ModelCatalog
+	targets               map[string][]TargetPlan
+	vision                profile.VisionRuntime
+	auto                  profile.AutoRoutingRuntime
+	strategy              profile.RoutingStrategyRuntime
+	maxConfiguredRetries  int
+	configuredRetryCounts []int
 }
 
 type ExecutionPlan struct {
@@ -71,6 +73,7 @@ type ExecutionPlan struct {
 	reason                 string
 	budget                 profile.AttemptBudgetRuntime
 	modelAttempts          []ModelAttemptPlan
+	callGraph              CallGraphSnapshot
 }
 
 type ExecutionPlanSnapshot struct {
@@ -125,13 +128,27 @@ func NewPlanner(runtime profile.Runtime) (*Planner, error) {
 	if !runtime.AutoRouting.Enabled {
 		return nil, ErrRoutingDisabled
 	}
-	return &Planner{
+	planner := &Planner{
 		models:   cloneModels(runtime.Models),
 		targets:  buildTargetPlans(runtime),
 		vision:   runtime.Vision,
 		auto:     cloneAutoRouting(runtime.AutoRouting),
 		strategy: cloneStrategy(runtime.AutoRouting.Strategy),
-	}, nil
+	}
+	retryCounts := make(map[int]struct{}, len(runtime.OverloadRules))
+	for _, rule := range runtime.OverloadRules {
+		planner.maxConfiguredRetries = max(planner.maxConfiguredRetries, rule.MaxRetries)
+		retryCounts[rule.MaxRetries] = struct{}{}
+	}
+	if len(retryCounts) == 0 {
+		retryCounts[0] = struct{}{}
+	}
+	planner.configuredRetryCounts = make([]int, 0, len(retryCounts))
+	for retries := range retryCounts {
+		planner.configuredRetryCounts = append(planner.configuredRetryCounts, retries)
+	}
+	sort.Ints(planner.configuredRetryCounts)
+	return planner, nil
 }
 
 func (p *Planner) Plan(request Request, classification Classification) (ExecutionPlan, error) {
@@ -143,11 +160,30 @@ func (p *Planner) PlanWithPreference(
 	classification Classification,
 	preference SessionPreference,
 ) (ExecutionPlan, error) {
+	return p.planWithPreference(request, classification, preference, nil)
+}
+
+func (p *Planner) PlanWithBudget(
+	request Request,
+	classification Classification,
+	preference SessionPreference,
+	budget AttemptBudgetSnapshot,
+) (ExecutionPlan, error) {
+	return p.planWithPreference(request, classification, preference, &budget)
+}
+
+func (p *Planner) planWithPreference(
+	request Request,
+	classification Classification,
+	preference SessionPreference,
+	budget *AttemptBudgetSnapshot,
+) (ExecutionPlan, error) {
 	routeID := p.RouteID(classification)
 	route := p.strategy.Routes[routeID]
 
 	if classification.Risk == RiskHigh {
-		return p.planStrongBaseline(request, routeID, "high risk", classification.Source)
+		plan, err := p.planStrongBaseline(request, routeID, "high risk")
+		return p.finalizePlan(request, plan, budget, err)
 	}
 
 	candidates := append([]profile.RouteCandidateRuntime(nil), route.Candidates...)
@@ -162,7 +198,7 @@ func (p *Planner) PlanWithPreference(
 			candidate.QualityScoreBPS < preference.MinQualityScoreBPS {
 			continue
 		}
-		planned, ok := p.evaluateCandidate(request, candidate.Model, classification.Source)
+		planned, ok := p.evaluateCandidate(request, candidate.Model)
 		if !ok {
 			continue
 		}
@@ -170,12 +206,12 @@ func (p *Planner) PlanWithPreference(
 		ranked = append(ranked, rankedCandidate{plan: planned, metrics: candidate})
 	}
 	if len(ranked) == 0 {
-		return p.planStrongBaseline(
+		plan, err := p.planStrongBaseline(
 			request,
 			routeID,
 			"no route candidate passed all gates",
-			classification.Source,
 		)
+		return p.finalizePlan(request, plan, budget, err)
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
 		return betterCandidate(ranked[i].plan, ranked[j].plan, ranked[i].metrics, ranked[j].metrics)
@@ -190,13 +226,14 @@ func (p *Planner) PlanWithPreference(
 			}
 		}
 	}
-	attempts := p.plannedAttempts(request, classification.Source, route, ranked)
-	return p.executionPlan(
+	attempts := p.plannedAttempts(request, route, ranked)
+	plan := p.executionPlan(
 		routeID,
 		attempts,
 		attempts[0].model == p.auto.StrongBaselineModel,
 		reason,
-	), nil
+	)
+	return p.finalizePlan(request, plan, budget, nil)
 }
 
 func (p *Planner) RouteID(classification Classification) string {
@@ -215,9 +252,7 @@ func (p *Planner) EvaluationPair(
 		return EvaluationPair{}, false
 	}
 	route := p.strategy.Routes[p.RouteID(classification)]
-	reference, ok := p.evaluateCandidate(
-		request, p.auto.StrongBaselineModel, classification.Source,
-	)
+	reference, ok := p.evaluateCandidate(request, p.auto.StrongBaselineModel)
 	if !ok {
 		return EvaluationPair{}, false
 	}
@@ -232,7 +267,7 @@ func (p *Planner) EvaluationPair(
 		if metrics.Model == "" {
 			return EvaluationPair{}, false
 		}
-		candidate, ok = p.evaluateCandidate(request, selectedModel, classification.Source)
+		candidate, ok = p.evaluateCandidate(request, selectedModel)
 		if !ok {
 			return EvaluationPair{}, false
 		}
@@ -243,7 +278,7 @@ func (p *Planner) EvaluationPair(
 			if metrics.Model == reference.model {
 				continue
 			}
-			planned, capable := p.evaluateCandidate(request, metrics.Model, classification.Source)
+			planned, capable := p.evaluateCandidate(request, metrics.Model)
 			if !capable {
 				continue
 			}
@@ -274,9 +309,8 @@ func (p *Planner) planStrongBaseline(
 	request Request,
 	routeID string,
 	reason string,
-	classificationSource ClassificationSource,
 ) (ExecutionPlan, error) {
-	candidate, ok := p.evaluateCandidate(request, p.auto.StrongBaselineModel, classificationSource)
+	candidate, ok := p.evaluateCandidate(request, p.auto.StrongBaselineModel)
 	if !ok {
 		return ExecutionPlan{}, fmt.Errorf("%w: strong baseline %q", ErrNoCapableModel, p.auto.StrongBaselineModel)
 	}
@@ -291,23 +325,10 @@ func (p *Planner) executionPlan(
 	reason string,
 ) ExecutionPlan {
 	candidate := attempts[0]
-	maxAnswerCost := int64(0)
-	maxAuxiliaryCost := int64(0)
 	modelAttempts := make([]ModelAttemptPlan, 0, len(attempts))
 	for _, attempt := range attempts {
-		if attempt.answerCallCost > maxAnswerCost {
-			maxAnswerCost = attempt.answerCallCost
-		}
-		auxiliaryCost := attempt.estimatedCost - attempt.answerCallCost
-		if auxiliaryCost > maxAuxiliaryCost {
-			maxAuxiliaryCost = auxiliaryCost
-		}
 		modelAttempts = append(modelAttempts, modelAttemptPlan(attempt))
 	}
-	worstCaseCost := addCost(
-		multiplyCost(maxAnswerCost, p.strategy.Budget.MaxAnswerAttempts),
-		maxAuxiliaryCost,
-	)
 	return ExecutionPlan{
 		strategyName:           p.strategy.Name,
 		routeID:                routeID,
@@ -315,7 +336,6 @@ func (p *Planner) executionPlan(
 		visionMode:             candidate.visionMode,
 		usesStrongBaseline:     baseline,
 		estimatedCostMicroUSD:  candidate.estimatedCost,
-		worstCaseCostMicroUSD:  worstCaseCost,
 		answerCallCostMicroUSD: candidate.answerCallCost,
 		visionCallCostMicroUSD: candidate.visionCallCost,
 		reason:                 reason,
@@ -331,30 +351,25 @@ type rankedCandidate struct {
 
 func (p *Planner) plannedAttempts(
 	request Request,
-	classificationSource ClassificationSource,
 	route profile.RouteRuntime,
 	ranked []rankedCandidate,
 ) []candidatePlan {
 	capacity := min(
 		len(ranked)+1,
-		min(p.strategy.Budget.MaxModelSwitches+1, p.strategy.Budget.MaxAnswerAttempts),
+		p.strategy.Budget.MaxModelSwitches+1,
 	)
 	attempts := []candidatePlan{ranked[0].plan}
 	if capacity <= 1 {
 		return attempts
 	}
 
-	baseline, baselineOK := p.evaluateCandidate(
-		request,
-		p.auto.StrongBaselineModel,
-		classificationSource,
-	)
+	baseline, baselineOK := p.evaluateCandidate(request, p.auto.StrongBaselineModel)
 	baseline.qualityScoreBPS = 10_000
 	if metrics := candidatesForModel(route.Candidates, baseline.model); metrics.Model != "" {
 		baseline.qualityScoreBPS = metrics.QualityScoreBPS
 	}
 	baselineAdded := baselineOK && baseline.model != attempts[0].model &&
-		p.canAddAttempt(attempts, baseline)
+		!containsAttempt(attempts, baseline.model)
 	if baselineAdded {
 		attempts = append(attempts, baseline)
 	}
@@ -363,7 +378,7 @@ func (p *Planner) plannedAttempts(
 			break
 		}
 		if candidate.plan.model == p.auto.StrongBaselineModel ||
-			!p.canAddAttempt(attempts, candidate.plan) {
+			containsAttempt(attempts, candidate.plan.model) {
 			continue
 		}
 		if baselineAdded {
@@ -377,18 +392,13 @@ func (p *Planner) plannedAttempts(
 	return attempts
 }
 
-func (p *Planner) canAddAttempt(attempts []candidatePlan, candidate candidatePlan) bool {
-	maxAnswerCost := candidate.answerCallCost
-	maxAuxiliaryCost := candidate.estimatedCost - candidate.answerCallCost
+func containsAttempt(attempts []candidatePlan, model string) bool {
 	for _, attempt := range attempts {
-		maxAnswerCost = max(maxAnswerCost, attempt.answerCallCost)
-		maxAuxiliaryCost = max(maxAuxiliaryCost, attempt.estimatedCost-attempt.answerCallCost)
+		if attempt.model == model {
+			return true
+		}
 	}
-	worst := addCost(
-		multiplyCost(maxAnswerCost, p.strategy.Budget.MaxAnswerAttempts),
-		maxAuxiliaryCost,
-	)
-	return worst <= p.strategy.Budget.MaxWorstCaseCostMicroUSD
+	return false
 }
 
 func modelAttemptPlan(candidate candidatePlan) ModelAttemptPlan {
@@ -408,7 +418,6 @@ type candidatePlan struct {
 	visionMode      VisionMode
 	qualityScoreBPS int
 	estimatedCost   int64
-	worstCaseCost   int64
 	answerCallCost  int64
 	visionCallCost  int64
 }
@@ -416,7 +425,6 @@ type candidatePlan struct {
 func (p *Planner) evaluateCandidate(
 	request Request,
 	modelID string,
-	classificationSource ClassificationSource,
 ) (candidatePlan, bool) {
 	model, ok := p.models[modelID]
 	if !ok || !model.HasContextWindow || !model.HasMaxOutputTokens ||
@@ -431,8 +439,7 @@ func (p *Planner) evaluateCandidate(
 	if outputTokens == 0 {
 		outputTokens = min(4096, model.MaxOutputTokens)
 	}
-	if outputTokens <= 0 || outputTokens > model.MaxOutputTokens ||
-		request.Facts.EstimatedInputTokens > model.ContextWindow-outputTokens {
+	if outputTokens <= 0 || outputTokens > model.MaxOutputTokens {
 		return candidatePlan{}, false
 	}
 	if request.Facts.HasTools && (!model.HasSupportsTools || !model.SupportsTools) {
@@ -474,31 +481,46 @@ func (p *Planner) evaluateCandidate(
 		}
 	}
 
+	answerInputTokens := request.Facts.EstimatedInputTokens
+	if visionMode == VisionComposite {
+		var fits bool
+		answerInputTokens, fits = compositeAnswerInputTokens(request.Facts, p.vision)
+		if !fits {
+			return candidatePlan{}, false
+		}
+	}
+	if answerInputTokens > model.ContextWindow-outputTokens {
+		return candidatePlan{}, false
+	}
 	answerCost := estimateCallCost(
-		request.Facts.EstimatedInputTokens,
+		answerInputTokens,
 		outputTokens,
 		model,
 	)
 	auxiliaryCost := visionCost
-	if classificationSource == ClassificationSourceAnalyzer ||
-		classificationSource == ClassificationSourceFallback {
-		analyzer := p.models[p.auto.TaskAnalyzerModel]
-		auxiliaryCost = addCost(auxiliaryCost, estimateCallCost(
-			request.Facts.EstimatedInputTokens,
-			256,
-			analyzer,
-		))
-	}
 	estimated := addCost(answerCost, auxiliaryCost)
-	worst := addCost(multiplyCost(answerCost, p.strategy.Budget.MaxAnswerAttempts), auxiliaryCost)
-	if worst > p.strategy.Budget.MaxWorstCaseCostMicroUSD {
-		return candidatePlan{}, false
-	}
 	return candidatePlan{
 		model: modelID, targets: cloneTargetPlans(targets), visionMode: visionMode,
-		estimatedCost: estimated, worstCaseCost: worst,
+		estimatedCost:  estimated,
 		answerCallCost: answerCost, visionCallCost: visionCallCost,
 	}, true
+}
+
+func compositeAnswerInputTokens(
+	facts RequestFacts,
+	vision profile.VisionRuntime,
+) (int, bool) {
+	if vision.MaxTokens < 0 ||
+		vision.MaxTokens > int(^uint(0)>>1)/profile.VisionDescriptionBytesPerToken {
+		return 0, false
+	}
+	descriptionTokens := vision.MaxTokens * profile.VisionDescriptionBytesPerToken
+	perImage, ok := addCount(descriptionTokens, profile.VisionDescriptionWrapperReserveTokens)
+	if !ok || facts.ImageCount < 0 ||
+		(facts.ImageCount > 0 && perImage > int(^uint(0)>>1)/facts.ImageCount) {
+		return 0, false
+	}
+	return addCount(facts.EstimatedInputTokens, perImage*facts.ImageCount)
 }
 
 func betterCandidate(

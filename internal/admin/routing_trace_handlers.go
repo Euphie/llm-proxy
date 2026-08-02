@@ -10,6 +10,7 @@ import (
 
 var routingTraceQueryParameters = []string{
 	"profile_id",
+	"correlation_id",
 	"from",
 	"to",
 	"limit",
@@ -26,6 +27,13 @@ func (a *API) getRoutingTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := stats.RoutingTraceFilter{Limit: 100}
+	if raw := values["correlation_id"]; raw != "" {
+		if len(raw) > 128 {
+			a.writeRequestError(w, r, invalidRequestField("correlation_id", "Must not exceed 128 characters."))
+			return
+		}
+		filter.CorrelationID = raw
+	}
 	if raw := values["profile_id"]; raw != "" {
 		id, parseErr := strconv.ParseInt(raw, 10, 64)
 		if parseErr != nil || id <= 0 {
@@ -61,6 +69,53 @@ func (a *API) getRoutingTraces(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := a.stats.QueryRoutingTraces(r.Context(), filter)
+	if err != nil {
+		a.writeInternalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+var routingCallQueryParameters = []string{"trace_id", "correlation_id", "limit"}
+
+func (a *API) getRoutingCalls(w http.ResponseWriter, r *http.Request) {
+	if err := rejectUnknownQuery(r, routingCallQueryParameters...); err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	values, err := scalarQueryValues(r, routingCallQueryParameters)
+	if err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	filter := stats.RoutingCallFilter{Limit: 100}
+	if raw := values["trace_id"]; raw != "" {
+		id, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || id <= 0 {
+			a.writeRequestError(w, r, invalidRequestField("trace_id", "Must be a positive integer."))
+			return
+		}
+		filter.TraceID = &id
+	}
+	if raw := values["correlation_id"]; raw != "" {
+		if len(raw) > 128 {
+			a.writeRequestError(w, r, invalidRequestField("correlation_id", "Must not exceed 128 characters."))
+			return
+		}
+		filter.CorrelationID = raw
+	}
+	if filter.TraceID == nil && filter.CorrelationID == "" {
+		a.writeRequestError(w, r, invalidRequestField("trace_id", "Provide trace_id or correlation_id."))
+		return
+	}
+	if raw := values["limit"]; raw != "" {
+		filter.Limit, err = strconv.Atoi(raw)
+		if err != nil || filter.Limit < 1 || filter.Limit > 500 {
+			a.writeRequestError(w, r, invalidRequestField("limit", "Must be between 1 and 500."))
+			return
+		}
+	}
+	rows, err := a.stats.QueryRoutingCalls(r.Context(), filter)
 	if err != nil {
 		a.writeInternalError(w, r, err)
 		return

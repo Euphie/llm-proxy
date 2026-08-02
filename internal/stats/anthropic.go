@@ -10,7 +10,7 @@ import (
 //
 // Streaming events parsed:
 //   - message_start  → message.usage.input_tokens, message.model
-//   - message_delta  → usage.output_tokens (accumulated)
+//   - message_delta  → usage.output_tokens (cumulative value)
 //
 // Non-streaming fields parsed:
 //   - usage.input_tokens, usage.output_tokens, model
@@ -55,56 +55,63 @@ func accumulateAnthropicUsage(u *Usage, obj map[string]json.RawMessage) {
 
 	if raw, ok := obj["usage"]; ok {
 		var us struct {
-			InputTokens              int `json:"input_tokens"`
-			OutputTokens             int `json:"output_tokens"`
-			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			InputTokens              *int `json:"input_tokens"`
+			OutputTokens             *int `json:"output_tokens"`
+			CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 		}
-		if json.Unmarshal(raw, &us) == nil {
-			if us.InputTokens > 0 {
-				u.InputTokens = us.InputTokens
+		if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) && json.Unmarshal(raw, &us) == nil {
+			u.Present = true
+			if anyNegative(us.InputTokens, us.OutputTokens, us.CacheReadInputTokens, us.CacheCreationInputTokens) {
+				u.invalid = true
+				return
 			}
-			if us.OutputTokens > 0 {
-				u.OutputTokens += us.OutputTokens
+			if us.InputTokens != nil {
+				u.InputPresent = true
+				u.InputTokens = *us.InputTokens
 			}
-			if us.CacheReadInputTokens > 0 {
-				u.CacheReadTokens = us.CacheReadInputTokens
+			if us.OutputTokens != nil {
+				u.OutputPresent = true
+				u.OutputTokens = *us.OutputTokens
 			}
-			if us.CacheCreationInputTokens > 0 {
-				u.CacheCreationTokens = us.CacheCreationInputTokens
+			if us.CacheReadInputTokens != nil {
+				u.CacheReadTokens = *us.CacheReadInputTokens
+			}
+			if us.CacheCreationInputTokens != nil {
+				u.CacheCreationTokens = *us.CacheCreationInputTokens
 			}
 		}
 	}
 
 	if raw, ok := obj["message"]; ok {
 		var msg struct {
-			Model string `json:"model"`
-			Usage struct {
-				InputTokens              int `json:"input_tokens"`
-				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-			} `json:"usage"`
+			Model string          `json:"model"`
+			Usage json.RawMessage `json:"usage"`
 		}
 		if json.Unmarshal(raw, &msg) == nil {
 			if msg.Model != "" && u.Model == "" {
 				u.Model = msg.Model
 			}
-			if msg.Usage.InputTokens > 0 {
-				u.InputTokens = msg.Usage.InputTokens
-			}
-			if msg.Usage.CacheReadInputTokens > 0 {
-				u.CacheReadTokens = msg.Usage.CacheReadInputTokens
-			}
-			if msg.Usage.CacheCreationInputTokens > 0 {
-				u.CacheCreationTokens = msg.Usage.CacheCreationInputTokens
+			if len(msg.Usage) > 0 {
+				accumulateAnthropicUsage(u, map[string]json.RawMessage{"usage": msg.Usage})
 			}
 		}
 	}
 }
 
 func validAnthropicUsage(u Usage) (Usage, bool) {
-	if u.InputTokens == 0 && u.OutputTokens == 0 {
+	if !u.Present || u.invalid {
 		return Usage{}, false
 	}
+	u.invalid = false
 	return u, true
+}
+
+func anyNegative(values ...*int) bool {
+	for _, value := range values {
+		if value != nil && *value < 0 {
+			return true
+		}
+	}
+	return false
 }

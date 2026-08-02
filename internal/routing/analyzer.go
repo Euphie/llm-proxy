@@ -14,6 +14,7 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
+	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
 var ErrAnalyzer = errors.New("task analyzer failed")
@@ -58,10 +59,6 @@ func (a *Analyzer) Analyze(
 	request Request,
 	budget *AttemptBudget,
 ) (Classification, error) {
-	cost := estimateCallCost(request.Facts.EstimatedInputTokens, 256, a.model)
-	if err := budget.ReserveCall(ctx, CallAnalyzer, cost); err != nil {
-		return Classification{}, provider.NewFailure(provider.FailureBudgetDeadline, 0, err)
-	}
 	operationCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
@@ -72,6 +69,7 @@ func (a *Analyzer) Analyze(
 			fmt.Errorf("%w: build request", ErrAnalyzer),
 		)
 	}
+	cost := estimateCallCost((len(body)+3)/4, 256, a.model)
 	upstreamRequest, err := http.NewRequestWithContext(
 		operationCtx,
 		http.MethodPost,
@@ -86,8 +84,17 @@ func (a *Analyzer) Analyze(
 	}
 	copyAnalyzerHeaders(upstreamRequest.Header, headers, a.protocol)
 	upstreamRequest.Header.Set("Content-Type", "application/json")
+	if err := budget.ReserveCall(ctx, CallAnalyzer, cost); err != nil {
+		return Classification{}, provider.NewFailure(provider.FailureBudgetDeadline, 0, err)
+	}
+	ledger := CallLedgerFromContext(ctx)
+	sequence := ledger.Begin(CallTicket{
+		Kind: CallAnalyzer, Model: a.model.ID, Target: profile.PrimaryTargetID,
+		ImageIndex: -1, EstimatedMicroUSD: cost,
+	}, 0, 0)
 	response, err := a.httpClient.Do(upstreamRequest)
 	if err != nil {
+		ledger.Complete(sequence, 0, "network")
 		failure := provider.ClassifyTransportFailure(err)
 		class := failure.Class
 		if ctx.Err() != nil {
@@ -102,12 +109,14 @@ func (a *Analyzer) Analyze(
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	if err != nil {
+		completeCallWithParsedUsage(ledger, sequence, response.StatusCode, "response_io", responseBody, stats.NewParser(string(a.protocol)), a.model)
 		return Classification{}, provider.NewFailure(
 			provider.FailureUnknownTransport, 0,
 			fmt.Errorf("%w: read response", ErrAnalyzer),
 		)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		completeCallWithParsedUsage(ledger, sequence, response.StatusCode, "upstream", responseBody, stats.NewParser(string(a.protocol)), a.model)
 		return Classification{}, provider.ClassifyHTTPFailure(
 			a.overloadRules,
 			response.StatusCode,
@@ -117,17 +126,39 @@ func (a *Analyzer) Analyze(
 	}
 	text, err := analyzerResponseText(request.Operation, responseBody)
 	if err != nil {
+		completeCallWithParsedUsage(ledger, sequence, response.StatusCode, "malformed", responseBody, stats.NewParser(string(a.protocol)), a.model)
 		return Classification{}, provider.NewFailure(
 			provider.FailureMalformedResponse, 0, ErrAnalyzer,
 		)
 	}
 	classification, err := a.parseClassification(text)
 	if err != nil {
+		completeCallWithParsedUsage(ledger, sequence, response.StatusCode, "malformed", responseBody, stats.NewParser(string(a.protocol)), a.model)
 		return Classification{}, provider.NewFailure(
 			provider.FailureMalformedResponse, 0, ErrAnalyzer,
 		)
 	}
+	completeCallWithParsedUsage(ledger, sequence, response.StatusCode, "success", responseBody, stats.NewParser(string(a.protocol)), a.model)
 	return classification, nil
+}
+
+func completeCallWithParsedUsage(
+	ledger *CallLedger,
+	sequence int,
+	statusCode int,
+	outcome string,
+	body []byte,
+	parser stats.Parser,
+	model profile.ModelCapability,
+) {
+	usage, ok := parser.Parse(body)
+	ledger.CompleteWithUsage(sequence, statusCode, outcome, CallUsage{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		InputPresent: usage.InputPresent, OutputPresent: usage.OutputPresent,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		Present:             ok,
+	}, model)
 }
 
 func (a *Analyzer) buildRequest(request Request) ([]byte, string, error) {

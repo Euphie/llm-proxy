@@ -105,10 +105,49 @@ func TestEngineCallsAnalyzerOnlyForUncertainRequests(t *testing.T) {
 	if analyzerCalls.Load() != 1 {
 		t.Fatalf("analyzer calls=%d", analyzerCalls.Load())
 	}
+	if graph := plan.CallGraph(); graph.ConsumedBeforePlanCalls != 1 ||
+		graph.ConsumedBeforePlanMicroUSD <= 0 {
+		t.Fatalf("call graph did not freeze analyzer spend: %+v", graph)
+	}
 	if receivedHeaders.Get("Authorization") != "Bearer secret" ||
 		receivedHeaders.Get("Anthropic-Version") != "2023-06-01" ||
 		receivedHeaders.Get("Anthropic-Beta") != "" || receivedHeaders.Get("Cookie") != "" {
 		t.Fatalf("analyzer headers=%v", receivedHeaders)
+	}
+}
+
+func TestAnalyzerReservesConstructedPromptCostAndRecordsUsageActual(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9100}"}],"usage":{"input_tokens":12,"output_tokens":4}}`)
+	}))
+	defer server.Close()
+	config := routingConfig(false)
+	config.Upstream = server.URL
+	runtime := resolveRoutingRuntime(t, config)
+	analyzer := newAnalyzer(runtime, server.Client())
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1,"messages":[{"role":"user","content":"compare"}]}`)
+	body, _, err := analyzer.buildRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCost := estimateCallCost((len(body)+3)/4, 256, analyzer.model)
+	oldCost := estimateCallCost(request.Facts.EstimatedInputTokens, 256, analyzer.model)
+	if wantCost <= oldCost {
+		t.Fatalf("constructed cost=%d old=%d body_bytes=%d", wantCost, oldCost, len(body))
+	}
+	budget, ctx, cancel := NewAttemptBudget(context.Background(), runtime.AutoRouting.Strategy.Budget)
+	defer cancel()
+	ledger := NewCallLedger("analyzer-cost")
+	ctx = WithCallLedger(ctx, ledger)
+	if _, err := analyzer.Analyze(ctx, nil, request, budget); err != nil {
+		t.Fatal(err)
+	}
+	if got := budget.Snapshot().WorstCaseCostMicroUSD; got != wantCost {
+		t.Fatalf("reserved=%d want=%d", got, wantCost)
+	}
+	row := ledger.Snapshot()[0]
+	if !row.ActualCostKnown || row.ActualMicroUSD <= 0 {
+		t.Fatalf("ledger=%+v", row)
 	}
 }
 

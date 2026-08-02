@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/llmrequest"
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
@@ -166,6 +167,41 @@ func TestPreprocessorReservesEveryRetriedVisionCall(t *testing.T) {
 	}
 	if calls.Load() != 2 || reservations.Load() != 2 {
 		t.Fatalf("calls=%d reservations=%d, want 2 each", calls.Load(), reservations.Load())
+	}
+}
+
+func TestPreprocessorStructuredReservationIdentifiesPhysicalCallsAndCacheHit(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"overloaded"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"description"}]}`)
+	}))
+	defer server.Close()
+
+	p := budgetedRetryPreprocessor(server)
+	var reservations []struct{ image, retry int }
+	reserve := func(_ context.Context, imageIndex, retryIndex int) (CallCompletion, error) {
+		reservations = append(reservations, struct{ image, retry int }{imageIndex, retryIndex})
+		return func(int, string, []byte) {}, nil
+	}
+	body := imageRequest("structured-retry-cache")
+	for range 2 {
+		_, err := p.ProcessOperationTargetWithTickets(
+			context.Background(), nil, llmrequest.OperationAnthropicMessages,
+			body, server.URL+"/v1/messages", reserve,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 2 || len(reservations) != 2 ||
+		reservations[0].image != 0 || reservations[0].retry != 0 ||
+		reservations[1].image != 0 || reservations[1].retry != 1 {
+		t.Fatalf("calls=%d reservations=%+v", calls.Load(), reservations)
 	}
 }
 

@@ -46,21 +46,38 @@ type describer interface {
 	DescribeTarget(context.Context, http.Header, string, imageRef) (string, error)
 }
 
-type visionRetryReservationKey struct{}
+type CallCompletion func(statusCode int, outcome string, responseBody []byte)
 
-func withVisionRetryReservation(
+type CallReservation func(
 	ctx context.Context,
-	reserve func(context.Context) error,
-) context.Context {
-	return context.WithValue(ctx, visionRetryReservationKey{}, reserve)
+	imageIndex int,
+	retryIndex int,
+) (CallCompletion, error)
+
+type visionCallReservationKey struct{}
+
+type visionCallReservation struct {
+	imageIndex int
+	reserve    CallReservation
 }
 
-func reserveVisionRetry(ctx context.Context) error {
-	reserve, _ := ctx.Value(visionRetryReservationKey{}).(func(context.Context) error)
-	if reserve == nil {
-		return nil
+func withVisionCallReservation(
+	ctx context.Context,
+	imageIndex int,
+	reserve CallReservation,
+) context.Context {
+	return context.WithValue(ctx, visionCallReservationKey{}, visionCallReservation{
+		imageIndex: imageIndex,
+		reserve:    reserve,
+	})
+}
+
+func reserveVisionCall(ctx context.Context, retryIndex int) (CallCompletion, error) {
+	reservation, _ := ctx.Value(visionCallReservationKey{}).(visionCallReservation)
+	if reservation.reserve == nil {
+		return func(int, string, []byte) {}, nil
 	}
-	return reserve(ctx)
+	return reservation.reserve(ctx, reservation.imageIndex, retryIndex)
 }
 
 type visionClient struct {
@@ -75,6 +92,8 @@ type visionClient struct {
 	headers     []string
 	recordUsage func(string, []byte)
 }
+
+func (*visionClient) managesCallReservation() {}
 
 func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *visionClient {
 	if httpClient == nil {
@@ -171,18 +190,21 @@ func (c *visionClient) DescribeTarget(
 			if err := c.sleep(ctx, wait); err != nil {
 				return "", safeClientError{"vision request canceled", err}
 			}
-			if err := reserveVisionRetry(ctx); err != nil {
-				return "", safeClientError{"vision retry budget exhausted", err}
-			}
+		}
+		complete, err := reserveVisionCall(ctx, attempt)
+		if err != nil {
+			return "", safeClientError{"vision call budget exhausted", err}
 		}
 
 		attemptStarted := time.Now()
 		response, err := c.do(ctx, headers, target, body)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
+				complete(0, "canceled", nil)
 				c.logAttempt(image, attempt+1, attemptStarted, visionErrorClass(ctxErr), 0, 0, false)
 				return "", provider.ClassifyTransportFailure(ctxErr)
 			}
+			complete(0, "network", nil)
 			c.logAttempt(image, attempt+1, attemptStarted, "network", 0, 0, false)
 			if retryRule == nil && len(c.rules) > 0 {
 				retryRule = &c.rules[0]
@@ -196,11 +218,13 @@ func (c *visionClient) DescribeTarget(
 		responseBody, readErr := io.ReadAll(response.Body)
 		closeErr := response.Body.Close()
 		if readErr != nil {
+			complete(response.StatusCode, "response_io", responseBody)
 			c.logAttempt(image, attempt+1, attemptStarted, "response_io",
 				response.StatusCode, len(responseBody), false)
 			return "", provider.NewFailure(provider.FailureMalformedResponse, response.StatusCode, readErr)
 		}
 		if closeErr != nil {
+			complete(response.StatusCode, "response_io", responseBody)
 			c.logAttempt(image, attempt+1, attemptStarted, "response_io",
 				response.StatusCode, len(responseBody), false)
 			return "", provider.NewFailure(provider.FailureMalformedResponse, response.StatusCode, closeErr)
@@ -211,10 +235,27 @@ func (c *visionClient) DescribeTarget(
 			c.recordUsage(targetURL.Path, responseBody)
 			description, err := c.parse(responseBody)
 			if err != nil {
+				complete(response.StatusCode, "malformed", responseBody)
 				c.logAttempt(image, attempt+1, attemptStarted, "invalid_response",
 					response.StatusCode, len(responseBody), false)
 				return "", provider.NewFailure(provider.FailureMalformedResponse, response.StatusCode, err)
 			}
+			maxDescriptionBytes := 0
+			if c.cfg.MaxTokens > 0 &&
+				c.cfg.MaxTokens <= int(^uint(0)>>1)/profile.VisionDescriptionBytesPerToken {
+				maxDescriptionBytes = c.cfg.MaxTokens * profile.VisionDescriptionBytesPerToken
+			}
+			if maxDescriptionBytes == 0 || len([]byte(description)) > maxDescriptionBytes {
+				complete(response.StatusCode, "malformed", responseBody)
+				c.logAttempt(image, attempt+1, attemptStarted, "invalid_response",
+					response.StatusCode, len(responseBody), false)
+				return "", provider.NewFailure(
+					provider.FailureMalformedResponse,
+					response.StatusCode,
+					errors.New("vision description exceeds the planned output bound"),
+				)
+			}
+			complete(response.StatusCode, "success", responseBody)
 			c.logAttempt(image, attempt+1, attemptStarted, "none",
 				response.StatusCode, len(responseBody), false)
 			return description, nil
@@ -224,10 +265,12 @@ func (c *visionClient) DescribeTarget(
 		failure := provider.ClassifyHTTPFailure(c.rules, response.StatusCode, responseBody, nil)
 		c.logDebugUpstreamResponse(image, attempt+1, response.StatusCode, responseBody)
 		if matched == nil {
+			complete(response.StatusCode, "upstream", responseBody)
 			c.logAttempt(image, attempt+1, attemptStarted, "upstream",
 				response.StatusCode, len(responseBody), false)
 			return "", failure
 		}
+		complete(response.StatusCode, "overload", responseBody)
 		c.logAttempt(image, attempt+1, attemptStarted, "overload",
 			response.StatusCode, len(responseBody), true)
 		if !httpRuleLocked {

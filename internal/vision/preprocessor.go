@@ -225,7 +225,9 @@ func (p *Preprocessor) ProcessTargetWithBudget(
 	mainTarget string,
 	reserveCall func(context.Context) error,
 ) ([]byte, error) {
-	return p.processTargetWithBudget(ctx, headers, body, mainTarget, reserveCall, p.parse)
+	return p.processTargetWithBudget(
+		ctx, headers, body, mainTarget, legacyCallReservation(reserveCall), p.parse,
+	)
 }
 
 func (p *Preprocessor) ProcessOperationTargetWithBudget(
@@ -236,11 +238,36 @@ func (p *Preprocessor) ProcessOperationTargetWithBudget(
 	mainTarget string,
 	reserveCall func(context.Context) error,
 ) ([]byte, error) {
+	return p.ProcessOperationTargetWithTickets(
+		ctx, headers, operation, body, mainTarget, legacyCallReservation(reserveCall),
+	)
+}
+
+func (p *Preprocessor) ProcessOperationTargetWithTickets(
+	ctx context.Context,
+	headers http.Header,
+	operation llmrequest.Operation,
+	body []byte,
+	mainTarget string,
+	reserveCall CallReservation,
+) ([]byte, error) {
 	parse, err := requestParser(operation)
 	if err != nil {
 		return nil, &processError{status: http.StatusBadRequest, err: err}
 	}
 	return p.processTargetWithBudget(ctx, headers, body, mainTarget, reserveCall, parse)
+}
+
+func legacyCallReservation(reserve func(context.Context) error) CallReservation {
+	if reserve == nil {
+		return nil
+	}
+	return func(ctx context.Context, _, _ int) (CallCompletion, error) {
+		if err := reserve(ctx); err != nil {
+			return nil, err
+		}
+		return func(int, string, []byte) {}, nil
+	}
 }
 
 func requestParser(
@@ -269,7 +296,7 @@ func (p *Preprocessor) processTargetWithBudget(
 	headers http.Header,
 	body []byte,
 	mainTarget string,
-	reserveCall func(context.Context) error,
+	reserveCall CallReservation,
 	parse func(map[string]json.RawMessage) (requestDocument, error),
 ) ([]byte, error) {
 	root, err := parseRequestRoot(body)
@@ -363,13 +390,18 @@ func (p *Preprocessor) processTargetWithBudget(
 					if err := operationCtx.Err(); err != nil {
 						return "", err
 					}
+					operationCtx = withVisionCallReservation(operationCtx, i, reserveCall)
+					var complete CallCompletion
 					if reserveCall != nil {
-						if err := reserveCall(operationCtx); err != nil {
-							failures.record(i, err)
-							cancel()
-							return "", err
+						if _, manages := p.describer.(interface{ managesCallReservation() }); !manages {
+							var reserveErr error
+							complete, reserveErr = reserveCall(operationCtx, i, 0)
+							if reserveErr != nil {
+								failures.record(i, reserveErr)
+								cancel()
+								return "", reserveErr
+							}
 						}
-						operationCtx = withVisionRetryReservation(operationCtx, reserveCall)
 					}
 					description, err := p.describer.DescribeTarget(
 						operationCtx,
@@ -377,6 +409,13 @@ func (p *Preprocessor) processTargetWithBudget(
 						mainTarget,
 						image,
 					)
+					if complete != nil {
+						if err != nil {
+							complete(0, "failed", nil)
+						} else {
+							complete(http.StatusOK, "success", nil)
+						}
+					}
 					if err != nil {
 						if failures.record(i, err) {
 							cancel()

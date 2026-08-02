@@ -177,7 +177,7 @@ test("statistics page exposes loading then exact summary and accessible tables",
   assert.ok(findText(root, "sonnet"));
   assert.ok(findText(root, "fast → strong · Target primary → region_b"));
   assert.ok(findText(root, "回答 2 / 辅助 1 / 模型切换 1 / Target 切换 1"));
-  assert.ok(findText(root, "计划上限 $0.030126 / 已预留 $0.0155"));
+  assert.ok(findText(root, "计划上限 $0.030126 / 已消费估算 $0.0155 / 持有 $0 / 已知实际（部分） $0.012"));
 });
 
 test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
@@ -610,7 +610,10 @@ function routingTraceFixture() {
     model_switches: 1,
     target_switches: 1,
     planned_worst_case_cost_micro_usd: 30126,
-    reserved_cost_micro_usd: 15500,
+    consumed_estimated_cost_micro_usd: 15500,
+    held_cost_micro_usd: 0,
+    known_actual_cost_micro_usd: 12000,
+    all_actual_costs_known: false,
     elapsed_ms: 42,
   }];
 }
