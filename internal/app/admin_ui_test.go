@@ -23,15 +23,18 @@ func TestAdminUIAssetsAreServedByApplication(t *testing.T) {
 	})
 
 	assets := map[string]string{
-		"/_admin/":                            "text/html; charset=utf-8",
-		"/_admin/assets/current/api.js":       "text/javascript; charset=utf-8",
-		"/_admin/assets/current/app.js":       "text/javascript; charset=utf-8",
-		"/_admin/assets/current/auth.js":      "text/javascript; charset=utf-8",
-		"/_admin/assets/current/profiles.js":  "text/javascript; charset=utf-8",
-		"/_admin/assets/current/generator.js": "text/javascript; charset=utf-8",
-		"/_admin/assets/current/stats.js":     "text/javascript; charset=utf-8",
-		"/_admin/assets/current/system.js":    "text/javascript; charset=utf-8",
-		"/_admin/assets/current/styles.css":   "text/css; charset=utf-8",
+		"/_admin/":                                    "text/html; charset=utf-8",
+		"/_admin/assets/current/api.js":               "text/javascript; charset=utf-8",
+		"/_admin/assets/current/app.js":               "text/javascript; charset=utf-8",
+		"/_admin/assets/current/auth.js":              "text/javascript; charset=utf-8",
+		"/_admin/assets/current/profile-draft.js":     "text/javascript; charset=utf-8",
+		"/_admin/assets/current/profile-readiness.js": "text/javascript; charset=utf-8",
+		"/_admin/assets/current/profiles.js":          "text/javascript; charset=utf-8",
+		"/_admin/assets/current/routes.js":            "text/javascript; charset=utf-8",
+		"/_admin/assets/current/generator.js":         "text/javascript; charset=utf-8",
+		"/_admin/assets/current/stats.js":             "text/javascript; charset=utf-8",
+		"/_admin/assets/current/system.js":            "text/javascript; charset=utf-8",
+		"/_admin/assets/current/styles.css":           "text/css; charset=utf-8",
 	}
 	for path, contentType := range assets {
 		t.Run(path, func(t *testing.T) {

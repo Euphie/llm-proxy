@@ -2300,20 +2300,19 @@ export function renderProfileEditor(root, source, actions = {}) {
 					"长上下文阈值",
 				),
 			},
-			dynamic_optimization: dynamicEnabled.checked
-				? {
-					enabled: true,
-					sample_rate_bps: percentToBasisPoints(
-						dynamicSampleRate.value,
-						"异步抽样比例",
-					),
-					daily_budget_micro_usd: dynamicDailyBudget.value,
-					reviewer_model: dynamicReviewer.value,
-					max_concurrency: dynamicConcurrency.value,
-					queue_capacity: dynamicQueueCapacity.value,
-					task_timeout: dynamicTimeout.value,
-				}
-				: { enabled: false },
+			dynamic_optimization: {
+				...working.config.auto_routing.dynamic_optimization,
+				enabled: dynamicEnabled.checked,
+				sample_rate_bps: percentToBasisPoints(
+					dynamicSampleRate.value,
+					"异步抽样比例",
+				),
+				daily_budget_micro_usd: dynamicDailyBudget.value,
+				reviewer_model: dynamicReviewer.value,
+				max_concurrency: dynamicConcurrency.value,
+				queue_capacity: dynamicQueueCapacity.value,
+				task_timeout: dynamicTimeout.value,
+			},
         strategy: {
           ...working.config.auto_routing.strategy,
           name: strategyName.value,
@@ -2581,15 +2580,9 @@ function autoRoutingDraft(configured = {}) {
 }
 
 function autoRoutingPayload(auto) {
-  if (!auto?.enabled) {
-    return {
-			enabled: false,
-			risk_policy: riskPolicyPayload(auto?.risk_policy),
-		};
-  }
   const strategy = auto.strategy || {};
   return {
-    enabled: true,
+    enabled: Boolean(auto?.enabled),
     participants: [...(auto.participants || [])].map(String),
     strong_baseline_model: String(auto.strong_baseline_model ?? ""),
     task_analyzer_model: String(auto.task_analyzer_model ?? ""),
@@ -2665,11 +2658,8 @@ function patternLines(value) {
 }
 
 function dynamicOptimizationPayload(config = {}) {
-	if (!config?.enabled) {
-		return { enabled: false };
-	}
 	return {
-		enabled: true,
+		enabled: Boolean(config?.enabled),
 		sample_rate_bps: boundedBasisPoints(
 			config.sample_rate_bps,
 			"异步抽样比例",

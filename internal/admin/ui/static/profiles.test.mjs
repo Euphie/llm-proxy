@@ -165,7 +165,17 @@ test("disabled Auto routing persists and round-trips an explicit risk policy", (
 	draft.config.auto_routing.enabled = false;
 	draft.config.auto_routing.risk_policy = structuredClone(expected);
 	const first = profilePayload(draft).config.auto_routing;
-	assert.deepEqual(first, { enabled: false, risk_policy: expected });
+	assert.equal(first.enabled, false);
+	assert.deepEqual(first.risk_policy, expected);
+	assert.deepEqual(first.dynamic_optimization, {
+		enabled: false,
+		sample_rate_bps: 1000,
+		daily_budget_micro_usd: 250000,
+		reviewer_model: "",
+		max_concurrency: 2,
+		queue_capacity: 128,
+		task_timeout: "90s",
+	});
 
 	const reloaded = profileDraft(profileFixture({
 		config: {
@@ -515,10 +525,7 @@ test("payload preserves every configured field with numeric JSON types and retry
       protocol: "anthropic",
       upstream: "https://upstream.example",
       models: [],
-      auto_routing: {
-			enabled: false,
-			risk_policy: structuredClone(draft.config.auto_routing.risk_policy),
-		},
+      auto_routing: structuredClone(draft.config.auto_routing),
       vision: {
         enabled: true,
         transport: "anthropic_messages",
