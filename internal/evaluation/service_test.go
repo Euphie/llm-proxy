@@ -160,6 +160,83 @@ func TestServiceEnforcesDailyBudgetAndPersistsSuccessfulEvidence(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsWorstCaseCostBeforeEvaluationOutboundCalls(t *testing.T) {
+	db := openEvaluationDB(t)
+	profileID := insertEvaluationProfile(t, db)
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	store := NewStore(db, func() time.Time { return now })
+	spent, err := store.ReserveBudget(context.Background(), profileID, 100, 39)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := spent.Commit(context.Background(), 39); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(store, ServiceOptions{
+		Now:    func() time.Time { return now },
+		Sample: func(int) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	blocker := Job{
+		ProfileID: profileID, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100,
+		EstimatedCostMicroUSD: 1, MaxConcurrency: 1, QueueCapacity: 3,
+		Timeout: time.Minute, ExpiresAt: now.Add(time.Minute),
+		Run: func(context.Context) (Result, error) {
+			close(started)
+			<-release
+			return Result{}, nil
+		},
+	}
+	if got := service.Submit(blocker); got != SubmitAccepted {
+		t.Fatalf("blocker Submit()=%q", got)
+	}
+	<-started
+
+	var outboundCalls int
+	worstCase := blocker
+	worstCase.EstimatedCostMicroUSD = 90
+	worstCase.Run = func(context.Context) (Result, error) {
+		outboundCalls++
+		return Result{SpentMicroUSD: 60}, nil
+	}
+	if got := service.Submit(worstCase); got != SubmitAccepted {
+		t.Fatalf("evaluation Submit()=%q", got)
+	}
+	finished := make(chan struct{})
+	sentinel := blocker
+	sentinel.Run = func(context.Context) (Result, error) {
+		close(finished)
+		return Result{}, nil
+	}
+	if got := service.Submit(sentinel); got != SubmitAccepted {
+		t.Fatalf("sentinel Submit()=%q", got)
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("sentinel did not run")
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if outboundCalls != 0 || service.Status().BudgetRejected != 1 {
+		t.Fatalf("outbound=%d status=%+v", outboundCalls, service.Status())
+	}
+	snapshot, err := store.Budget(context.Background(), profileID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ReservedMicroUSD != 0 || snapshot.SpentMicroUSD != 39 {
+		t.Fatalf("budget=%+v", snapshot)
+	}
+}
+
 func TestCloseCancelsRunningEvaluationsAndRejectsNewJobs(t *testing.T) {
 	db := openEvaluationDB(t)
 	profileID := insertEvaluationProfile(t, db)

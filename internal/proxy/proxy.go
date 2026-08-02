@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Euphie/llm-proxy/internal/evaluation"
@@ -624,6 +625,35 @@ func (h *handler) bindRoutingSession(
 
 const maxEvaluationContentBytes = 1 << 20
 
+var errEvaluationCostInvariant = errors.New("routing evaluation cost accounting invariant violated")
+
+type evaluationCostTracker struct {
+	mu       sync.Mutex
+	reserved int64
+	spent    int64
+}
+
+func newEvaluationCostTracker(reserved int64) *evaluationCostTracker {
+	return &evaluationCostTracker{reserved: reserved}
+}
+
+func (t *evaluationCostTracker) charge(cost int64) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cost < 0 || t.reserved < 0 || t.spent < 0 || t.spent > t.reserved ||
+		cost > t.reserved-t.spent {
+		return errEvaluationCostInvariant
+	}
+	t.spent += cost
+	return nil
+}
+
+func (t *evaluationCostTracker) total() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.spent
+}
+
 func (h *handler) submitEvaluation(
 	headers http.Header,
 	requestURI string,
@@ -681,11 +711,16 @@ func (h *handler) submitEvaluation(
 		return
 	}
 	reviewerCost := estimateEvaluationCallCost(reviewerInputTokens, 256, reviewer)
-	missingCost := evaluationAttemptCost(missing, request.Facts.ImageCount)
+	missingCost := evaluationWorstCaseAttemptCost(
+		missing,
+		request.Facts.ImageCount,
+		h.cfg.OverloadRules,
+	)
 	estimatedCost := addEvaluationCost(missingCost, reviewerCost)
 	if estimatedCost == 0 {
 		estimatedCost = 1
 	}
+	costTracker := newEvaluationCostTracker(estimatedCost)
 
 	forwardedHeaders := evaluationHeaders(headers)
 	comparison.Generate = func(ctx context.Context, model string) (evaluation.ModelOutput, error) {
@@ -699,15 +734,34 @@ func (h *handler) submitEvaluation(
 		}
 		attemptTarget := targetURL(targets[0].Upstream(), requestURI)
 		started := time.Now()
-		plannedCost := evaluationAttemptCost(attempt, request.Facts.ImageCount)
 		failedOutput := func() evaluation.ModelOutput {
 			return evaluation.ModelOutput{
-				CostMicroUSD: plannedCost,
+				CostMicroUSD: costTracker.total(),
 				LatencyMS:    time.Since(started).Milliseconds(),
 			}
 		}
-		body, err := h.prepareEvaluationAttempt(ctx, forwardedHeaders, attemptTarget, request, attempt)
+		reserveVisionCall := func(
+			context.Context,
+			int,
+			int,
+		) (vision.CallCompletion, error) {
+			if err := costTracker.charge(attempt.VisionCallCostMicroUSD()); err != nil {
+				return nil, err
+			}
+			return func(int, string, []byte) {}, nil
+		}
+		body, err := h.prepareEvaluationAttempt(
+			ctx,
+			forwardedHeaders,
+			attemptTarget,
+			request,
+			attempt,
+			reserveVisionCall,
+		)
 		if err != nil {
+			return failedOutput(), err
+		}
+		if err := costTracker.charge(attempt.AnswerCallCostMicroUSD()); err != nil {
 			return failedOutput(), err
 		}
 		response, err := h.do(ctx, http.MethodPost, attemptTarget, forwardedHeaders, body)
@@ -717,7 +771,7 @@ func (h *handler) submitEvaluation(
 		responseBody, err := readEvaluationResponse(response)
 		output := evaluation.ParseModelOutput(
 			request.Operation, responseBody, request.Facts,
-			plannedCost,
+			costTracker.total(),
 			time.Since(started).Milliseconds(),
 		)
 		if err != nil {
@@ -733,6 +787,9 @@ func (h *handler) submitEvaluation(
 	comparison.Review = func(ctx context.Context, input evaluation.ReviewInput) (evaluation.ReviewVerdict, error) {
 		body, err := evaluation.BuildReviewRequest(request.Operation, config.ReviewerModel, input)
 		if err != nil {
+			return evaluation.ReviewVerdict{}, err
+		}
+		if err := costTracker.charge(reviewerCost); err != nil {
 			return evaluation.ReviewVerdict{}, err
 		}
 		response, err := h.do(ctx, http.MethodPost, reviewerTarget, forwardedHeaders, body)
@@ -755,7 +812,12 @@ func (h *handler) submitEvaluation(
 		QueueCapacity: config.QueueCapacity, Timeout: config.TaskTimeout,
 		ExpiresAt: time.Now().Add(10 * time.Minute),
 		Run: func(ctx context.Context) (evaluation.Result, error) {
-			return workflow.Evaluate(ctx, comparison)
+			result, err := workflow.Evaluate(ctx, comparison)
+			spent := costTracker.total()
+			if result.SpentMicroUSD != spent || spent > estimatedCost {
+				return evaluation.Result{SpentMicroUSD: spent}, errors.Join(err, errEvaluationCostInvariant)
+			}
+			return result, err
 		},
 	}
 	result := h.evaluation.Submit(job)
@@ -776,6 +838,7 @@ func (h *handler) prepareEvaluationAttempt(
 	target string,
 	request routing.Request,
 	attempt routing.ModelAttemptPlan,
+	reserveVisionCall vision.CallReservation,
 ) ([]byte, error) {
 	body, err := request.WithModelNonStreaming(attempt.Model())
 	if err != nil {
@@ -787,13 +850,13 @@ func (h *handler) prepareEvaluationAttempt(
 	if h.vision == nil {
 		return nil, routing.ErrNoCapableModel
 	}
-	return h.vision.ProcessOperationTargetWithBudget(
+	return h.vision.ProcessOperationTargetWithTickets(
 		ctx,
 		headers,
 		request.Operation,
 		body,
 		target,
-		nil,
+		reserveVisionCall,
 	)
 }
 
@@ -840,6 +903,33 @@ func evaluationAttemptCost(attempt routing.ModelAttemptPlan, imageCount int) int
 	)
 }
 
+func evaluationWorstCaseAttemptCost(
+	attempt routing.ModelAttemptPlan,
+	imageCount int,
+	rules []provider.Rule,
+) int64 {
+	visionCost := multiplyEvaluationCost(attempt.VisionCallCostMicroUSD(), imageCount)
+	visionCost = multiplyEvaluationCost64(visionCost, maxEvaluationVisionAttempts(rules))
+	return addEvaluationCost(attempt.AnswerCallCostMicroUSD(), visionCost)
+}
+
+func maxEvaluationVisionAttempts(rules []provider.Rule) int64 {
+	maxRetries := int64(0)
+	for _, rule := range rules {
+		if !provider.IsRetryableStatus(rule.Status) || rule.MaxRetries <= 0 {
+			continue
+		}
+		retries := int64(rule.MaxRetries)
+		if retries > maxRetries {
+			maxRetries = retries
+		}
+	}
+	if maxRetries == math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return maxRetries + 1
+}
+
 func estimateEvaluationCallCost(
 	inputTokens int,
 	outputTokens int,
@@ -877,6 +967,16 @@ func multiplyEvaluationCost(cost int64, count int) int64 {
 		return math.MaxInt64
 	}
 	return cost * int64(count)
+}
+
+func multiplyEvaluationCost64(cost int64, count int64) int64 {
+	if cost <= 0 || count <= 0 {
+		return 0
+	}
+	if count > math.MaxInt64/cost {
+		return math.MaxInt64
+	}
+	return cost * count
 }
 
 func boolEvaluationCost(value bool) int64 {

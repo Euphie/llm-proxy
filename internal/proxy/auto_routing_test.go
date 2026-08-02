@@ -592,6 +592,245 @@ func TestSuccessfulAutoRequestOnlyEnqueuesAsyncBlindComparison(t *testing.T) {
 	}
 }
 
+func TestAsyncEvaluationReservesAndChargesEveryPhysicalVisionRetry(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	var onlineCalls atomic.Int32
+	var answerCalls atomic.Int32
+	var reviewerCalls atomic.Int32
+	var visionCalls atomic.Int32
+	var visionMu sync.Mutex
+	visionAttempts := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		switch {
+		case model == "vision":
+			visionCalls.Add(1)
+			image := "one"
+			if bytes.Contains(body, []byte("image-two")) {
+				image = "two"
+			}
+			visionMu.Lock()
+			visionAttempts[image]++
+			attempt := visionAttempts[image]
+			visionMu.Unlock()
+			if attempt == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = io.WriteString(w, `{"error":"vision overloaded"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"visual evidence"}]}`)
+		case model == "fast" && root["system"] != nil:
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+		case model == "strong" && root["system"] != nil:
+			reviewerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"winner\":\"tie\",\"severe_a\":false,\"severe_b\":false}"}]}`)
+		case model == "strong":
+			onlineCalls.Add(1)
+			_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"online answer"}]}`)
+		case model == "fast":
+			answerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"generated answer"}]}`)
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, true)
+	route := runtime.AutoRouting.Strategy.Routes["balanced"]
+	route.MinQualityBPS = 9500
+	runtime.AutoRouting.Strategy.Routes["balanced"] = route
+	runtime.OverloadRules[0].MaxRetries = 2
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	body := `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image-one.png"}},{"type":"image","source":{"type":"url","url":"https://example.test/image-two.png"}},{"type":"text","text":"compare these layouts"}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	NewWithEvaluation(runtime, server.Client(), nil, nil, submitter).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || submitter.calls != 1 ||
+		analyzerCalls.Load() != 1 || onlineCalls.Load() != 1 {
+		t.Fatalf("status=%d submissions=%d analyzer=%d online=%d body=%q",
+			response.Code, submitter.calls, analyzerCalls.Load(), onlineCalls.Load(), response.Body.String())
+	}
+	routeRequest, err := routing.ParseAutoRequest(
+		runtime.Protocol, http.MethodPost, "/v1/messages", "application/json", []byte(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := routing.NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classification := routing.Classification{
+		TaskType: "simple", Risk: routing.RiskNormal, ConfidenceBPS: 9200,
+		Source: routing.ClassificationSourceAnalyzer,
+	}
+	pair, ok := planner.EvaluationPair(routeRequest, classification, "strong")
+	if !ok {
+		t.Fatal("evaluation pair unavailable")
+	}
+	reviewerInputTokens := routeRequest.Facts.EstimatedInputTokens +
+		routeRequest.Facts.RequestedOutputTokens*2 + 512
+	reviewerCost := estimateEvaluationCallCost(reviewerInputTokens, 256, runtime.Models["strong"])
+	visionCost := pair.Candidate.VisionCallCostMicroUSD()
+	generatedCost := addEvaluationCost(
+		pair.Candidate.AnswerCallCostMicroUSD(),
+		multiplyEvaluationCost(visionCost, routeRequest.Facts.ImageCount*2),
+	)
+	worstCaseGeneratedCost := addEvaluationCost(
+		pair.Candidate.AnswerCallCostMicroUSD(),
+		multiplyEvaluationCost(visionCost, routeRequest.Facts.ImageCount*3),
+	)
+	worstCaseCost := addEvaluationCost(worstCaseGeneratedCost, reviewerCost)
+	actualSpent := addEvaluationCost(generatedCost, reviewerCost)
+	if submitter.job.EstimatedCostMicroUSD != worstCaseCost {
+		t.Fatalf("reserved=%d want worst-case=%d nominal=%d",
+			submitter.job.EstimatedCostMicroUSD, worstCaseCost,
+			addEvaluationCost(evaluationAttemptCost(pair.Candidate, routeRequest.Facts.ImageCount), reviewerCost))
+	}
+
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO profiles (
+			id, slug, display_name, enabled, config_json, created_at, updated_at
+		) VALUES (?, 'auto', 'Auto', 1, '{}', ?, ?)
+	`, runtime.ID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	store := evaluation.NewStore(db, time.Now)
+	service, err := evaluation.NewService(store, evaluation.ServiceOptions{
+		Sample: func(int) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := service.Submit(submitter.job); got != evaluation.SubmitAccepted {
+		t.Fatalf("evaluation Submit()=%q", got)
+	}
+	finished := make(chan struct{})
+	if got := service.Submit(evaluation.Job{
+		ProfileID: runtime.ID, SampleRateBPS: 10_000,
+		DailyBudgetMicroUSD:   submitter.job.DailyBudgetMicroUSD,
+		EstimatedCostMicroUSD: 1, MaxConcurrency: 1, QueueCapacity: 4,
+		Timeout: time.Minute, ExpiresAt: time.Now().Add(time.Minute),
+		Run: func(context.Context) (evaluation.Result, error) {
+			close(finished)
+			return evaluation.Result{}, nil
+		},
+	}); got != evaluation.SubmitAccepted {
+		t.Fatalf("sentinel Submit()=%q", got)
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("evaluation did not finish")
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	budget, err := store.Budget(context.Background(), runtime.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := store.ListEvidence(context.Background(), runtime.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visionCalls.Load() != 4 || answerCalls.Load() != 1 || reviewerCalls.Load() != 1 ||
+		budget.SpentMicroUSD != actualSpent || budget.SpentMicroUSD >= worstCaseCost ||
+		budget.ReservedMicroUSD != 0 ||
+		len(evidence) != 1 || evidence[0].CandidateCostMicroUSD != generatedCost ||
+		evidence[0].ReviewerCostMicroUSD != reviewerCost {
+		t.Fatalf("vision=%d answer=%d reviewer=%d budget=%+v evidence=%+v",
+			visionCalls.Load(), answerCalls.Load(), reviewerCalls.Load(), budget, evidence)
+	}
+}
+
+func TestAsyncEvaluationFailureChargesVisionCallsWithoutUnsentAnswer(t *testing.T) {
+	var visionCalls atomic.Int32
+	var answerCalls atomic.Int32
+	var reviewerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		switch {
+		case model == "vision":
+			visionCalls.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"vision overloaded"}`)
+		case model == "fast" && root["system"] != nil:
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+		case model == "strong" && root["system"] != nil:
+			reviewerCalls.Add(1)
+			http.Error(w, "reviewer must not run", http.StatusInternalServerError)
+		case model == "strong":
+			_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"online answer"}]}`)
+		case model == "fast":
+			answerCalls.Add(1)
+			http.Error(w, "answer must not run", http.StatusInternalServerError)
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, true)
+	route := runtime.AutoRouting.Strategy.Routes["balanced"]
+	route.MinQualityBPS = 9500
+	runtime.AutoRouting.Strategy.Routes["balanced"] = route
+	runtime.OverloadRules[0].MaxRetries = 1
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},{"type":"text","text":"compare this layout"}]}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	NewWithEvaluation(runtime, server.Client(), nil, nil, submitter).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || submitter.calls != 1 {
+		t.Fatalf("status=%d submissions=%d body=%q", response.Code, submitter.calls, response.Body.String())
+	}
+
+	result, err := submitter.job.Run(context.Background())
+	visionCallCost := estimateEvaluationCallCost(
+		profile.VisionImagePromptReserveTokens,
+		runtime.Vision.MaxTokens,
+		runtime.Models[runtime.Vision.Model],
+	)
+	if err == nil || visionCalls.Load() != 2 || answerCalls.Load() != 0 || reviewerCalls.Load() != 0 ||
+		result.SpentMicroUSD != multiplyEvaluationCost(visionCallCost, 2) || result.Evidence != nil {
+		t.Fatalf("err=%v vision=%d answer=%d reviewer=%d result=%+v",
+			err, visionCalls.Load(), answerCalls.Load(), reviewerCalls.Load(), result)
+	}
+}
+
 // Break caught: an asynchronous comparison redirect can replay caller credentials to another Profile path.
 func TestAsyncEvaluationReturnsRedirectWithoutCallingOtherProfile(t *testing.T) {
 	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
