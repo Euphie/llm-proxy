@@ -15,6 +15,7 @@ import competitorEvidence from "../data/competitor-evidence.json";
 import sourceBaselines from "../data/source-baselines.json";
 import {
   expandEvidenceMarkers,
+  isEvidenceLevel,
   type CompetitorEvidence,
   type EvidenceLevel,
   type ImplementationStatus,
@@ -83,18 +84,11 @@ const markdownBySlug: Record<string, string> = {
 };
 
 const implementationStatuses = new Set<ImplementationStatus>(["已实现", "本版目标", "后续方向"]);
-const evidenceLevels = new Set<EvidenceLevel>([
-  "本项目源码验证",
-  "竞品源码验证",
-  "官方文档验证",
-  "闭源产品参考",
-]);
-
 function manifestChapter(value: (typeof chapterManifest.chapters)[number]): ManifestChapter {
   if (
     !chapterGroups.includes(value.group as ChapterGroup) ||
     !implementationStatuses.has(value.implementation_status as ImplementationStatus) ||
-    !evidenceLevels.has(value.evidence_level as EvidenceLevel)
+    !isEvidenceLevel(value.evidence_level)
   ) {
     throw new Error(`Invalid chapter manifest entry: ${value.slug}`);
   }

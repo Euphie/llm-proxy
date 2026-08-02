@@ -1,5 +1,18 @@
 export type ImplementationStatus = "已实现" | "本版目标" | "后续方向";
-export type EvidenceLevel = "本项目源码验证" | "竞品源码验证" | "官方文档验证" | "闭源产品参考";
+export const evidenceLevels = [
+  "本项目源码验证",
+  "本项目源码与测试验证",
+  "竞品源码验证",
+  "官方文档验证",
+  "闭源产品参考",
+] as const;
+export type EvidenceLevel = (typeof evidenceLevels)[number];
+
+const evidenceLevelSet = new Set<string>(evidenceLevels);
+
+export function isEvidenceLevel(value: unknown): value is EvidenceLevel {
+  return typeof value === "string" && evidenceLevelSet.has(value);
+}
 
 export interface SourceBaseline {
   repository: string;
