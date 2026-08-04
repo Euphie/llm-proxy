@@ -25,7 +25,7 @@ func TestWorkflowGeneratesOnlyMissingReferenceAndBlindlyMapsReviewerWinner(t *te
 		if strings.Contains(input.A+input.B, "fast") || strings.Contains(input.A+input.B, "strong") {
 			t.Fatalf("review input leaked model identity: %+v", input)
 		}
-		return ReviewVerdict{Winner: WinnerB, ReviewerCostMicroUSD: 5}, nil
+		return dimensionalVerdict(WinnerB, 5), nil
 	}
 
 	result, err := workflow.Evaluate(context.Background(), task)
@@ -58,7 +58,7 @@ func TestWorkflowGeneratesOnlyMissingCandidateWhenOnlineUsedBaseline(t *testing.
 		if input.A != "candidate answer" || input.B != "reference answer" {
 			t.Fatalf("blind input=%+v", input)
 		}
-		return ReviewVerdict{Winner: WinnerTie, ReviewerCostMicroUSD: 5}, nil
+		return dimensionalVerdict(WinnerTie, 5), nil
 	}
 
 	result, err := workflow.Evaluate(context.Background(), task)
@@ -96,6 +96,85 @@ func TestWorkflowUsesDeterministicFailureBeforeSubjectiveReview(t *testing.T) {
 	}
 }
 
+func TestWorkflowClassifiesSelfEscalationCalibrationFromBlindVerdict(t *testing.T) {
+	tests := []struct {
+		name        string
+		observation EscalationObservation
+		winner      Winner
+		supported   bool
+		unnecessary bool
+		missed      bool
+	}{
+		{name: "requested and justified", observation: EscalationRequested, winner: WinnerB, supported: true},
+		{name: "requested but cheap answer was sufficient", observation: EscalationRequested, winner: WinnerTie, unnecessary: true},
+		{name: "not requested but reference won", observation: EscalationNotRequested, winner: WinnerB, missed: true},
+		{name: "not requested and cheap answer won", observation: EscalationNotRequested, winner: WinnerA},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := comparisonTask()
+			task.EscalationObservation = tt.observation
+			task.Candidate = &ModelOutput{Text: "candidate", CostMicroUSD: 10}
+			task.Generate = func(context.Context, string) (ModelOutput, error) {
+				return ModelOutput{Text: "reference", CostMicroUSD: 40}, nil
+			}
+			task.Review = func(context.Context, ReviewInput) (ReviewVerdict, error) {
+				return dimensionalVerdict(tt.winner, 5), nil
+			}
+
+			result, err := NewWorkflow(func() bool { return false }).Evaluate(context.Background(), task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence := result.Evidence
+			if evidence == nil || !evidence.SelfEscalationEligible ||
+				evidence.SelfEscalationRequested != (tt.observation == EscalationRequested) ||
+				evidence.SelfEscalationSupported != tt.supported ||
+				evidence.SelfEscalationUnnecessary != tt.unnecessary ||
+				evidence.SelfEscalationMissed != tt.missed {
+				t.Fatalf("evidence=%+v", evidence)
+			}
+		})
+	}
+}
+
+func TestWorkflowMapsSwappedDimensionWinners(t *testing.T) {
+	task := comparisonTask()
+	task.Candidate = &ModelOutput{Text: "candidate"}
+	task.Generate = func(context.Context, string) (ModelOutput, error) {
+		return ModelOutput{Text: "reference"}, nil
+	}
+	task.Review = func(context.Context, ReviewInput) (ReviewVerdict, error) {
+		return ReviewVerdict{Dimensions: map[Dimension]Winner{
+			DimensionCorrectness:          WinnerA,
+			DimensionCompleteness:         WinnerB,
+			DimensionInstructionFollowing: WinnerTie,
+			DimensionFormatToolSafety:     WinnerA,
+			DimensionTaskCompletion:       WinnerB,
+		}}, nil
+	}
+
+	result, err := NewWorkflow(func() bool { return true }).Evaluate(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Evidence.Dimensions; got[DimensionCorrectness] != OutcomeReferenceWin ||
+		got[DimensionCompleteness] != OutcomeCandidateWin ||
+		got[DimensionInstructionFollowing] != OutcomeTie ||
+		got[DimensionFormatToolSafety] != OutcomeReferenceWin ||
+		got[DimensionTaskCompletion] != OutcomeCandidateWin {
+		t.Fatalf("mapped dimensions=%+v", got)
+	}
+}
+
+func dimensionalVerdict(winner Winner, cost int64) ReviewVerdict {
+	dimensions := make(map[Dimension]Winner, len(ReviewDimensions))
+	for _, dimension := range ReviewDimensions {
+		dimensions[dimension] = winner
+	}
+	return ReviewVerdict{Dimensions: dimensions, ReviewerCostMicroUSD: cost}
+}
+
 func TestWorkflowRejectsIncompleteOrAmbiguousComparisonTasks(t *testing.T) {
 	workflow := NewWorkflow(nil)
 	task := comparisonTask()
@@ -112,6 +191,7 @@ func TestWorkflowRejectsIncompleteOrAmbiguousComparisonTasks(t *testing.T) {
 func comparisonTask() ComparisonTask {
 	return ComparisonTask{
 		ProfileID: 7, Strategy: "20260802-001", Route: "balanced", TaskType: "simple",
+		Difficulty: "medium", Risk: "normal", VisionMode: "none",
 		CandidateModel: "fast", ReferenceModel: "strong", ReviewerModel: "judge",
 		Question: "answer the request",
 		Generate: func(context.Context, string) (ModelOutput, error) {

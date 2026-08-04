@@ -101,6 +101,40 @@ func TestStrategyServiceAtomicallyReloadsCanaryPromotionAndRollback(t *testing.T
 	assertStrategyRuntime(t, router, "20260802-001")
 }
 
+func TestStrategyServiceOverviewDoesNotBootstrapDisabledAutoRouting(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	profiles := profile.NewStore(db)
+	strategies := strategy.NewStore(db, time.Now)
+	record, err := profiles.Save(context.Background(), profile.SaveInput{
+		Slug: "plain", DisplayName: "Plain", Enabled: true,
+		Config: profile.NewConfig(profile.ProtocolAnthropic, "https://example.test"),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := gateway.NewCoordinator(
+		profiles,
+		gateway.NewRegistry(),
+		func(profile.Record) (http.Handler, error) { return http.NotFoundHandler(), nil },
+	)
+	service := NewStrategyService(profiles, strategies, coordinator, time.Now)
+
+	overview, err := service.Overview(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Snapshot.Active.ID != 0 || len(overview.Strategies) != 0 {
+		t.Fatalf("overview=%+v", overview)
+	}
+	if _, err := strategies.Snapshot(context.Background(), record.ID); !errors.Is(err, strategy.ErrNotFound) {
+		t.Fatalf("Snapshot() error=%v, want ErrNotFound", err)
+	}
+}
+
 func TestStrategyServiceStartCanaryBuildFailureLeavesControlAndDataPlaneUnchanged(t *testing.T) {
 	db, err := database.Open(t.TempDir())
 	if err != nil {
@@ -692,9 +726,11 @@ func TestStrategyServiceGeneratesAnUnpublishedDraftFromReliableEvidence(t *testi
 	for range 30 {
 		if err := evidence.RecordEvidence(context.Background(), evaluation.Evidence{
 			ProfileID: record.ID, Strategy: overview.Snapshot.Active.Config.Name,
-			Route: "balanced", TaskType: "simple", CandidateModel: "fast",
+			Route: "balanced", TaskType: "simple", Difficulty: "easy",
+			Risk: "normal", VisionMode: "none", CandidateModel: "fast",
 			ReferenceModel: "strong", ReviewerModel: "strong",
-			Outcome: evaluation.OutcomeCandidateWin,
+			Outcome:    evaluation.OutcomeCandidateWin,
+			Dimensions: evaluationDimensionOutcomes(evaluation.OutcomeCandidateWin),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -732,6 +768,14 @@ func TestStrategyServiceGeneratesAnUnpublishedDraftFromReliableEvidence(t *testi
 	}
 }
 
+func evaluationDimensionOutcomes(outcome evaluation.Outcome) map[evaluation.Dimension]evaluation.Outcome {
+	result := make(map[evaluation.Dimension]evaluation.Outcome, len(evaluation.ReviewDimensions))
+	for _, dimension := range evaluation.ReviewDimensions {
+		result[dimension] = outcome
+	}
+	return result
+}
+
 func TestStrategyServiceRefusesCandidateWithoutReliableEvidence(t *testing.T) {
 	db, err := database.Open(t.TempDir())
 	if err != nil {
@@ -753,6 +797,57 @@ func TestStrategyServiceRefusesCandidateWithoutReliableEvidence(t *testing.T) {
 	service := NewStrategyService(profiles, strategies, coordinator, time.Now, evidence)
 	if _, err := service.GenerateCandidate(context.Background(), record.ID); !errors.Is(err, evaluation.ErrInsufficientEvidence) {
 		t.Fatalf("GenerateCandidate() error=%v", err)
+	}
+}
+
+func TestModelPerformanceUsesTheEvidenceStrategyVersionPrior(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 8, 31, 3, 0, 0, 0, time.UTC)
+	profiles := profile.NewStore(db)
+	strategies := strategy.NewStore(db, func() time.Time { return now })
+	evidence := evaluation.NewStore(db, func() time.Time { return now })
+	record, err := profiles.Save(context.Background(), profile.SaveInput{
+		Slug: "auto", DisplayName: "Auto", Enabled: true, Config: apiAutoRoutingConfig(),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := strategies.Bootstrap(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := cloneStrategyConfig(snapshot.Active.Config)
+	config.Name = "20260831-002"
+	config.Routes[0].Candidates[0].QualityScoreBPS = 1000
+	draft, err := strategies.CreateDraft(context.Background(), record, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := evidence.RecordEvidence(context.Background(), evaluation.Evidence{
+		ProfileID: record.ID, Strategy: draft.Config.Name, Route: "balanced",
+		TaskType: "simple", Difficulty: "easy", Risk: "normal", VisionMode: "none",
+		CandidateModel: "fast", ReferenceModel: "strong", ReviewerModel: "strong",
+		Outcome:    evaluation.OutcomeCandidateWin,
+		Dimensions: evaluationDimensionOutcomes(evaluation.OutcomeCandidateWin),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewStrategyService(profiles, strategies, nil, func() time.Time { return now }, evidence)
+	page, err := service.ModelPerformance(context.Background(), evaluation.PerformanceFilter{
+		ProfileID: &record.ID, Page: 1, PageSize: 25,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("performance items=%+v", page.Items)
+	}
+	if !page.Items[0].PriorKnown || page.Items[0].Estimate.QualityMeanBPS >= 3000 {
+		t.Fatalf("strategy prior was not used: %+v", page.Items[0])
 	}
 }
 

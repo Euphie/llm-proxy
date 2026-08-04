@@ -2,10 +2,59 @@ package routing
 
 import (
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
+
+func TestActualCallCostUsesDefaultCacheReadAndWritePrices(t *testing.T) {
+	model := profile.ModelCapability{
+		HasInputPrice: true, InputPriceMicroUSDPerMillion: 1_000_000,
+		HasOutputPrice: true, OutputPriceMicroUSDPerMillion: 5_000_000,
+	}
+	modelValue := reflect.ValueOf(&model).Elem()
+	for field, value := range map[string]int64{
+		"CacheReadPriceMicroUSDPerMillion":  100_000,
+		"CacheWritePriceMicroUSDPerMillion": 1_250_000,
+	} {
+		price := modelValue.FieldByName(field)
+		present := modelValue.FieldByName("Has" + field[:len(field)-len("MicroUSDPerMillion")])
+		if !price.IsValid() || !present.IsValid() {
+			t.Fatalf("model capability is missing %s", field)
+		}
+		price.SetInt(value)
+		present.SetBool(true)
+	}
+
+	for _, test := range []struct {
+		name               string
+		inputIncludesCache bool
+		inputTokens        int
+	}{
+		{name: "anthropic", inputTokens: 100},
+		{name: "openai", inputIncludesCache: true, inputTokens: 600},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			usage := CallUsage{
+				InputTokens: test.inputTokens, OutputTokens: 10,
+				CacheReadTokens: 200, CacheCreationTokens: 300,
+				InputPresent: true, OutputPresent: true, Present: true,
+			}
+			if test.inputIncludesCache {
+				field := reflect.ValueOf(&usage).Elem().FieldByName("InputIncludesCache")
+				if !field.IsValid() {
+					t.Fatal("CallUsage is missing InputIncludesCache")
+				}
+				field.SetBool(true)
+			}
+			cost, known := actualCallCost(usage, model)
+			if !known || cost != 545 {
+				t.Fatalf("cost=%d known=%v", cost, known)
+			}
+		})
+	}
+}
 
 func TestCallLedgerRecordsOnlyStructuredCallMetadataInSequence(t *testing.T) {
 	ledger := NewCallLedger("trace-123")
@@ -78,6 +127,19 @@ func TestCallLedgerActualCostUnknownForMissingCachePricesOrOverflow(t *testing.T
 				t.Fatalf("row=%+v", row)
 			}
 		})
+	}
+}
+
+func TestActualCallCostRoundsOnlyAfterAllPriceComponentsAreCombined(t *testing.T) {
+	cost, known := ActualCallCost(CallUsage{
+		InputTokens: 1, OutputTokens: 1,
+		InputPresent: true, OutputPresent: true, Present: true,
+	}, profile.ModelCapability{
+		HasInputPrice: true, InputPriceMicroUSDPerMillion: 1,
+		HasOutputPrice: true, OutputPriceMicroUSDPerMillion: 1,
+	})
+	if !known || cost != 1 {
+		t.Fatalf("cost=%d known=%v", cost, known)
 	}
 }
 

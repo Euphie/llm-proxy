@@ -25,37 +25,39 @@ func TestSessionStoreScopesOpaqueKeysAndNeverPersistsRawIdentity(t *testing.T) {
 	insertRoutingSessionProfile(t, db, 8)
 
 	headers := http.Header{"Authorization": {"Bearer caller-secret"}}
-	key, ok := store.Key(headers, "agent-session-42", 8, "balanced", "answer")
+	key, ok := store.Key(headers, "agent-session-42", 8, "answer")
 	if !ok {
 		t.Fatal("valid Session identity was rejected")
 	}
-	same, ok := store.Key(headers, "agent-session-42", 8, "balanced", "answer")
+	same, ok := store.Key(headers, "agent-session-42", 8, "answer")
 	if !ok || key != same {
 		t.Fatal("Session key is not deterministic")
 	}
-	other, ok := store.Key(headers, "agent-session-42", 8, "strong", "answer")
+	other, ok := store.Key(headers, "another-session", 8, "answer")
 	if !ok || key == other {
-		t.Fatal("Route did not scope Session key")
+		t.Fatal("raw Session identity did not scope Session key")
 	}
 	otherAuth, ok := store.Key(
 		http.Header{"Authorization": {"Bearer another-caller"}},
-		"agent-session-42", 8, "balanced", "answer",
+		"agent-session-42", 8, "answer",
 	)
 	if !ok || key == otherAuth {
 		t.Fatal("authentication domain did not scope Session key")
 	}
-	if _, ok := store.Key(http.Header{}, "agent-session-42", 8, "balanced", "answer"); ok {
+	if _, ok := store.Key(http.Header{}, "agent-session-42", 8, "answer"); ok {
 		t.Fatal("anonymous Session identity was accepted")
 	}
 
 	if err := store.Bind(context.Background(), key, SessionBinding{
 		ProfileID: 8, Route: "balanced", Purpose: "answer",
+		TaskType: "simple", Difficulty: DifficultyMedium,
 		Model: "fast", QualityScoreBPS: 9200, Strategy: "20260802-001",
 	}, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	binding, found, err := store.Get(context.Background(), key)
-	if err != nil || !found || binding.Model != "fast" || binding.QualityScoreBPS != 9200 {
+	if err != nil || !found || binding.TaskType != "simple" || binding.Difficulty != DifficultyMedium ||
+		binding.Model != "fast" || binding.QualityScoreBPS != 9200 {
 		t.Fatalf("binding=%+v found=%v err=%v", binding, found, err)
 	}
 
@@ -83,7 +85,7 @@ func TestSessionStoreUpgradesButNeverDowngradesAndExpiresBindings(t *testing.T) 
 	insertRoutingSessionProfile(t, db, 8)
 	key, ok := store.Key(
 		http.Header{"X-Api-Key": {"caller-secret"}},
-		"agent-session-42", 8, "balanced", "answer",
+		"agent-session-42", 8, "answer",
 	)
 	if !ok {
 		t.Fatal("valid Session identity was rejected")
@@ -93,7 +95,8 @@ func TestSessionStoreUpgradesButNeverDowngradesAndExpiresBindings(t *testing.T) 
 		t.Helper()
 		if err := store.Bind(context.Background(), key, SessionBinding{
 			ProfileID: 8, Route: "balanced", Purpose: "answer",
-			Model: model, QualityScoreBPS: quality, Strategy: "20260802-001",
+			TaskType: "simple",
+			Model:    model, QualityScoreBPS: quality, Strategy: "20260802-001",
 		}, time.Hour); err != nil {
 			t.Fatal(err)
 		}
@@ -121,6 +124,49 @@ func TestSessionStoreUpgradesButNeverDowngradesAndExpiresBindings(t *testing.T) 
 	}
 	if count != 0 {
 		t.Fatalf("expired rows=%d", count)
+	}
+}
+
+func TestSessionStoreRefreshesBindingWhenStrategyChanges(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store, err := NewSessionStore(db, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertRoutingSessionProfile(t, db, 8)
+	key, ok := store.Key(
+		http.Header{"Authorization": {"Bearer caller-secret"}},
+		"agent-session-42", 8, "answer",
+	)
+	if !ok {
+		t.Fatal("valid Session identity was rejected")
+	}
+	bind := func(strategy, model string, quality int) {
+		t.Helper()
+		if err := store.Bind(context.Background(), key, SessionBinding{
+			ProfileID: 8, Route: "balanced", Purpose: "answer", TaskType: "simple",
+			Model: model, QualityScoreBPS: quality, Strategy: strategy,
+		}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	bind("20260802-001", "strong", 9900)
+	bind("20260803-001", "fast", 9000)
+	binding, found, err := store.Get(context.Background(), key)
+	if err != nil || !found || binding.Strategy != "20260803-001" ||
+		binding.Model != "fast" || binding.QualityScoreBPS != 9000 {
+		t.Fatalf("new strategy binding=%+v found=%v err=%v", binding, found, err)
+	}
+
+	bind("20260803-001", "cheaper", 8500)
+	binding, found, err = store.Get(context.Background(), key)
+	if err != nil || !found || binding.Model != "fast" || binding.QualityScoreBPS != 9000 {
+		t.Fatalf("same strategy downgraded binding=%+v found=%v err=%v", binding, found, err)
 	}
 }
 

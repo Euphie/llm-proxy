@@ -178,6 +178,66 @@ func TestDocumentAdvertisedToolDefinitionsDoNotBecomeActualOperations(t *testing
 	}
 }
 
+func TestDocumentSeparatesCurrentAndHistoricalEvidence(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation Operation
+		body      []byte
+	}{
+		{
+			name: "anthropic", operation: OperationAnthropicMessages,
+			body: []byte(`{
+				"tool_choice":{"type":"tool","name":"deploy_production"},
+				"messages":[
+					{"role":"user","content":"旧问题"},
+					{"role":"assistant","content":[{"type":"tool_use","name":"shell_exec","input":{}}]},
+					{"role":"user","content":"继续分析"}
+				]
+			}`),
+		},
+		{
+			name: "chat completions", operation: OperationOpenAIChatCompletions,
+			body: []byte(`{
+				"tool_choice":{"type":"function","function":{"name":"deploy_production"}},
+				"messages":[
+					{"role":"user","content":"旧问题"},
+					{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"shell_exec","arguments":"{}"}}]},
+					{"role":"user","content":"继续分析"}
+				]
+			}`),
+		},
+		{
+			name: "responses", operation: OperationOpenAIResponses,
+			body: []byte(`{
+				"tool_choice":{"type":"function","name":"deploy_production"},
+				"input":[
+					{"type":"message","role":"user","content":"旧问题"},
+					{"type":"function_call","name":"shell_exec","arguments":"{}"},
+					{"type":"message","role":"user","content":"继续分析"}
+				]
+			}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			document, err := Parse(tt.operation, tt.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := document.HistoricalToolOperations(); !reflect.DeepEqual(got, []string{"shell_exec"}) {
+				t.Fatalf("historical operations=%v", got)
+			}
+			if got := document.ForcedToolOperation(); got != "deploy_production" {
+				t.Fatalf("forced operation=%q", got)
+			}
+			if got := document.LatestUserTexts(); !reflect.DeepEqual(got, []string{"继续分析"}) {
+				t.Fatalf("latest user texts=%v", got)
+			}
+		})
+	}
+}
+
 func TestActualToolOperationsAreBoundedAndDeduplicated(t *testing.T) {
 	blocks := make([]map[string]string, maxActualToolOperations+10)
 	blocks[0] = map[string]string{"type": "tool_use", "name": strings.Repeat("x", maxActualToolNameRunes+20)}

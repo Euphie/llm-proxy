@@ -1,12 +1,14 @@
 package routing
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,21 +22,22 @@ func TestClassifyLocalUsesOnlyHighConfidenceRules(t *testing.T) {
 	runtime := routingRuntime(t, false)
 	baseline := runtime.Models["strong"]
 	tests := []struct {
-		name     string
-		body     string
-		matched  bool
-		taskType string
-		risk     Risk
+		name       string
+		body       string
+		matched    bool
+		taskType   string
+		difficulty Difficulty
+		risk       Risk
 	}{
 		{
-			name:    "tool use is high risk",
+			name:    "ordinary code edit needs analysis",
 			body:    `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":"edit the file"}]}`,
-			matched: true, taskType: "high_risk", risk: RiskHigh,
+			matched: false,
 		},
 		{
 			name:    "obvious greeting",
 			body:    `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好，请简单介绍一下自己"}]}`,
-			matched: true, taskType: "simple", risk: RiskNormal,
+			matched: true, taskType: "simple", difficulty: DifficultyEasy, risk: RiskNormal,
 		},
 		{
 			name:    "ambiguous analysis",
@@ -46,7 +49,8 @@ func TestClassifyLocalUsesOnlyHighConfidenceRules(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			classification, matched := ClassifyLocal(autoAnthropicRequest(t, tt.body), baseline, runtime.AutoRouting.RiskPolicy)
-			if matched != tt.matched || classification.TaskType != tt.taskType || classification.Risk != tt.risk {
+			if matched != tt.matched || classification.TaskType != tt.taskType ||
+				classification.Difficulty != tt.difficulty || classification.Risk != tt.risk {
 				t.Fatalf("classification=%+v matched=%v", classification, matched)
 			}
 		})
@@ -56,6 +60,7 @@ func TestClassifyLocalUsesOnlyHighConfidenceRules(t *testing.T) {
 func TestClassifyLocalUsesConfiguredRiskPolicyAndNotAdvertisedTools(t *testing.T) {
 	config := routingConfig(false)
 	config.AutoRouting.RiskPolicy = profile.RiskPolicyConfig{
+		Version:                  profile.RiskPolicyVersion2,
 		SensitiveTextPatterns:    []string{"private mutation"},
 		SensitiveToolPatterns:    []string{"apply_patch"},
 		StructuredOutputHighRisk: false,
@@ -72,8 +77,12 @@ func TestClassifyLocalUsesConfiguredRiskPolicyAndNotAdvertisedTools(t *testing.T
 			body: `{"model":"auto","max_tokens":1000,"tools":[{"name":"apply_patch"}],"messages":[{"role":"user","content":"check weather"}]}`,
 		},
 		{
-			name:    "actual sensitive tool",
-			body:    `{"model":"auto","max_tokens":1000,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"workspace_apply_patch","input":{}}]}]}`,
+			name: "historical sensitive tool",
+			body: `{"model":"auto","max_tokens":1000,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"workspace_apply_patch","input":{}}]}]}`,
+		},
+		{
+			name:    "forced sensitive tool",
+			body:    `{"model":"auto","max_tokens":1000,"tool_choice":{"type":"tool","name":"workspace_apply_patch"},"messages":[{"role":"user","content":"continue"}]}`,
 			matched: true,
 		},
 		{
@@ -99,27 +108,32 @@ func TestClassifyLocalUsesConfiguredRiskPolicyAndNotAdvertisedTools(t *testing.T
 func TestClassifyLocalStructuredOutputAndLongContextPolicy(t *testing.T) {
 	config := routingConfig(false)
 	config.AutoRouting.RiskPolicy = profile.RiskPolicyConfig{
+		Version:               profile.RiskPolicyVersion2,
 		SensitiveTextPatterns: []string{}, SensitiveToolPatterns: []string{},
 		StructuredOutputHighRisk: true, LongContextThresholdBPS: 1,
 	}
 	runtime := resolveRoutingRuntime(t, config)
 	structured := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1,"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":"analyze"}]}`)
-	if classification, matched := ClassifyLocal(structured, runtime.Models["strong"], runtime.AutoRouting.RiskPolicy); !matched || classification.Risk != RiskHigh {
+	if classification, matched := ClassifyLocal(structured, runtime.Models["strong"], runtime.AutoRouting.RiskPolicy); matched && classification.Risk == RiskHigh {
 		t.Fatalf("structured classification=%+v matched=%v", classification, matched)
 	}
 	long := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"analyze"}]}`)
-	if classification, matched := ClassifyLocal(long, runtime.Models["strong"], runtime.AutoRouting.RiskPolicy); !matched || classification.Risk != RiskHigh {
+	if classification, matched := ClassifyLocal(long, runtime.Models["strong"], runtime.AutoRouting.RiskPolicy); matched && classification.Risk == RiskHigh {
 		t.Fatalf("long-context classification=%+v matched=%v", classification, matched)
 	}
 }
 
-func TestEngineActualSensitiveToolForcesStrongBaselineWithoutAnalyzer(t *testing.T) {
+func TestEngineHistoricalShellDoesNotTriggerHardRisk(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9100}"}]}`)
+	}))
 	defer server.Close()
 	config := routingConfig(false)
 	config.Upstream = server.URL
 	config.AutoRouting.RiskPolicy = profile.RiskPolicyConfig{
+		Version:               profile.RiskPolicyVersion2,
 		SensitiveTextPatterns: []string{}, SensitiveToolPatterns: []string{"exec"},
 		LongContextThresholdBPS: 10000,
 	}
@@ -134,8 +148,71 @@ func TestEngineActualSensitiveToolForcesStrongBaselineWithoutAnalyzer(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Model() != "strong" || !plan.UsesStrongBaseline() || classification.Risk != RiskHigh || calls.Load() != 0 {
+	if plan.Model() != "fast" || plan.UsesStrongBaseline() || classification.Risk != RiskNormal ||
+		classification.Difficulty != DifficultyMedium || calls.Load() != 1 {
 		t.Fatalf("plan=%+v classification=%+v analyzer_calls=%d", plan.Snapshot(), classification, calls.Load())
+	}
+}
+
+func TestAnalyzerRequiresDifficulty(t *testing.T) {
+	config := routingConfig(false)
+	analyzer := newAnalyzer(resolveRoutingRuntime(t, config), nil)
+	if _, err := analyzer.parseClassification(`{"task_type":"simple","risk":"normal","confidence_bps":9100}`); err == nil {
+		t.Fatal("accepted classification without difficulty")
+	}
+	classification, err := analyzer.parseClassification(`{"task_type":"simple","difficulty":"hard","risk":"normal","confidence_bps":9100}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if classification.Difficulty != DifficultyHard {
+		t.Fatalf("classification=%+v", classification)
+	}
+}
+
+func TestAnalyzerUsesForcedClassificationToolAcrossProtocols(t *testing.T) {
+	analyzer := newAnalyzer(routingRuntime(t, false), nil)
+	classification := `{"task_type":"simple","difficulty":"medium","risk":"normal","confidence_bps":9100}`
+	tests := []struct {
+		name     string
+		request  Request
+		response string
+	}{
+		{
+			name:     "anthropic",
+			request:  autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"compare"}]}`),
+			response: `{"content":[{"type":"tool_use","name":"llm_proxy_route_classification","input":` + classification + `}]}`,
+		},
+		{
+			name:     "chat completions",
+			request:  autoOpenAIRequest(t, "/v1/chat/completions", `{"model":"auto","max_completion_tokens":1000,"messages":[{"role":"user","content":"compare"}]}`),
+			response: `{"choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"llm_proxy_route_classification","arguments":` + mustJSON(t, classification) + `}}]}}]}`,
+		},
+		{
+			name:     "responses",
+			request:  autoOpenAIRequest(t, "/v1/responses", `{"model":"auto","max_output_tokens":1000,"input":"compare"}`),
+			response: `{"output":[{"type":"function_call","name":"llm_proxy_route_classification","arguments":` + mustJSON(t, classification) + `}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, _, err := analyzer.buildRequest(tt.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(body, []byte(`"llm_proxy_route_classification"`)) ||
+				!bytes.Contains(body, []byte(`"tool_choice"`)) {
+				t.Fatalf("analyzer request does not force classification tool: %s", body)
+			}
+			payload, err := analyzerResponseText(tt.request.Operation, []byte(tt.response))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := analyzer.parseClassification(payload)
+			if err != nil || got.TaskType != "simple" || got.Difficulty != DifficultyMedium ||
+				got.Risk != RiskNormal || got.ConfidenceBPS != 9100 {
+				t.Fatalf("classification=%+v err=%v payload=%s", got, err, payload)
+			}
+		})
 	}
 }
 
@@ -162,7 +239,7 @@ func TestEngineCallsAnalyzerOnlyForUncertainRequests(t *testing.T) {
 			t.Errorf("analyzer request=%s", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9100}"}]}`)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9100}"}]}`)
 	}))
 	defer server.Close()
 
@@ -204,9 +281,87 @@ func TestEngineCallsAnalyzerOnlyForUncertainRequests(t *testing.T) {
 	}
 }
 
+func TestEngineSessionPreferenceSkipsAnalyzerButHardRulesStillOverride(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		analyzerCalls.Add(1)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9100}"}]}`)
+	}))
+	defer server.Close()
+
+	config := routingConfig(false)
+	config.Upstream = server.URL
+	runtime := resolveRoutingRuntime(t, config)
+	engine, err := NewEngine(runtime, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	preference := SessionPreference{
+		TaskType: "simple", RouteID: "balanced", Model: "fast",
+		MinQualityScoreBPS: 9200, Strategy: runtime.AutoRouting.Strategy.Name,
+	}
+
+	t.Run("ordinary follow-up", func(t *testing.T) {
+		budget, ctx, cancel := engine.NewAttemptBudget(context.Background())
+		defer cancel()
+		request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"继续比较迁移方案的第二阶段"}]}`)
+		plan, classification, err := engine.RouteWithPreference(ctx, nil, request, budget, preference)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Model() != "fast" || classification.Source != ClassificationSourceSession ||
+			classification.TaskType != "simple" || analyzerCalls.Load() != 0 {
+			t.Fatalf("plan=%+v classification=%+v analyzer_calls=%d", plan.Snapshot(), classification, analyzerCalls.Load())
+		}
+	})
+
+	t.Run("hard risk on a later turn", func(t *testing.T) {
+		budget, ctx, cancel := engine.NewAttemptBudget(context.Background())
+		defer cancel()
+		request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"tools":[{"name":"deploy"}],"messages":[{"role":"user","content":"deploy to production"}]}`)
+		plan, classification, err := engine.RouteWithPreference(ctx, nil, request, budget, preference)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Model() != "strong" || classification.Source != ClassificationSourceRule ||
+			classification.Risk != RiskHigh || analyzerCalls.Load() != 0 {
+			t.Fatalf("plan=%+v classification=%+v analyzer_calls=%d", plan.Snapshot(), classification, analyzerCalls.Load())
+		}
+	})
+}
+
+func TestEngineIgnoresSessionPreferenceFromAnotherStrategy(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		analyzerCalls.Add(1)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9100}"}]}`)
+	}))
+	defer server.Close()
+	config := routingConfig(false)
+	config.Upstream = server.URL
+	runtime := resolveRoutingRuntime(t, config)
+	engine, err := NewEngine(runtime, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, ctx, cancel := engine.NewAttemptBudget(context.Background())
+	defer cancel()
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"继续比较迁移方案"}]}`)
+	plan, classification, err := engine.RouteWithPreference(ctx, nil, request, budget, SessionPreference{
+		TaskType: "simple", RouteID: "balanced", Model: "fast",
+		MinQualityScoreBPS: 9200, Strategy: "old-strategy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Model() != "fast" || classification.Source != ClassificationSourceAnalyzer || analyzerCalls.Load() != 1 {
+		t.Fatalf("plan=%+v classification=%+v analyzer_calls=%d", plan.Snapshot(), classification, analyzerCalls.Load())
+	}
+}
+
 func TestAnalyzerReservesConstructedPromptCostAndRecordsUsageActual(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9100}"}],"usage":{"input_tokens":12,"output_tokens":4}}`)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9100}"}],"usage":{"input_tokens":12,"output_tokens":4}}`)
 	}))
 	defer server.Close()
 	config := routingConfig(false)
@@ -247,7 +402,7 @@ func TestEngineFallsBackToStrongBaselineOnAnalyzerFailureOrLowConfidence(t *test
 	}{
 		{name: "upstream failure", status: http.StatusBadGateway, body: `{"error":"failed"}`},
 		{name: "invalid response", status: http.StatusOK, body: `{"content":[{"type":"text","text":"not json"}]}`},
-		{name: "low confidence", status: http.StatusOK, body: `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":6999}"}]}`},
+		{name: "low confidence", status: http.StatusOK, body: `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":6999}"}]}`},
 	}
 
 	for _, tt := range tests {
@@ -273,8 +428,19 @@ func TestEngineFallsBackToStrongBaselineOnAnalyzerFailureOrLowConfidence(t *test
 				t.Fatal(err)
 			}
 			if plan.Model() != "strong" || !plan.UsesStrongBaseline() ||
-				classification.Source != ClassificationSourceFallback {
+				classification.Source != ClassificationSourceFallback ||
+				classification.Risk != RiskUnknown || plan.Reason() != "task analyzer fallback" {
 				t.Fatalf("plan=%+v classification=%+v", plan.Snapshot(), classification)
+			}
+			if tt.name == "low confidence" {
+				if classification.ConfidenceBPS != 6999 ||
+					!slices.Equal(classification.ReasonCodes, []string{"task_analyzer_low_confidence"}) {
+					t.Fatalf("low-confidence fallback=%+v", classification)
+				}
+			} else if classification.ConfidenceBPS != 0 ||
+				len(classification.ReasonCodes) != 1 ||
+				!strings.HasPrefix(classification.ReasonCodes[0], "task_analyzer_") {
+				t.Fatalf("failed fallback=%+v", classification)
 			}
 		})
 	}
@@ -505,7 +671,7 @@ func TestAnalyzerPromptContainsFactsButNotCredentials(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		analyzerBody = string(body)
-		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9000}"}]}`)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9000}"}]}`)
 	}))
 	defer server.Close()
 	config := routingConfig(false)

@@ -2,15 +2,16 @@
 
 ## Models.dev
 
-The generated browser model catalog at
-`internal/admin/ui/static/model-catalog-data.js` is derived from
+The generated model catalogs at
+`internal/admin/ui/static/model-catalog-data.js` and
+`internal/modelcatalog/data/catalog.json` are derived from
 [Models.dev](https://github.com/anomalyco/models.dev), retrieved on
-2026-07-30. Snapshot content revision:
-`702364835161f28245a28fc91b89d91b700fc83f55229d6a0f9003c346f8afb3`.
+2026-08-01. Snapshot content revision:
+`10aa14b29548a7df4ebe9e1894e628ec5e632a11a4919819c5882151ffc041f9`.
 The source feed SHA-256 values are
-`dfdc776d6cbbbf791dc0236319589f93db442ae798260a934ccde00c0c544623`
+`1db6fdecc364489bb0532c375a38e34df6db0b8e1cedb2e4a18c42fe7bb075b6`
 for `models.json` and
-`240bfb07757e35c3ddb3b05bb283c88a234bde12ab7f3c5791f4e83f3b2c5b04`
+`b71c129490bce686779382639f7450524eb85e5ce138893af0e3a25ed772147d`
 for `api.json`.
 Models.dev is licensed under the MIT License.
 

@@ -17,13 +17,73 @@ test("intelligent routing explains that models must be recorded first", () => {
   });
 });
 
-test("disabled intelligent routing names missing model prices before activation", () => {
+test("intelligent routing requires two recorded models and two participants", () => {
+  const oneModel = readyDraft();
+  oneModel.config.models = [routingModel("fast")];
+  let routing = profileReadiness(oneModel, { saved: true }).sections.routing;
+  assert.equal(routing.state, "blocked");
+  assert.match(routing.reasons.join(" "), /至少需要两个不同模型/);
+
+  const oneParticipant = readyDraft();
+  oneParticipant.config.models = [routingModel("fast"), routingModel("strong")];
+  oneParticipant.config.auto_routing.enabled = true;
+  oneParticipant.config.auto_routing.participants = ["strong"];
+  oneParticipant.config.auto_routing.strong_baseline_model = "strong";
+  oneParticipant.config.auto_routing.task_analyzer_model = "fast";
+  routing = profileReadiness(oneParticipant, { saved: true }).sections.routing;
+  assert.equal(routing.state, "blocked");
+  assert.match(routing.reasons.join(" "), /至少选择两个不同的参与模型/);
+});
+
+test("self escalation requires a model switch in the strategy budget", () => {
+  const draft = readyDraft();
+  draft.config.models = [routingModel("fast"), routingModel("strong")];
+  draft.config.auto_routing.enabled = true;
+  draft.config.auto_routing.participants = ["fast", "strong"];
+  draft.config.auto_routing.strong_baseline_model = "strong";
+  draft.config.auto_routing.task_analyzer_model = "fast";
+  draft.config.auto_routing.self_escalation = { enabled: true };
+  draft.config.auto_routing.strategy.budget.max_model_switches = 0;
+  const readiness = profileReadiness(draft, { saved: true });
+  assert.equal(readiness.sections.routing.state, "blocked");
+  assert.match(readiness.sections.routing.reasons.join(" "), /主动升级.*模型切换/);
+});
+
+test("self escalation requires tool support only for routed non-baseline models", () => {
+  const draft = readyDraft();
+  draft.config.models = [
+    routingModel("fast", { supports_tools: false }),
+    routingModel("unused", { supports_tools: false }),
+    routingModel("strong", { supports_tools: false }),
+  ];
+  draft.config.auto_routing.enabled = true;
+  draft.config.auto_routing.participants = ["fast", "unused", "strong"];
+  draft.config.auto_routing.strong_baseline_model = "strong";
+  draft.config.auto_routing.task_analyzer_model = "unused";
+  draft.config.auto_routing.self_escalation = { enabled: true };
+  draft.config.auto_routing.strategy.routes = [{
+    id: "balanced",
+    candidates: [{ model: "fast" }, { model: "strong" }],
+  }];
+
+  let readiness = profileReadiness(draft, { saved: true }).sections.routing;
+  assert.equal(readiness.state, "blocked");
+  assert.match(readiness.reasons.join(" "), /fast.*工具调用/);
+  assert.doesNotMatch(readiness.reasons.join(" "), /unused.*工具调用/);
+  assert.doesNotMatch(readiness.reasons.join(" "), /strong.*工具调用/);
+
+  draft.config.models[0].supports_tools = true;
+  readiness = profileReadiness(draft, { saved: true }).sections.routing;
+  assert.equal(readiness.state, "ready");
+});
+
+test("disabled intelligent routing blocks until two models are recorded", () => {
   const draft = readyDraft();
   draft.config.models = [{ id: "freeform" }];
 
   const routing = profileReadiness(draft, { saved: true }).sections.routing;
-  assert.equal(routing.state, "attention");
-  assert.match(routing.reasons[0], /价格/);
+  assert.equal(routing.state, "blocked");
+  assert.match(routing.reasons[0], /至少需要两个不同模型/);
   assert.equal(routing.action.href, "/_admin/profiles/7/models");
 });
 
@@ -123,7 +183,7 @@ test("model references name every dependent feature and field", () => {
     },
     {
       section: "reliability",
-      label: "Target backup",
+      label: "上游节点 backup",
       path: "config.targets[0].models[0]",
     },
   ]);
@@ -138,14 +198,16 @@ function readyDraft() {
   return draft;
 }
 
-function routingModel(id) {
+function routingModel(id, overrides = {}) {
   return {
     id,
     context_window: 128000,
     max_output_tokens: 16000,
     supports_vision: true,
+    supports_tools: true,
     input_price_micro_usd_per_million: 1000000,
     output_price_micro_usd_per_million: 4000000,
+    ...overrides,
   };
 }
 

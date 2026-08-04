@@ -30,6 +30,8 @@ type SessionBinding struct {
 	ProfileID       int64
 	Route           string
 	Purpose         string
+	TaskType        string
+	Difficulty      Difficulty
 	Model           string
 	QualityScoreBPS int
 	Strategy        string
@@ -67,11 +69,10 @@ func (s *SessionStore) Key(
 	headers http.Header,
 	rawSessionID string,
 	profileID int64,
-	route string,
 	purpose string,
 ) (SessionKey, bool) {
 	var empty SessionKey
-	if s == nil || profileID <= 0 || route == "" || purpose == "" ||
+	if s == nil || profileID <= 0 || purpose == "" ||
 		!validRawSessionID(rawSessionID) {
 		return empty, false
 	}
@@ -82,7 +83,6 @@ func (s *SessionStore) Key(
 	mac := hmac.New(sha256.New, s.key)
 	writeSessionPart(mac, rawSessionID)
 	writeSessionPart(mac, fmt.Sprint(profileID))
-	writeSessionPart(mac, route)
 	writeSessionPart(mac, purpose)
 	_, _ = mac.Write(authDomain[:])
 	var key SessionKey
@@ -126,7 +126,7 @@ func (s *SessionStore) Get(
 	var binding SessionBinding
 	var expiresAt string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT profile_id, route_id, purpose, model, quality_score_bps,
+		SELECT profile_id, route_id, purpose, task_type, difficulty, model, quality_score_bps,
 		       strategy_name, expires_at
 		FROM routing_session_bindings
 		WHERE key_hash = ?
@@ -134,6 +134,8 @@ func (s *SessionStore) Get(
 		&binding.ProfileID,
 		&binding.Route,
 		&binding.Purpose,
+		&binding.TaskType,
+		&binding.Difficulty,
 		&binding.Model,
 		&binding.QualityScoreBPS,
 		&binding.Strategy,
@@ -171,7 +173,11 @@ func (s *SessionStore) Bind(
 	if s == nil {
 		return nil
 	}
+	if binding.Difficulty == "" {
+		binding.Difficulty = DifficultyUnknown
+	}
 	if binding.ProfileID <= 0 || binding.Route == "" || binding.Purpose == "" ||
+		binding.TaskType == "" || !validSessionDifficulty(binding.Difficulty) ||
 		binding.Model == "" || binding.Strategy == "" ||
 		binding.QualityScoreBPS < 0 || binding.QualityScoreBPS > 10_000 || ttl <= 0 {
 		return errors.New("routing Session binding is invalid")
@@ -186,24 +192,29 @@ func (s *SessionStore) Bind(
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO routing_session_bindings (
-			key_hash, profile_id, route_id, purpose, model, quality_score_bps,
+			key_hash, profile_id, route_id, purpose, task_type, difficulty, model, quality_score_bps,
 			strategy_name, created_at, updated_at, expires_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(key_hash) DO UPDATE SET
 			profile_id = excluded.profile_id,
 			route_id = excluded.route_id,
 			purpose = excluded.purpose,
+			task_type = excluded.task_type,
+			difficulty = excluded.difficulty,
 			model = excluded.model,
 			quality_score_bps = excluded.quality_score_bps,
 			strategy_name = excluded.strategy_name,
 			updated_at = excluded.updated_at,
 			expires_at = excluded.expires_at
-		WHERE excluded.quality_score_bps >= routing_session_bindings.quality_score_bps
+		WHERE excluded.strategy_name <> routing_session_bindings.strategy_name
+		   OR excluded.quality_score_bps >= routing_session_bindings.quality_score_bps
 	`,
 		key[:],
 		binding.ProfileID,
 		binding.Route,
 		binding.Purpose,
+		binding.TaskType,
+		binding.Difficulty,
 		binding.Model,
 		binding.QualityScoreBPS,
 		binding.Strategy,
@@ -215,6 +226,15 @@ func (s *SessionStore) Bind(
 		return fmt.Errorf("save routing Session binding: %w", err)
 	}
 	return nil
+}
+
+func validSessionDifficulty(value Difficulty) bool {
+	switch value {
+	case DifficultyUnknown, DifficultyEasy, DifficultyMedium, DifficultyHard:
+		return true
+	default:
+		return false
+	}
 }
 
 func formatSessionTime(value time.Time) string {

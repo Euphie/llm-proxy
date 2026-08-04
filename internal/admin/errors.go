@@ -14,6 +14,8 @@ import (
 	"github.com/Euphie/llm-proxy/internal/strategy"
 )
 
+var errModelCatalogUnavailable = errors.New("model catalog service is unavailable")
+
 type errorResponse struct {
 	Error struct {
 		Code    string            `json:"code"`
@@ -160,6 +162,13 @@ func (a *API) writeDomainError(w http.ResponseWriter, r *http.Request, err error
 	case errors.Is(err, profile.ErrInvalidConfig),
 		errors.Is(err, profile.ErrInvalidSlug),
 		errors.Is(err, profile.ErrInvalidProtocol):
+		a.logger.WarnContext(
+			r.Context(),
+			"admin profile validation failed",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"error", err,
+		)
 		writeError(
 			w,
 			http.StatusUnprocessableEntity,

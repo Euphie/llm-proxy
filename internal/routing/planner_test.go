@@ -38,6 +38,106 @@ func TestPlannerRejectsGraphThatDoesNotFitBudgetRemainingAfterAnalyzer(t *testin
 	}
 }
 
+func TestPlannerZeroCostLimitAllowsPositiveCostCallGraph(t *testing.T) {
+	config := routingConfig(false)
+	config.AutoRouting.Strategy.Budget.MaxWorstCaseCostMicroUSD = 0
+	runtime := resolveRoutingRuntime(t, config)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatalf("plan with unlimited cost budget: %v", err)
+	}
+	if plan.WorstCaseCostMicroUSD() <= 0 {
+		t.Fatalf("worst-case cost=%d, want positive", plan.WorstCaseCostMicroUSD())
+	}
+}
+
+func TestPlannerUsesCacheWritePriceForHardBudgetButNormalPriceWithoutHistory(t *testing.T) {
+	config := routingConfig(false)
+	cacheRead := int64(10_000)
+	cacheWrite := int64(2_000_000)
+	config.Models[0].CacheReadPriceMicroUSDPerMillion = &cacheRead
+	config.Models[0].CacheWritePriceMicroUSDPerMillion = &cacheWrite
+	runtime := resolveRoutingRuntime(t, config)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := runtime.Models["fast"]
+	wantExpected := estimateCallCost(request.Facts.EstimatedInputTokens, 1000, model)
+	wantHard := estimateHardCallCost(request.Facts.EstimatedInputTokens, 1000, model)
+	if plan.Model() != "fast" || plan.EstimatedCostMicroUSD() != wantExpected ||
+		plan.AnswerCallCostMicroUSD() != wantHard || wantHard <= wantExpected {
+		t.Fatalf("model=%q expected=%d want_expected=%d hard=%d want_hard=%d",
+			plan.Model(), plan.EstimatedCostMicroUSD(), wantExpected,
+			plan.AnswerCallCostMicroUSD(), wantHard)
+	}
+}
+
+func TestPlannerExpectedCostUsesHotSessionCacheAndColdSwitchWrite(t *testing.T) {
+	config := routingConfig(false)
+	fastRead := int64(10_000)
+	fastWrite := int64(2_000_000)
+	config.Models[0].CacheReadPriceMicroUSDPerMillion = &fastRead
+	config.Models[0].CacheWritePriceMicroUSDPerMillion = &fastWrite
+	runtime := resolveRoutingRuntime(t, config)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+	metrics := map[string]CacheMetrics{
+		"fast": {
+			Samples: 20, UncachedInputTokens: 1000,
+			CacheReadTokens: 8000, CacheWriteTokens: 1000,
+		},
+	}
+	hotPlan, err := planner.PlanWithPreference(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceSession,
+	}, SessionPreference{
+		TaskType: "simple", RouteID: "balanced", Model: "fast",
+		MinQualityScoreBPS: 9000, Strategy: runtime.AutoRouting.Strategy.Name,
+		CacheMetrics: metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coldPlan, err := planner.PlanWithPreference(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	}, SessionPreference{CacheMetrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hotPlan.EstimatedCostMicroUSD() >= coldPlan.EstimatedCostMicroUSD() {
+		t.Fatalf("hot expected=%d cold expected=%d", hotPlan.EstimatedCostMicroUSD(), coldPlan.EstimatedCostMicroUSD())
+	}
+	if hotPlan.AnswerCallCostMicroUSD() != coldPlan.AnswerCallCostMicroUSD() {
+		t.Fatalf("hard costs differ: hot=%d cold=%d", hotPlan.AnswerCallCostMicroUSD(), coldPlan.AnswerCallCostMicroUSD())
+	}
+}
+
 func TestPlannerWorstCaseIncludesVisionRetriesForEveryCompositeModelAttempt(t *testing.T) {
 	config := routingConfig(true)
 	unsupported := false
@@ -658,6 +758,7 @@ func TestPlannerKeepsSessionModelAndOnlyMovesToEqualOrHigherQuality(t *testing.T
 
 func TestPlannerUpgradesSessionWhenBoundModelCannotSatisfyRequest(t *testing.T) {
 	config := routingConfig(false)
+	config.AutoRouting.TaskAnalyzerModel = "strong"
 	unsupported := false
 	config.Models[0].SupportsTools = &unsupported
 	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
@@ -703,6 +804,28 @@ func TestPlannerFreezesPrimaryAndStrongFallbackAttempts(t *testing.T) {
 	attempts[0] = attempts[1]
 	if got := plan.ModelAttempts()[0].Model(); got != "fast" {
 		t.Fatalf("execution plan followed caller mutation: %q", got)
+	}
+}
+
+func TestExecutionPlanFindsOnlyStrictlyStrongerEscalationAttempt(t *testing.T) {
+	runtime := routingRuntime(t, false)
+	planner, err := NewPlanner(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := autoAnthropicRequest(t, `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`)
+	plan, err := planner.Plan(request, Classification{
+		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, ok := plan.NextStrongerModelAttempt(0)
+	if !ok || index != 1 || plan.ModelAttempts()[index].Model() != "strong" {
+		t.Fatalf("index=%d ok=%v attempts=%+v", index, ok, plan.Snapshot().ModelAttempts)
+	}
+	if _, ok := plan.NextStrongerModelAttempt(index); ok {
+		t.Fatal("strongest attempt unexpectedly has an escalation target")
 	}
 }
 
@@ -821,6 +944,11 @@ func TestPlannerDoesNotEvaluateHighRiskOrNonSavingPairs(t *testing.T) {
 		t.Fatal("high-risk request received an evaluation pair")
 	}
 	if _, ok := planner.EvaluationPair(request, Classification{
+		TaskType: "unknown", Risk: RiskUnknown, Source: ClassificationSourceFallback,
+	}, "strong"); ok {
+		t.Fatal("analyzer fallback received an evaluation pair")
+	}
+	if _, ok := planner.EvaluationPair(request, Classification{
 		TaskType: "simple", Risk: RiskNormal, Source: ClassificationSourceRule,
 	}, "strong"); ok {
 		t.Fatal("non-saving candidate received an evaluation pair")
@@ -833,31 +961,36 @@ func TestPlannerFiltersCapabilitiesAndQuality(t *testing.T) {
 		mutate func(*profile.Config)
 		body   string
 		model  string
+		reason string
 	}{
 		{
 			name: "tool capability",
 			mutate: func(config *profile.Config) {
+				config.AutoRouting.TaskAnalyzerModel = "strong"
 				unsupported := false
 				config.Models[0].SupportsTools = &unsupported
 			},
-			body:  `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":"edit a file"}]}`,
-			model: "strong",
+			body:   `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":"edit a file"}]}`,
+			model:  "strong",
+			reason: "tools_not_supported",
 		},
 		{
 			name: "structured output capability",
 			mutate: func(config *profile.Config) {
 				config.Models[0].SupportsStructuredOutput = nil
 			},
-			body:  `{"model":"auto","max_tokens":1000,"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":"return json"}]}`,
-			model: "strong",
+			body:   `{"model":"auto","max_tokens":1000,"output_config":{"format":{"type":"json_schema"}},"messages":[{"role":"user","content":"return json"}]}`,
+			model:  "strong",
+			reason: "structured_output_not_supported",
 		},
 		{
 			name: "quality gate",
 			mutate: func(config *profile.Config) {
 				config.AutoRouting.Strategy.Routes[0].Candidates[0].QualityScoreBPS = 8999
 			},
-			body:  `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`,
-			model: "strong",
+			body:   `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`,
+			model:  "strong",
+			reason: "quality_below_route_minimum",
 		},
 		{
 			name: "context window",
@@ -867,8 +1000,9 @@ func TestPlannerFiltersCapabilitiesAndQuality(t *testing.T) {
 				config.Models[0].ContextWindow = &small
 				config.Models[0].MaxOutputTokens = &output
 			},
-			body:  `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`,
-			model: "strong",
+			body:   `{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`,
+			model:  "strong",
+			reason: "requested_output_exceeds_model_limit",
 		},
 	}
 
@@ -889,6 +1023,13 @@ func TestPlannerFiltersCapabilitiesAndQuality(t *testing.T) {
 			}
 			if plan.Model() != tt.model {
 				t.Fatalf("model=%q, want %q; plan=%+v", plan.Model(), tt.model, plan.Snapshot())
+			}
+			decisions := plan.CandidateDecisions()
+			if len(decisions) < 2 || decisions[0].Model != "fast" ||
+				decisions[0].Decision != "rejected" || decisions[0].Reason != tt.reason ||
+				decisions[len(decisions)-1].Model != "strong" ||
+				decisions[len(decisions)-1].Decision != "selected" {
+				t.Fatalf("candidate decisions=%+v, want fast rejected by %q then strong selected", decisions, tt.reason)
 			}
 		})
 	}
@@ -985,6 +1126,34 @@ func TestPlannerFreezesOnlyTargetsServingAnswerAndVisionModels(t *testing.T) {
 	targets := plan.ModelAttempts()[0].Targets()
 	if len(targets) != 2 || targets[0].ID() != profile.PrimaryTargetID || targets[1].ID() != "composite" {
 		t.Fatalf("composite targets=%+v, want primary and composite", targets)
+	}
+}
+
+func TestRouteSpecificityIncludesDifficulty(t *testing.T) {
+	config := routingConfig(false)
+	config.AutoRouting.Strategy.TaskRoutes = []profile.TaskRouteConfig{
+		{TaskType: "coding", Difficulty: "hard", Route: "strong"},
+		{TaskType: "coding", Route: "balanced"},
+		{Difficulty: "easy", Route: "strong"},
+	}
+	planner, err := NewPlanner(resolveRoutingRuntime(t, config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		task       string
+		difficulty Difficulty
+		want       string
+	}{
+		{task: "coding", difficulty: DifficultyHard, want: "strong"},
+		{task: "coding", difficulty: DifficultyEasy, want: "balanced"},
+		{task: "general", difficulty: DifficultyEasy, want: "strong"},
+		{task: "unknown", difficulty: DifficultyUnknown, want: "balanced"},
+	}
+	for _, tt := range tests {
+		if got := planner.RouteID(Classification{TaskType: tt.task, Difficulty: tt.difficulty}); got != tt.want {
+			t.Fatalf("RouteID(%q, %q)=%q, want %q", tt.task, tt.difficulty, got, tt.want)
+		}
 	}
 }
 

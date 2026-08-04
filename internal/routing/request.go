@@ -37,6 +37,8 @@ type RequestFacts struct {
 	ImageSources             []llmrequest.ImageSourceKind `json:"image_sources,omitempty"`
 	HasTools                 bool                         `json:"has_tools"`
 	ActualToolOperations     []string                     `json:"actual_tool_operations,omitempty"`
+	HistoricalToolOperations []string                     `json:"historical_tool_operations,omitempty"`
+	ForcedToolOperation      string                       `json:"forced_tool_operation,omitempty"`
 	RequiresStructuredOutput bool                         `json:"requires_structured_output"`
 	Stream                   bool                         `json:"stream"`
 }
@@ -48,6 +50,7 @@ type Request struct {
 
 	root           map[string]json.RawMessage
 	evaluationText string
+	latestUserText string
 }
 
 func RequestedModel(body []byte) (string, bool) {
@@ -97,11 +100,20 @@ func ParseAutoRequest(
 	}
 
 	return Request{
-		Operation:      operation,
-		Model:          model,
-		Facts:          extractFacts(operation, root, estimatedTokens(estimationJSON), images, document.ActualToolOperations()),
+		Operation: operation,
+		Model:     model,
+		Facts: extractFacts(
+			operation,
+			root,
+			estimatedTokens(estimationJSON),
+			images,
+			document.ActualToolOperations(),
+			document.HistoricalToolOperations(),
+			document.ForcedToolOperation(),
+		),
 		root:           cloneRoot(root),
 		evaluationText: boundedRoutingText(document.Texts()),
+		latestUserText: boundedRoutingText(document.LatestUserTexts()),
 	}, nil
 }
 
@@ -137,6 +149,10 @@ func (r Request) EvaluationText() string {
 	return r.routingText()
 }
 
+func (r Request) LatestUserText() string {
+	return r.latestUserText
+}
+
 func (r Request) routingText() string {
 	return r.evaluationText
 }
@@ -167,6 +183,8 @@ func extractFacts(
 	estimatedInputTokens int,
 	images []llmrequest.Image,
 	actualToolOperations []string,
+	historicalToolOperations []string,
+	forcedToolOperation string,
 ) RequestFacts {
 	imageCount := len(images)
 	facts := RequestFacts{
@@ -176,7 +194,11 @@ func extractFacts(
 		ImageSources:         make([]llmrequest.ImageSourceKind, imageCount),
 		HasTools:             nonEmptyArray(root["tools"]),
 		ActualToolOperations: append([]string(nil), actualToolOperations...),
-		Stream:               boolValue(root["stream"]),
+		HistoricalToolOperations: append(
+			[]string(nil), historicalToolOperations...,
+		),
+		ForcedToolOperation: forcedToolOperation,
+		Stream:              boolValue(root["stream"]),
 	}
 	for index, image := range images {
 		facts.ImageSources[index] = image.SourceKind

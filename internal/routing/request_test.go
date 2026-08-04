@@ -59,6 +59,29 @@ func TestTokenEstimateKeepsOrdinaryToolSchemaBytes(t *testing.T) {
 	}
 }
 
+func TestRequestExposesLatestUserEvidence(t *testing.T) {
+	request := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":512,
+		"tool_choice":{"type":"tool","name":"deploy_production"},
+		"messages":[
+			{"role":"user","content":"旧问题"},
+			{"role":"assistant","content":[{"type":"tool_use","name":"shell_exec","input":{}}]},
+			{"role":"user","content":"继续分析"}
+		]
+	}`)
+
+	if request.LatestUserText() != "继续分析" {
+		t.Fatalf("latest user text=%q", request.LatestUserText())
+	}
+	if len(request.Facts.HistoricalToolOperations) != 1 ||
+		request.Facts.HistoricalToolOperations[0] != "shell_exec" {
+		t.Fatalf("historical operations=%v", request.Facts.HistoricalToolOperations)
+	}
+	if request.Facts.ForcedToolOperation != "deploy_production" {
+		t.Fatalf("forced operation=%q", request.Facts.ForcedToolOperation)
+	}
+}
+
 func mustJSON(t *testing.T, value string) string {
 	t.Helper()
 	body, err := json.Marshal(value)
@@ -319,6 +342,123 @@ func TestRequestWithModelNonStreamingKeepsOriginalImmutable(t *testing.T) {
 	}
 	if !request.Facts.Stream || request.Model != AutoModel {
 		t.Fatalf("original request changed: %+v", request)
+	}
+}
+
+func TestRequestWithSelfEscalationInjectsProtocolNativeHiddenTool(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol profile.Protocol
+		path     string
+		body     string
+		promptAt string
+		toolName func(map[string]json.RawMessage) string
+	}{
+		{
+			name: "anthropic messages", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body:     `{"model":"auto","system":"caller policy","messages":[{"role":"user","content":"analyze"}]}`,
+			promptAt: "system",
+			toolName: func(root map[string]json.RawMessage) string {
+				var tools []struct {
+					Name string `json:"name"`
+				}
+				_ = json.Unmarshal(root["tools"], &tools)
+				return tools[len(tools)-1].Name
+			},
+		},
+		{
+			name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions",
+			body:     `{"model":"auto","messages":[{"role":"user","content":"analyze"}]}`,
+			promptAt: "messages",
+			toolName: func(root map[string]json.RawMessage) string {
+				var tools []struct {
+					Function struct {
+						Name string `json:"name"`
+					} `json:"function"`
+				}
+				_ = json.Unmarshal(root["tools"], &tools)
+				return tools[len(tools)-1].Function.Name
+			},
+		},
+		{
+			name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
+			body:     `{"model":"auto","instructions":"caller policy","input":"analyze"}`,
+			promptAt: "instructions",
+			toolName: func(root map[string]json.RawMessage) string {
+				var tools []struct {
+					Name string `json:"name"`
+				}
+				_ = json.Unmarshal(root["tools"], &tools)
+				return tools[len(tools)-1].Name
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request, err := ParseAutoRequest(
+				tt.protocol, http.MethodPost, tt.path, "application/json", []byte(tt.body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rewritten, injected, err := request.WithModelAndSelfEscalation("fast")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]json.RawMessage
+			if err := json.Unmarshal(rewritten, &root); err != nil {
+				t.Fatal(err)
+			}
+			if !injected || tt.toolName(root) != SelfEscalationToolName ||
+				!bytes.Contains(root[tt.promptAt], []byte("before producing any answer content")) {
+				t.Fatalf("injected=%v body=%s", injected, rewritten)
+			}
+			var model string
+			_ = json.Unmarshal(root["model"], &model)
+			if model != "fast" {
+				t.Fatalf("model=%q body=%s", model, rewritten)
+			}
+		})
+	}
+}
+
+func TestRequestSelfEscalationDoesNotOverrideCallerToolControl(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol profile.Protocol
+		path     string
+		body     string
+	}{
+		{
+			name: "reserved Anthropic tool name", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","tools":[{"name":"` + SelfEscalationToolName + `","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"analyze"}]}`,
+		},
+		{
+			name: "Chat tool choice none", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions",
+			body: `{"model":"auto","tool_choice":"none","messages":[{"role":"user","content":"analyze"}]}`,
+		},
+		{
+			name: "Responses forced caller tool", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
+			body: `{"model":"auto","tool_choice":{"type":"function","name":"weather"},"input":"analyze"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request, err := ParseAutoRequest(
+				tt.protocol, http.MethodPost, tt.path, "application/json", []byte(tt.body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rewritten, injected, err := request.WithModelAndSelfEscalation("fast")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if injected || bytes.Contains(rewritten, []byte("before producing any answer content")) {
+				t.Fatalf("injected=%v body=%s", injected, rewritten)
+			}
+		})
 	}
 }
 

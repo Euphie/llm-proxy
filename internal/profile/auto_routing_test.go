@@ -22,6 +22,7 @@ func TestResolveRiskPolicyDefaultsAndExplicitEmptyLists(t *testing.T) {
 	}
 
 	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
+		Version:                 RiskPolicyVersion2,
 		SensitiveTextPatterns:   []string{},
 		SensitiveToolPatterns:   []string{},
 		LongContextThresholdBPS: 6200,
@@ -39,8 +40,32 @@ func TestResolveRiskPolicyDefaultsAndExplicitEmptyLists(t *testing.T) {
 	}
 }
 
+func TestRiskPolicyV2DefaultsIgnoreUnversionedLegacyRules(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
+		SensitiveTextPatterns: []string{"edit the file", "shell"},
+		SensitiveToolPatterns: []string{"exec", "apply_patch"},
+	}
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AutoRouting.RiskPolicy.Version != 2 {
+		t.Fatalf("risk version=%d", runtime.AutoRouting.RiskPolicy.Version)
+	}
+	for _, pattern := range append(
+		append([]string(nil), runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns...),
+		runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns...,
+	) {
+		if pattern == "edit the file" || pattern == "shell" || pattern == "exec" || pattern == "apply_patch" {
+			t.Fatalf("legacy broad pattern remained active: %q", pattern)
+		}
+	}
+}
+
 func TestRiskPolicyConfigJSONPreservesExplicitEmptyListsAndOrder(t *testing.T) {
 	want := RiskPolicyConfig{
+		Version:                  RiskPolicyVersion2,
 		SensitiveTextPatterns:    []string{"second", "first"},
 		SensitiveToolPatterns:    []string{},
 		StructuredOutputHighRisk: true,
@@ -62,6 +87,7 @@ func TestRiskPolicyConfigJSONPreservesExplicitEmptyListsAndOrder(t *testing.T) {
 func TestResolveRiskPolicyClonesConfiguredSlices(t *testing.T) {
 	record := validAutoRoutingRecord()
 	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
+		Version:               RiskPolicyVersion2,
 		SensitiveTextPatterns: []string{"original text"},
 		SensitiveToolPatterns: []string{"original_tool"},
 	}
@@ -83,12 +109,12 @@ func TestResolveRiskPolicyRejectsActionableInvalidSettings(t *testing.T) {
 		policy RiskPolicyConfig
 		want   string
 	}{
-		{name: "blank text pattern", policy: RiskPolicyConfig{SensitiveTextPatterns: []string{" "}}, want: "sensitive text pattern 1"},
-		{name: "untrimmed tool pattern", policy: RiskPolicyConfig{SensitiveToolPatterns: []string{" exec"}}, want: "sensitive tool pattern 1"},
-		{name: "duplicate ignoring case", policy: RiskPolicyConfig{SensitiveTextPatterns: []string{"Deploy", "deploy"}}, want: "duplicate"},
-		{name: "too many patterns", policy: RiskPolicyConfig{SensitiveToolPatterns: make([]string, maxRiskPatterns+1)}, want: "at most"},
-		{name: "pattern too long", policy: RiskPolicyConfig{SensitiveTextPatterns: []string{strings.Repeat("x", maxRiskPatternRunes+1)}}, want: "at most"},
-		{name: "threshold above maximum", policy: RiskPolicyConfig{LongContextThresholdBPS: 10001}, want: "between 1 and 10000"},
+		{name: "blank text pattern", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveTextPatterns: []string{" "}}, want: "sensitive text pattern 1"},
+		{name: "untrimmed tool pattern", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveToolPatterns: []string{" exec"}}, want: "sensitive tool pattern 1"},
+		{name: "duplicate ignoring case", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveTextPatterns: []string{"Deploy", "deploy"}}, want: "duplicate"},
+		{name: "too many patterns", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveToolPatterns: make([]string, maxRiskPatterns+1)}, want: "at most"},
+		{name: "pattern too long", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveTextPatterns: []string{strings.Repeat("x", maxRiskPatternRunes+1)}}, want: "at most"},
+		{name: "threshold above maximum", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, LongContextThresholdBPS: 10001}, want: "between 1 and 10000"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,6 +158,56 @@ func TestResolveAutoRoutingContract(t *testing.T) {
 	if !runtime.Models["strong"].HasSupportsTools ||
 		!runtime.Models["strong"].SupportsTools {
 		t.Fatalf("tool capability=%+v", runtime.Models["strong"])
+	}
+}
+
+func TestResolveSelfEscalationRequiresAReservedModelSwitch(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.SelfEscalation.Enabled = true
+	runtime, err := record.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.AutoRouting.SelfEscalation.Enabled {
+		t.Fatalf("self escalation=%+v", runtime.AutoRouting.SelfEscalation)
+	}
+
+	record.Config.AutoRouting.Strategy.Budget.MaxModelSwitches = 0
+	_, err = record.Resolve()
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "self escalation requires") {
+		t.Fatalf("Resolve() error=%v", err)
+	}
+}
+
+func TestResolveSelfEscalationRequiresToolSupportForNonBaselineCandidates(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.SelfEscalation.Enabled = true
+	record.Config.AutoRouting.TaskAnalyzerModel = "strong"
+	unsupported := false
+	record.Config.Models[0].SupportsTools = &unsupported
+
+	_, err := record.Resolve()
+	if !errors.Is(err, ErrInvalidConfig) ||
+		!strings.Contains(err.Error(), `candidate model "fast" must confirm tool support`) {
+		t.Fatalf("Resolve() error=%v", err)
+	}
+
+	record.Config.AutoRouting.Strategy.Routes[0].Candidates =
+		record.Config.AutoRouting.Strategy.Routes[0].Candidates[1:]
+	if _, err := record.Resolve(); err != nil {
+		t.Fatalf("unused participant should not block self escalation: %v", err)
+	}
+}
+
+func TestResolveAutoRoutingRequiresTaskAnalyzerToolSupport(t *testing.T) {
+	record := validAutoRoutingRecord()
+	unsupported := false
+	record.Config.Models[0].SupportsTools = &unsupported
+
+	_, err := record.Resolve()
+	if !errors.Is(err, ErrInvalidConfig) ||
+		!strings.Contains(err.Error(), `task analyzer model "fast" must confirm tool support`) {
+		t.Fatalf("Resolve() error=%v", err)
 	}
 }
 
@@ -311,6 +387,21 @@ func TestResolveAutoRoutingRejectsIncompleteConfiguration(t *testing.T) {
 			name: "no participants",
 			mutate: func(r *Record) {
 				r.Config.AutoRouting.Participants = nil
+			},
+		},
+		{
+			name: "only one recorded model",
+			mutate: func(r *Record) {
+				r.Config.Models = r.Config.Models[:1]
+				r.Config.AutoRouting.Participants = []string{"fast"}
+				r.Config.AutoRouting.StrongBaselineModel = "fast"
+			},
+		},
+		{
+			name: "only one participant",
+			mutate: func(r *Record) {
+				r.Config.AutoRouting.Participants = []string{"strong"}
+				r.Config.AutoRouting.TaskAnalyzerModel = "strong"
 			},
 		},
 		{

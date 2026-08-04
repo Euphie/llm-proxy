@@ -12,6 +12,29 @@ import (
 
 const browserMaxSafeInteger int64 = 9_007_199_254_740_991
 
+func TestModelCapabilityConfigPreservesCachePrices(t *testing.T) {
+	var config ModelCapabilityConfig
+	if err := json.Unmarshal([]byte(`{
+		"id":"cached","supports_vision":false,
+		"cache_read_price_micro_usd_per_million":300000,
+		"cache_write_price_micro_usd_per_million":3750000
+	}`), &config); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(contents, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["cache_read_price_micro_usd_per_million"] != float64(300000) ||
+		got["cache_write_price_micro_usd_per_million"] != float64(3750000) {
+		t.Fatalf("cache prices were not preserved: %s", contents)
+	}
+}
+
 func TestRecordResolveAppliesRuntimeValues(t *testing.T) {
 	record := Record{
 		ID: 7, Slug: "coding", DisplayName: "Coding", Enabled: true,

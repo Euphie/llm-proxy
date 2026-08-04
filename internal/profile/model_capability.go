@@ -6,31 +6,37 @@ import (
 )
 
 type ModelCapabilityConfig struct {
-	ID                            string `json:"id"`
-	ContextWindow                 *int   `json:"context_window,omitempty"`
-	MaxOutputTokens               *int   `json:"max_output_tokens,omitempty"`
-	SupportsVision                *bool  `json:"supports_vision"`
-	SupportsTools                 *bool  `json:"supports_tools,omitempty"`
-	SupportsStructuredOutput      *bool  `json:"supports_structured_output,omitempty"`
-	InputPriceMicroUSDPerMillion  *int64 `json:"input_price_micro_usd_per_million,omitempty"`
-	OutputPriceMicroUSDPerMillion *int64 `json:"output_price_micro_usd_per_million,omitempty"`
+	ID                                string `json:"id"`
+	ContextWindow                     *int   `json:"context_window,omitempty"`
+	MaxOutputTokens                   *int   `json:"max_output_tokens,omitempty"`
+	SupportsVision                    *bool  `json:"supports_vision"`
+	SupportsTools                     *bool  `json:"supports_tools,omitempty"`
+	SupportsStructuredOutput          *bool  `json:"supports_structured_output,omitempty"`
+	InputPriceMicroUSDPerMillion      *int64 `json:"input_price_micro_usd_per_million,omitempty"`
+	OutputPriceMicroUSDPerMillion     *int64 `json:"output_price_micro_usd_per_million,omitempty"`
+	CacheReadPriceMicroUSDPerMillion  *int64 `json:"cache_read_price_micro_usd_per_million,omitempty"`
+	CacheWritePriceMicroUSDPerMillion *int64 `json:"cache_write_price_micro_usd_per_million,omitempty"`
 }
 
 type ModelCapability struct {
-	ID                            string
-	ContextWindow                 int
-	HasContextWindow              bool
-	MaxOutputTokens               int
-	HasMaxOutputTokens            bool
-	SupportsVision                bool
-	SupportsTools                 bool
-	HasSupportsTools              bool
-	SupportsStructuredOutput      bool
-	HasSupportsStructuredOutput   bool
-	InputPriceMicroUSDPerMillion  int64
-	HasInputPrice                 bool
-	OutputPriceMicroUSDPerMillion int64
-	HasOutputPrice                bool
+	ID                                string
+	ContextWindow                     int
+	HasContextWindow                  bool
+	MaxOutputTokens                   int
+	HasMaxOutputTokens                bool
+	SupportsVision                    bool
+	SupportsTools                     bool
+	HasSupportsTools                  bool
+	SupportsStructuredOutput          bool
+	HasSupportsStructuredOutput       bool
+	InputPriceMicroUSDPerMillion      int64
+	HasInputPrice                     bool
+	OutputPriceMicroUSDPerMillion     int64
+	HasOutputPrice                    bool
+	CacheReadPriceMicroUSDPerMillion  int64
+	HasCacheReadPrice                 bool
+	CacheWritePriceMicroUSDPerMillion int64
+	HasCacheWritePrice                bool
 }
 
 type ModelCatalog map[string]ModelCapability
@@ -77,6 +83,12 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 		if err := validatePrice(config.ID, "output", config.OutputPriceMicroUSDPerMillion); err != nil {
 			return nil, err
 		}
+		if err := validatePrice(config.ID, "cache read", config.CacheReadPriceMicroUSDPerMillion); err != nil {
+			return nil, err
+		}
+		if err := validatePrice(config.ID, "cache write", config.CacheWritePriceMicroUSDPerMillion); err != nil {
+			return nil, err
+		}
 
 		capability := ModelCapability{
 			ID:             config.ID,
@@ -105,6 +117,14 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 		if config.OutputPriceMicroUSDPerMillion != nil {
 			capability.OutputPriceMicroUSDPerMillion = *config.OutputPriceMicroUSDPerMillion
 			capability.HasOutputPrice = true
+		}
+		if config.CacheReadPriceMicroUSDPerMillion != nil {
+			capability.CacheReadPriceMicroUSDPerMillion = *config.CacheReadPriceMicroUSDPerMillion
+			capability.HasCacheReadPrice = true
+		}
+		if config.CacheWritePriceMicroUSDPerMillion != nil {
+			capability.CacheWritePriceMicroUSDPerMillion = *config.CacheWritePriceMicroUSDPerMillion
+			capability.HasCacheWritePrice = true
 		}
 		catalog[config.ID] = capability
 	}

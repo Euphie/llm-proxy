@@ -9,6 +9,32 @@ import (
 
 var ErrInvalidComparison = errors.New("invalid routing evaluation comparison")
 
+type Dimension string
+
+const (
+	DimensionCorrectness          Dimension = "correctness"
+	DimensionCompleteness         Dimension = "completeness"
+	DimensionInstructionFollowing Dimension = "instruction_following"
+	DimensionFormatToolSafety     Dimension = "format_tool_safety"
+	DimensionTaskCompletion       Dimension = "task_completion"
+)
+
+var ReviewDimensions = []Dimension{
+	DimensionCorrectness,
+	DimensionCompleteness,
+	DimensionInstructionFollowing,
+	DimensionFormatToolSafety,
+	DimensionTaskCompletion,
+}
+
+var DimensionWeightsBPS = map[Dimension]int{
+	DimensionCorrectness:          4000,
+	DimensionCompleteness:         2000,
+	DimensionInstructionFollowing: 2000,
+	DimensionFormatToolSafety:     1000,
+	DimensionTaskCompletion:       1000,
+}
+
 type ModelOutput struct {
 	Text                 string
 	CostMicroUSD         int64
@@ -17,19 +43,31 @@ type ModelOutput struct {
 	SevereError          bool
 }
 
+type EscalationObservation string
+
+const (
+	EscalationNotObserved  EscalationObservation = ""
+	EscalationRequested    EscalationObservation = "requested"
+	EscalationNotRequested EscalationObservation = "not_requested"
+)
+
 type ComparisonTask struct {
-	ProfileID      int64
-	Strategy       string
-	Route          string
-	TaskType       string
-	CandidateModel string
-	ReferenceModel string
-	ReviewerModel  string
-	Question       string
-	Candidate      *ModelOutput
-	Reference      *ModelOutput
-	Generate       func(context.Context, string) (ModelOutput, error)
-	Review         func(context.Context, ReviewInput) (ReviewVerdict, error)
+	ProfileID             int64
+	Strategy              string
+	Route                 string
+	TaskType              string
+	Difficulty            string
+	Risk                  string
+	VisionMode            string
+	CandidateModel        string
+	ReferenceModel        string
+	ReviewerModel         string
+	EscalationObservation EscalationObservation
+	Question              string
+	Candidate             *ModelOutput
+	Reference             *ModelOutput
+	Generate              func(context.Context, string) (ModelOutput, error)
+	Review                func(context.Context, ReviewInput) (ReviewVerdict, error)
 }
 
 type ReviewInput struct {
@@ -47,7 +85,7 @@ const (
 )
 
 type ReviewVerdict struct {
-	Winner               Winner
+	Dimensions           map[Dimension]Winner
 	SevereA              bool
 	SevereB              bool
 	ReviewerCostMicroUSD int64
@@ -101,10 +139,14 @@ func (w *Workflow) Evaluate(ctx context.Context, task ComparisonTask) (Result, e
 		case !candidate.DeterministicFailure && reference.DeterministicFailure:
 			outcome = OutcomeCandidateWin
 		}
+		dimensions := make(map[Dimension]Outcome, len(ReviewDimensions))
+		for _, dimension := range ReviewDimensions {
+			dimensions[dimension] = outcome
+		}
 		return Result{
 			SpentMicroUSD: spent,
 			Evidence: evidenceFor(
-				task, *candidate, *reference, outcome,
+				task, *candidate, *reference, outcome, dimensions,
 				candidate.SevereError, candidate.DeterministicFailure, 0,
 			),
 		}, nil
@@ -120,11 +162,11 @@ func (w *Workflow) Evaluate(ctx context.Context, task ComparisonTask) (Result, e
 	if err != nil {
 		return Result{SpentMicroUSD: spent}, err
 	}
-	if verdict.ReviewerCostMicroUSD < 0 ||
-		(verdict.Winner != WinnerA && verdict.Winner != WinnerB && verdict.Winner != WinnerTie) {
+	if verdict.ReviewerCostMicroUSD < 0 || !validDimensionWinners(verdict.Dimensions) {
 		return Result{SpentMicroUSD: spent}, ErrInvalidComparison
 	}
-	outcome := mapWinner(verdict.Winner, swapped)
+	dimensions := mapDimensionWinners(verdict.Dimensions, swapped)
+	outcome := weightedOutcome(dimensions)
 	severeCandidate := verdict.SevereA
 	if swapped {
 		severeCandidate = verdict.SevereB
@@ -132,7 +174,7 @@ func (w *Workflow) Evaluate(ctx context.Context, task ComparisonTask) (Result, e
 	return Result{
 		SpentMicroUSD: spent,
 		Evidence: evidenceFor(
-			task, *candidate, *reference, outcome, severeCandidate, false,
+			task, *candidate, *reference, outcome, dimensions, severeCandidate, false,
 			verdict.ReviewerCostMicroUSD,
 		),
 	}, nil
@@ -141,12 +183,63 @@ func (w *Workflow) Evaluate(ctx context.Context, task ComparisonTask) (Result, e
 func validateComparison(task ComparisonTask) error {
 	if task.ProfileID <= 0 || strings.TrimSpace(task.Strategy) == "" ||
 		strings.TrimSpace(task.Route) == "" || strings.TrimSpace(task.TaskType) == "" ||
+		strings.TrimSpace(task.Difficulty) == "" || strings.TrimSpace(task.Risk) == "" ||
+		strings.TrimSpace(task.VisionMode) == "" ||
 		strings.TrimSpace(task.CandidateModel) == "" || strings.TrimSpace(task.ReferenceModel) == "" ||
 		strings.TrimSpace(task.ReviewerModel) == "" || task.CandidateModel == task.ReferenceModel ||
-		task.Generate == nil || task.Review == nil || (task.Candidate == nil) == (task.Reference == nil) {
+		task.Generate == nil || task.Review == nil || (task.Candidate == nil) == (task.Reference == nil) ||
+		(task.EscalationObservation != EscalationNotObserved &&
+			task.EscalationObservation != EscalationRequested &&
+			task.EscalationObservation != EscalationNotRequested) {
 		return ErrInvalidComparison
 	}
 	return nil
+}
+
+func validDimensionWinners(dimensions map[Dimension]Winner) bool {
+	if len(dimensions) != len(ReviewDimensions) {
+		return false
+	}
+	for _, dimension := range ReviewDimensions {
+		winner, ok := dimensions[dimension]
+		if !ok || (winner != WinnerA && winner != WinnerB && winner != WinnerTie) {
+			return false
+		}
+	}
+	return true
+}
+
+func mapDimensionWinners(dimensions map[Dimension]Winner, swapped bool) map[Dimension]Outcome {
+	result := make(map[Dimension]Outcome, len(ReviewDimensions))
+	for _, dimension := range ReviewDimensions {
+		result[dimension] = mapWinner(dimensions[dimension], swapped)
+	}
+	return result
+}
+
+func weightedOutcome(dimensions map[Dimension]Outcome) Outcome {
+	candidateScore := 0
+	referenceScore := 0
+	for dimension, outcome := range dimensions {
+		weight := DimensionWeightsBPS[dimension]
+		switch outcome {
+		case OutcomeCandidateWin:
+			candidateScore += weight
+		case OutcomeReferenceWin:
+			referenceScore += weight
+		case OutcomeTie:
+			candidateScore += weight / 2
+			referenceScore += weight / 2
+		}
+	}
+	switch {
+	case candidateScore > referenceScore:
+		return OutcomeCandidateWin
+	case referenceScore > candidateScore:
+		return OutcomeReferenceWin
+	default:
+		return OutcomeTie
+	}
 }
 
 func normalizeOutput(output *ModelOutput) {
@@ -179,21 +272,31 @@ func evidenceFor(
 	candidate ModelOutput,
 	reference ModelOutput,
 	outcome Outcome,
+	dimensions map[Dimension]Outcome,
 	severeError bool,
 	deterministicFailure bool,
 	reviewerCost int64,
 ) *Evidence {
+	eligible := task.EscalationObservation != EscalationNotObserved
+	requested := task.EscalationObservation == EscalationRequested
+	candidateInsufficient := outcome == OutcomeReferenceWin || severeError || deterministicFailure
 	return &Evidence{
 		ProfileID: task.ProfileID, Strategy: task.Strategy, Route: task.Route,
-		TaskType: task.TaskType, CandidateModel: task.CandidateModel,
+		TaskType: task.TaskType, Difficulty: task.Difficulty, Risk: task.Risk,
+		VisionMode: task.VisionMode, CandidateModel: task.CandidateModel,
 		ReferenceModel: task.ReferenceModel, ReviewerModel: task.ReviewerModel,
-		Outcome: outcome, SevereError: severeError,
-		DeterministicFailure:  deterministicFailure,
-		CandidateCostMicroUSD: candidate.CostMicroUSD,
-		ReferenceCostMicroUSD: reference.CostMicroUSD,
-		ReviewerCostMicroUSD:  reviewerCost,
-		CandidateLatencyMS:    candidate.LatencyMS,
-		ReferenceLatencyMS:    reference.LatencyMS,
+		Outcome: outcome, Dimensions: dimensions, SevereError: severeError,
+		SelfEscalationEligible:    eligible,
+		SelfEscalationRequested:   requested,
+		SelfEscalationSupported:   requested && candidateInsufficient,
+		SelfEscalationUnnecessary: requested && !candidateInsufficient,
+		SelfEscalationMissed:      task.EscalationObservation == EscalationNotRequested && candidateInsufficient,
+		DeterministicFailure:      deterministicFailure,
+		CandidateCostMicroUSD:     candidate.CostMicroUSD,
+		ReferenceCostMicroUSD:     reference.CostMicroUSD,
+		ReviewerCostMicroUSD:      reviewerCost,
+		CandidateLatencyMS:        candidate.LatencyMS,
+		ReferenceLatencyMS:        reference.LatencyMS,
 	}
 }
 

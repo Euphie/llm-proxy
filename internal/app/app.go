@@ -18,6 +18,7 @@ import (
 	"github.com/Euphie/llm-proxy/internal/database"
 	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/gateway"
+	"github.com/Euphie/llm-proxy/internal/modelcatalog"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/proxy"
 	"github.com/Euphie/llm-proxy/internal/routing"
@@ -117,6 +118,13 @@ func New(options Options) (*App, error) {
 		return buildResolved(resolved, snapshot)
 	}
 	coordinator := gateway.NewCoordinator(profiles, registry, build, buildStrategy)
+	modelCatalog, err := modelcatalog.NewService(
+		dataDir,
+		&http.Client{Timeout: 30 * time.Second},
+	)
+	if err != nil {
+		return fail(fmt.Errorf("initialize model catalog: %w", err))
+	}
 
 	account, _, err := accounts.EnsureDefault(context.Background())
 	if err != nil {
@@ -177,6 +185,7 @@ func New(options Options) (*App, error) {
 		DataDir:          dataDir,
 		ActivateProfiles: activateProfiles,
 		RuntimeReady:     coordinator.Ready,
+		ModelCatalog:     modelCatalog,
 	})
 	handler := routeApplication(
 		adminAPI,

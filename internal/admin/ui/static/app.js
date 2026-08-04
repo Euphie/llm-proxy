@@ -7,6 +7,7 @@ import {
 import { createWindowFrame } from "./chrome.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderOnboarding } from "./onboarding.js";
+import { installModelCatalog } from "./model-catalog.js";
 import {
   defaultProfileDraft,
   profileDraft,
@@ -15,6 +16,7 @@ import {
   renderProfileList,
 } from "./profiles.js";
 import { renderProfileEditor as renderProfileSectionEditor } from "./profile-editor.js";
+import { renderHelpPage } from "./routing-guide.js";
 import { renderStatsPage } from "./stats.js";
 import { renderSystemPage } from "./system.js";
 import { parseAdminRoute, profileSectionHref } from "./routes.js";
@@ -137,6 +139,13 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
       iconClass: "nav-icon-gray",
       iconText: "⚙",
     },
+    {
+      name: "help",
+      text: "帮助",
+      href: "/_admin/help/overview",
+      iconClass: "nav-icon-violet",
+      iconText: "?",
+    },
   ]) {
     const entry = document.createElement("li");
     const link = document.createElement("a");
@@ -173,10 +182,11 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
     profiles: "Profiles",
     stats: "统计",
     system: "系统",
+    help: "帮助",
     "not-found": "页面不存在",
   }[pageName];
   const alert = document.createElement("div");
-  alert.className = "error-banner";
+  alert.className = "app-flash error-banner";
   alert.setAttribute("role", "alert");
   alert.hidden = true;
   const workspace = document.createElement("div");
@@ -185,7 +195,16 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
   content.append(headingGroup, alert, workspace);
 
   function showAppError(error) {
+    alert.className = "app-flash error-banner";
+    alert.setAttribute("role", "alert");
     alert.textContent = error?.message || "请求失败，请重试。";
+    alert.hidden = false;
+  }
+
+  function showAppSuccess(message) {
+    alert.className = "app-flash success-banner";
+    alert.setAttribute("role", "status");
+    alert.textContent = message;
     alert.hidden = false;
   }
 
@@ -243,6 +262,7 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
           }
           await client.createProfile(payload);
         }, route.page === "profile" ? showProfileRoute : showList);
+        showAppSuccess("Profile 保存成功。");
       },
       cancel: () => {
         void showList();
@@ -384,6 +404,15 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
 
   async function showProfileRoute() {
     try {
+      if (route.section === "models" && typeof client.modelCatalog === "function") {
+        try {
+          installModelCatalog(await client.modelCatalog());
+        } catch (error) {
+          if (isUnauthorized(error)) {
+            throw error;
+          }
+        }
+      }
       const [profile, data] = await Promise.all([
         client.getProfile(route.profileId),
         client.listProfiles(),
@@ -446,12 +475,21 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
           ? await client.listProfiles()
           : { default_profile_id: 0, profiles: [] };
       await renderStatsPage(workspace, {
+		section: route.section,
         profiles: data.profiles,
         loadStats: (filters) => client.stats(filters),
         loadRoutingTraces: (filters) =>
           typeof client.routingTraces === "function"
             ? client.routingTraces(filters)
-            : Promise.resolve([]),
+			: Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_pages: 0, category_counts: {} }),
+		loadRoutingTrace: (id) =>
+		  typeof client.routingTrace === "function"
+			? client.routingTrace(id)
+			: Promise.resolve({ trace: {}, candidates: [], calls: [] }),
+		loadModelPerformance: (filters) =>
+		  typeof client.modelPerformance === "function"
+			? client.modelPerformance(filters)
+			: Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_pages: 0, summary: {} }),
         onUnauthorized: () =>
           renderLoginScreen(root, client, generateProfile, path),
       });
@@ -469,6 +507,15 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
     await renderSystemPage(workspace, {
       loadSystem: () => client.system(),
       loadProfiles: () => client.listProfiles(),
+      loadModelCatalog: typeof client.modelCatalog === "function"
+        ? () => client.modelCatalog()
+        : undefined,
+      refreshModelCatalog: typeof client.refreshModelCatalog === "function"
+        ? () => client.refreshModelCatalog()
+        : undefined,
+      loadStrategies: typeof client.listStrategies === "function"
+        ? (profileID) => client.listStrategies(profileID)
+        : undefined,
       changePassword: (currentPassword, newPassword) =>
         client.changePassword(currentPassword, newPassword),
       onUnauthorized: () =>
@@ -524,6 +571,10 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
   }
   if (route.page === "system") {
     await showSystem();
+    return;
+  }
+  if (route.page === "help") {
+    renderHelpPage(workspace, route.topic);
     return;
   }
   await showList();

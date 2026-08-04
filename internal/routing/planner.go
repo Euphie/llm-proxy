@@ -18,8 +18,18 @@ var (
 type Risk string
 
 const (
-	RiskNormal Risk = "normal"
-	RiskHigh   Risk = "high"
+	RiskUnknown Risk = "unknown"
+	RiskNormal  Risk = "normal"
+	RiskHigh    Risk = "high"
+)
+
+type Difficulty string
+
+const (
+	DifficultyUnknown Difficulty = "unknown"
+	DifficultyEasy    Difficulty = "easy"
+	DifficultyMedium  Difficulty = "medium"
+	DifficultyHard    Difficulty = "hard"
 )
 
 type ClassificationSource string
@@ -28,18 +38,33 @@ const (
 	ClassificationSourceRule     ClassificationSource = "rule"
 	ClassificationSourceAnalyzer ClassificationSource = "analyzer"
 	ClassificationSourceFallback ClassificationSource = "fallback"
+	ClassificationSourceSession  ClassificationSource = "session"
 )
 
 type Classification struct {
 	TaskType      string
+	Difficulty    Difficulty
 	Risk          Risk
 	ConfidenceBPS int
 	Source        ClassificationSource
+	ReasonCodes   []string
 }
 
 type SessionPreference struct {
+	TaskType           string
+	Difficulty         Difficulty
+	RouteID            string
 	Model              string
 	MinQualityScoreBPS int
+	Strategy           string
+	CacheMetrics       map[string]CacheMetrics
+}
+
+type CacheMetrics struct {
+	Samples             int64
+	UncachedInputTokens int64
+	CacheReadTokens     int64
+	CacheWriteTokens    int64
 }
 
 type VisionMode string
@@ -73,7 +98,21 @@ type ExecutionPlan struct {
 	reason                 string
 	budget                 profile.AttemptBudgetRuntime
 	modelAttempts          []ModelAttemptPlan
+	candidateDecisions     []CandidateDecision
 	callGraph              CallGraphSnapshot
+}
+
+type CandidateDecision struct {
+	Model                  string
+	Decision               string
+	Reason                 string
+	QualityScoreBPS        int
+	SevereErrorRateBPS     int
+	ExpectedCostMicroUSD   int64
+	AnswerCallCostMicroUSD int64
+	VisionCallCostMicroUSD int64
+	VisionMode             VisionMode
+	UpstreamNodeIDs        []string
 }
 
 type ExecutionPlanSnapshot struct {
@@ -95,6 +134,7 @@ type ModelAttemptPlan struct {
 	targets                []TargetPlan
 	visionMode             VisionMode
 	qualityScoreBPS        int
+	expectedCostMicroUSD   int64
 	answerCallCostMicroUSD int64
 	visionCallCostMicroUSD int64
 }
@@ -104,6 +144,7 @@ type ModelAttemptSnapshot struct {
 	TargetIDs              []string
 	VisionMode             VisionMode
 	QualityScoreBPS        int
+	ExpectedCostMicroUSD   int64
 	AnswerCallCostMicroUSD int64
 	VisionCallCostMicroUSD int64
 }
@@ -181,8 +222,12 @@ func (p *Planner) planWithPreference(
 	routeID := p.RouteID(classification)
 	route := p.strategy.Routes[routeID]
 
+	if classification.Source == ClassificationSourceFallback {
+		plan, err := p.planStrongBaseline(request, routeID, "task analyzer fallback", preference)
+		return p.finalizePlan(request, plan, budget, err)
+	}
 	if classification.Risk == RiskHigh {
-		plan, err := p.planStrongBaseline(request, routeID, "high risk")
+		plan, err := p.planStrongBaseline(request, routeID, "high risk", preference)
 		return p.finalizePlan(request, plan, budget, err)
 	}
 
@@ -192,17 +237,47 @@ func (p *Planner) planWithPreference(
 	})
 
 	ranked := make([]rankedCandidate, 0, len(candidates))
+	decisions := make([]CandidateDecision, 0, len(candidates)+1)
 	for _, candidate := range candidates {
-		if candidate.QualityScoreBPS < route.MinQualityBPS ||
-			candidate.SevereErrorRateBPS > route.MaxSevereErrorRateBPS ||
-			candidate.QualityScoreBPS < preference.MinQualityScoreBPS {
+		decision := CandidateDecision{
+			Model: candidate.Model, QualityScoreBPS: candidate.QualityScoreBPS,
+			SevereErrorRateBPS: candidate.SevereErrorRateBPS,
+		}
+		switch {
+		case candidate.QualityScoreBPS < route.MinQualityBPS:
+			decision.Decision = "rejected"
+			decision.Reason = "quality_below_route_minimum"
+			decisions = append(decisions, decision)
+			continue
+		case candidate.SevereErrorRateBPS > route.MaxSevereErrorRateBPS:
+			decision.Decision = "rejected"
+			decision.Reason = "severe_error_rate_above_route_maximum"
+			decisions = append(decisions, decision)
+			continue
+		case candidate.QualityScoreBPS < preference.MinQualityScoreBPS:
+			decision.Decision = "rejected"
+			decision.Reason = "quality_below_session_minimum"
+			decisions = append(decisions, decision)
 			continue
 		}
-		planned, ok := p.evaluateCandidate(request, candidate.Model)
+		planned, reason, ok := p.evaluateCandidateWithReason(
+			request, candidate.Model, preference,
+		)
 		if !ok {
+			decision.Decision = "rejected"
+			decision.Reason = reason
+			decisions = append(decisions, decision)
 			continue
 		}
 		planned.qualityScoreBPS = candidate.QualityScoreBPS
+		decision.Decision = "eligible"
+		decision.Reason = "passed_all_gates"
+		decision.ExpectedCostMicroUSD = planned.estimatedCost
+		decision.AnswerCallCostMicroUSD = planned.answerCallCost
+		decision.VisionCallCostMicroUSD = planned.visionCallCost
+		decision.VisionMode = planned.visionMode
+		decision.UpstreamNodeIDs = candidateTargetIDs(planned.targets)
+		decisions = append(decisions, decision)
 		ranked = append(ranked, rankedCandidate{plan: planned, metrics: candidate})
 	}
 	if len(ranked) == 0 {
@@ -210,13 +285,15 @@ func (p *Planner) planWithPreference(
 			request,
 			routeID,
 			"no route candidate passed all gates",
+			preference,
 		)
+		plan.candidateDecisions = append(decisions, plan.candidateDecisions...)
 		return p.finalizePlan(request, plan, budget, err)
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
 		return betterCandidate(ranked[i].plan, ranked[j].plan, ranked[i].metrics, ranked[j].metrics)
 	})
-	reason := "lowest complete cost"
+	reason := "lowest expected cost"
 	if preference.Model != "" {
 		for index := range ranked {
 			if ranked[index].plan.model == preference.Model {
@@ -226,18 +303,22 @@ func (p *Planner) planWithPreference(
 			}
 		}
 	}
-	attempts := p.plannedAttempts(request, route, ranked)
+	attempts := p.plannedAttempts(request, route, ranked, preference)
 	plan := p.executionPlan(
 		routeID,
 		attempts,
 		attempts[0].model == p.auto.StrongBaselineModel,
 		reason,
 	)
+	plan.candidateDecisions = markSelectedCandidate(decisions, attempts[0].model, reason)
 	return p.finalizePlan(request, plan, budget, nil)
 }
 
 func (p *Planner) RouteID(classification Classification) string {
-	if mapped, ok := p.strategy.TaskRoutes[classification.TaskType]; ok {
+	if mapped, ok := p.strategy.RouteFor(
+		classification.TaskType,
+		string(classification.Difficulty),
+	); ok {
 		return mapped
 	}
 	return p.strategy.DefaultRoute
@@ -248,11 +329,11 @@ func (p *Planner) EvaluationPair(
 	classification Classification,
 	selectedModel string,
 ) (EvaluationPair, bool) {
-	if classification.Risk == RiskHigh {
+	if classification.Source == ClassificationSourceFallback || classification.Risk == RiskHigh {
 		return EvaluationPair{}, false
 	}
 	route := p.strategy.Routes[p.RouteID(classification)]
-	reference, ok := p.evaluateCandidate(request, p.auto.StrongBaselineModel)
+	reference, ok := p.evaluateCandidate(request, p.auto.StrongBaselineModel, SessionPreference{})
 	if !ok {
 		return EvaluationPair{}, false
 	}
@@ -267,7 +348,7 @@ func (p *Planner) EvaluationPair(
 		if metrics.Model == "" {
 			return EvaluationPair{}, false
 		}
-		candidate, ok = p.evaluateCandidate(request, selectedModel)
+		candidate, ok = p.evaluateCandidate(request, selectedModel, SessionPreference{})
 		if !ok {
 			return EvaluationPair{}, false
 		}
@@ -278,7 +359,7 @@ func (p *Planner) EvaluationPair(
 			if metrics.Model == reference.model {
 				continue
 			}
-			planned, capable := p.evaluateCandidate(request, metrics.Model)
+			planned, capable := p.evaluateCandidate(request, metrics.Model, SessionPreference{})
 			if !capable {
 				continue
 			}
@@ -296,7 +377,7 @@ func (p *Planner) EvaluationPair(
 		})
 		candidate = candidates[0].plan
 	}
-	if candidate.answerCallCost >= reference.answerCallCost {
+	if candidate.estimatedCost >= reference.estimatedCost {
 		return EvaluationPair{}, false
 	}
 	return EvaluationPair{
@@ -309,13 +390,24 @@ func (p *Planner) planStrongBaseline(
 	request Request,
 	routeID string,
 	reason string,
+	preference SessionPreference,
 ) (ExecutionPlan, error) {
-	candidate, ok := p.evaluateCandidate(request, p.auto.StrongBaselineModel)
+	candidate, _, ok := p.evaluateCandidateWithReason(
+		request, p.auto.StrongBaselineModel, preference,
+	)
 	if !ok {
 		return ExecutionPlan{}, fmt.Errorf("%w: strong baseline %q", ErrNoCapableModel, p.auto.StrongBaselineModel)
 	}
 	candidate.qualityScoreBPS = 10_000
-	return p.executionPlan(routeID, []candidatePlan{candidate}, true, reason), nil
+	plan := p.executionPlan(routeID, []candidatePlan{candidate}, true, reason)
+	plan.candidateDecisions = []CandidateDecision{{
+		Model: p.auto.StrongBaselineModel, Decision: "selected", Reason: selectionReasonCode(reason),
+		QualityScoreBPS: 10_000, ExpectedCostMicroUSD: candidate.estimatedCost,
+		AnswerCallCostMicroUSD: candidate.answerCallCost,
+		VisionCallCostMicroUSD: candidate.visionCallCost,
+		VisionMode:             candidate.visionMode, UpstreamNodeIDs: candidateTargetIDs(candidate.targets),
+	}}
+	return plan, nil
 }
 
 func (p *Planner) executionPlan(
@@ -353,6 +445,7 @@ func (p *Planner) plannedAttempts(
 	request Request,
 	route profile.RouteRuntime,
 	ranked []rankedCandidate,
+	preference SessionPreference,
 ) []candidatePlan {
 	capacity := min(
 		len(ranked)+1,
@@ -363,7 +456,7 @@ func (p *Planner) plannedAttempts(
 		return attempts
 	}
 
-	baseline, baselineOK := p.evaluateCandidate(request, p.auto.StrongBaselineModel)
+	baseline, baselineOK := p.evaluateCandidate(request, p.auto.StrongBaselineModel, preference)
 	baseline.qualityScoreBPS = 10_000
 	if metrics := candidatesForModel(route.Candidates, baseline.model); metrics.Model != "" {
 		baseline.qualityScoreBPS = metrics.QualityScoreBPS
@@ -401,12 +494,61 @@ func containsAttempt(attempts []candidatePlan, model string) bool {
 	return false
 }
 
+func candidateTargetIDs(targets []TargetPlan) []string {
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		ids = append(ids, target.id)
+	}
+	return ids
+}
+
+func markSelectedCandidate(
+	decisions []CandidateDecision,
+	selectedModel string,
+	selectionReason string,
+) []CandidateDecision {
+	reason := selectionReasonCode(selectionReason)
+	selected := append([]CandidateDecision(nil), decisions...)
+	for index := range selected {
+		if selected[index].Decision == "selected" {
+			selected[index].Decision = "eligible"
+			selected[index].Reason = "passed_all_gates"
+		}
+	}
+	for index := range selected {
+		if selected[index].Model == selectedModel && selected[index].Decision == "eligible" {
+			selected[index].Decision = "selected"
+			selected[index].Reason = reason
+			break
+		}
+	}
+	return selected
+}
+
+func selectionReasonCode(reason string) string {
+	switch reason {
+	case "Session binding":
+		return "session_binding"
+	case "first budget-compatible fallback":
+		return "budget_compatible_fallback"
+	case "high risk":
+		return "high_risk"
+	case "task analyzer fallback":
+		return "task_analyzer_fallback"
+	case "no route candidate passed all gates":
+		return "no_route_candidate_passed_all_gates"
+	default:
+		return "lowest_expected_cost"
+	}
+}
+
 func modelAttemptPlan(candidate candidatePlan) ModelAttemptPlan {
 	return ModelAttemptPlan{
 		model:                  candidate.model,
 		targets:                cloneTargetPlans(candidate.targets),
 		visionMode:             candidate.visionMode,
 		qualityScoreBPS:        candidate.qualityScoreBPS,
+		expectedCostMicroUSD:   candidate.estimatedCost,
 		answerCallCostMicroUSD: candidate.answerCallCost,
 		visionCallCostMicroUSD: candidate.visionCallCost,
 	}
@@ -425,29 +567,41 @@ type candidatePlan struct {
 func (p *Planner) evaluateCandidate(
 	request Request,
 	modelID string,
+	preference SessionPreference,
 ) (candidatePlan, bool) {
+	candidate, _, ok := p.evaluateCandidateWithReason(request, modelID, preference)
+	return candidate, ok
+}
+
+func (p *Planner) evaluateCandidateWithReason(
+	request Request,
+	modelID string,
+	preference SessionPreference,
+) (candidatePlan, string, bool) {
 	model, ok := p.models[modelID]
 	if !ok || !model.HasContextWindow || !model.HasMaxOutputTokens ||
 		!model.HasInputPrice || !model.HasOutputPrice {
-		return candidatePlan{}, false
+		return candidatePlan{}, "model_facts_or_prices_incomplete", false
 	}
 	targets := p.targets[modelID]
 	if len(targets) == 0 {
-		return candidatePlan{}, false
+		return candidatePlan{}, "no_compatible_upstream_node", false
 	}
 	outputTokens := request.Facts.RequestedOutputTokens
 	if outputTokens == 0 {
 		outputTokens = min(4096, model.MaxOutputTokens)
 	}
 	if outputTokens <= 0 || outputTokens > model.MaxOutputTokens {
-		return candidatePlan{}, false
+		return candidatePlan{}, "requested_output_exceeds_model_limit", false
 	}
-	if request.Facts.HasTools && (!model.HasSupportsTools || !model.SupportsTools) {
-		return candidatePlan{}, false
+	requiresTools := request.Facts.HasTools ||
+		(p.auto.SelfEscalation.Enabled && modelID != p.auto.StrongBaselineModel)
+	if requiresTools && (!model.HasSupportsTools || !model.SupportsTools) {
+		return candidatePlan{}, "tools_not_supported", false
 	}
 	if request.Facts.RequiresStructuredOutput &&
 		(!model.HasSupportsStructuredOutput || !model.SupportsStructuredOutput) {
-		return candidatePlan{}, false
+		return candidatePlan{}, "structured_output_not_supported", false
 	}
 
 	visionMode := VisionNone
@@ -460,14 +614,14 @@ func (p *Planner) evaluateCandidate(
 		case p.vision.Enabled:
 			visionModel, exists := p.models[p.vision.Model]
 			if !exists || !visionModel.HasInputPrice || !visionModel.HasOutputPrice {
-				return candidatePlan{}, false
+				return candidatePlan{}, "vision_model_facts_or_prices_incomplete", false
 			}
 			if !visionTransportSupportsSources(p.vision.Transport, request.Facts.ImageSources) {
-				return candidatePlan{}, false
+				return candidatePlan{}, "image_source_not_supported", false
 			}
 			targets = intersectTargetPlans(targets, p.targets[p.vision.Model])
 			if len(targets) == 0 {
-				return candidatePlan{}, false
+				return candidatePlan{}, "no_shared_vision_upstream_node", false
 			}
 			visionMode = VisionComposite
 			visionCallCost = estimateCallCost(
@@ -477,7 +631,7 @@ func (p *Planner) evaluateCandidate(
 			)
 			visionCost = multiplyCost(visionCallCost, request.Facts.ImageCount)
 		default:
-			return candidatePlan{}, false
+			return candidatePlan{}, "vision_not_supported", false
 		}
 	}
 
@@ -486,24 +640,34 @@ func (p *Planner) evaluateCandidate(
 		var fits bool
 		answerInputTokens, fits = compositeAnswerInputTokens(request.Facts, p.vision)
 		if !fits {
-			return candidatePlan{}, false
+			return candidatePlan{}, "vision_description_context_overflow", false
+		}
+	}
+	if p.auto.SelfEscalation.Enabled && modelID != p.auto.StrongBaselineModel {
+		var fits bool
+		answerInputTokens, fits = addCount(answerInputTokens, SelfEscalationReserveTokens)
+		if !fits {
+			return candidatePlan{}, "self_escalation_context_overflow", false
 		}
 	}
 	if answerInputTokens > model.ContextWindow-outputTokens {
-		return candidatePlan{}, false
+		return candidatePlan{}, "context_window_exceeded", false
 	}
-	answerCost := estimateCallCost(
+	expectedAnswerCost := estimateExpectedCallCost(
 		answerInputTokens,
 		outputTokens,
 		model,
+		preference.CacheMetrics[modelID],
+		preference.Model == modelID,
 	)
+	answerCost := estimateHardCallCost(answerInputTokens, outputTokens, model)
 	auxiliaryCost := visionCost
-	estimated := addCost(answerCost, auxiliaryCost)
+	estimated := addCost(expectedAnswerCost, auxiliaryCost)
 	return candidatePlan{
 		model: modelID, targets: cloneTargetPlans(targets), visionMode: visionMode,
 		estimatedCost:  estimated,
 		answerCallCost: answerCost, visionCallCost: visionCallCost,
-	}, true
+	}, "passed_all_gates", true
 }
 
 func compositeAnswerInputTokens(
@@ -555,6 +719,76 @@ func estimateCallCost(inputTokens, outputTokens int, model profile.ModelCapabili
 		priceTokens(inputTokens, model.InputPriceMicroUSDPerMillion),
 		priceTokens(outputTokens, model.OutputPriceMicroUSDPerMillion),
 	)
+}
+
+func estimateHardCallCost(inputTokens, outputTokens int, model profile.ModelCapability) int64 {
+	inputPrice := model.InputPriceMicroUSDPerMillion
+	if model.HasCacheWritePrice && model.CacheWritePriceMicroUSDPerMillion > inputPrice {
+		inputPrice = model.CacheWritePriceMicroUSDPerMillion
+	}
+	return addCost(
+		priceTokens(inputTokens, inputPrice),
+		priceTokens(outputTokens, model.OutputPriceMicroUSDPerMillion),
+	)
+}
+
+func estimateExpectedCallCost(
+	inputTokens int,
+	outputTokens int,
+	model profile.ModelCapability,
+	metrics CacheMetrics,
+	hot bool,
+) int64 {
+	if inputTokens <= 0 || metrics.Samples <= 0 ||
+		!model.HasCacheReadPrice || !model.HasCacheWritePrice {
+		return estimateCallCost(inputTokens, outputTokens, model)
+	}
+	total := addMetricTokens(metrics.UncachedInputTokens, metrics.CacheReadTokens)
+	total = addMetricTokens(total, metrics.CacheWriteTokens)
+	if total <= 0 || total == math.MaxInt64 {
+		return estimateCallCost(inputTokens, outputTokens, model)
+	}
+	readTokens := 0
+	writeTokens := 0
+	if hot {
+		readTokens = proportionalTokens(inputTokens, metrics.CacheReadTokens, total)
+		writeTokens = proportionalTokens(inputTokens, metrics.CacheWriteTokens, total)
+	} else {
+		cacheable := addMetricTokens(metrics.CacheReadTokens, metrics.CacheWriteTokens)
+		writeTokens = proportionalTokens(inputTokens, cacheable, total)
+	}
+	if readTokens < 0 || writeTokens < 0 || readTokens > inputTokens ||
+		writeTokens > inputTokens-readTokens {
+		return estimateCallCost(inputTokens, outputTokens, model)
+	}
+	uncachedTokens := inputTokens - readTokens - writeTokens
+	return addCost(
+		addCost(
+			priceTokens(uncachedTokens, model.InputPriceMicroUSDPerMillion),
+			priceTokens(readTokens, model.CacheReadPriceMicroUSDPerMillion),
+		),
+		addCost(
+			priceTokens(writeTokens, model.CacheWritePriceMicroUSDPerMillion),
+			priceTokens(outputTokens, model.OutputPriceMicroUSDPerMillion),
+		),
+	)
+}
+
+func proportionalTokens(tokens int, part int64, total int64) int {
+	if tokens <= 0 || part <= 0 || total <= 0 {
+		return 0
+	}
+	if int64(tokens) > math.MaxInt64/part {
+		return tokens
+	}
+	return int(int64(tokens) * part / total)
+}
+
+func addMetricTokens(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func priceTokens(tokens int, price int64) int64 {
@@ -669,9 +903,9 @@ func cloneAutoRouting(auto profile.AutoRoutingRuntime) profile.AutoRoutingRuntim
 
 func cloneStrategy(strategy profile.RoutingStrategyRuntime) profile.RoutingStrategyRuntime {
 	cloned := strategy
-	cloned.TaskRoutes = make(map[string]string, len(strategy.TaskRoutes))
-	for taskType, route := range strategy.TaskRoutes {
-		cloned.TaskRoutes[taskType] = route
+	cloned.TaskRoutes = make(map[profile.TaskRouteKey]string, len(strategy.TaskRoutes))
+	for key, route := range strategy.TaskRoutes {
+		cloned.TaskRoutes[key] = route
 	}
 	cloned.Routes = make(map[string]profile.RouteRuntime, len(strategy.Routes))
 	for id, route := range strategy.Routes {
@@ -701,10 +935,38 @@ func (p ExecutionPlan) ModelAttempts() []ModelAttemptPlan {
 	return attempts
 }
 
+func (p ExecutionPlan) CandidateDecisions() []CandidateDecision {
+	decisions := append([]CandidateDecision(nil), p.candidateDecisions...)
+	for index := range decisions {
+		decisions[index].UpstreamNodeIDs = append(
+			[]string(nil), decisions[index].UpstreamNodeIDs...,
+		)
+	}
+	return decisions
+}
+
+func (p ExecutionPlan) NextStrongerModelAttempt(current int) (int, bool) {
+	return NextStrongerModelAttempt(p.modelAttempts, current)
+}
+
+func NextStrongerModelAttempt(attempts []ModelAttemptPlan, current int) (int, bool) {
+	if current < 0 || current >= len(attempts) {
+		return 0, false
+	}
+	quality := attempts[current].qualityScoreBPS
+	for index := current + 1; index < len(attempts); index++ {
+		if attempts[index].qualityScoreBPS > quality {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
 func (p ModelAttemptPlan) Model() string                 { return p.model }
 func (p ModelAttemptPlan) Targets() []TargetPlan         { return cloneTargetPlans(p.targets) }
 func (p ModelAttemptPlan) VisionMode() VisionMode        { return p.visionMode }
 func (p ModelAttemptPlan) QualityScoreBPS() int          { return p.qualityScoreBPS }
+func (p ModelAttemptPlan) ExpectedCostMicroUSD() int64   { return p.expectedCostMicroUSD }
 func (p ModelAttemptPlan) AnswerCallCostMicroUSD() int64 { return p.answerCallCostMicroUSD }
 func (p ModelAttemptPlan) VisionCallCostMicroUSD() int64 { return p.visionCallCostMicroUSD }
 
@@ -718,6 +980,7 @@ func (p ModelAttemptPlan) Snapshot() ModelAttemptSnapshot {
 		TargetIDs:              targetIDs,
 		VisionMode:             p.visionMode,
 		QualityScoreBPS:        p.qualityScoreBPS,
+		ExpectedCostMicroUSD:   p.expectedCostMicroUSD,
 		AnswerCallCostMicroUSD: p.answerCallCostMicroUSD,
 		VisionCallCostMicroUSD: p.visionCallCostMicroUSD,
 	}

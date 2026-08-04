@@ -112,8 +112,10 @@ func TestServiceEnforcesDailyBudgetAndPersistsSuccessfulEvidence(t *testing.T) {
 				SpentMicroUSD: 50,
 				Evidence: &Evidence{
 					ProfileID: profileID, Strategy: "20260802-001", Route: "balanced",
-					TaskType: "simple", CandidateModel: "fast", ReferenceModel: "strong",
+					TaskType: "simple", Difficulty: "easy", Risk: "normal", VisionMode: "none",
+					CandidateModel: "fast", ReferenceModel: "strong",
 					ReviewerModel: "judge", Outcome: OutcomeCandidateWin,
+					Dimensions:            dimensionOutcomes(OutcomeCandidateWin),
 					CandidateCostMicroUSD: 10, ReferenceCostMicroUSD: 35,
 					ReviewerCostMicroUSD: 5,
 				},

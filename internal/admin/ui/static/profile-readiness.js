@@ -110,7 +110,7 @@ export function modelReferences(draft, modelID) {
   (config.targets || []).forEach((target, targetIndex) => {
     (target.models || []).forEach((value, modelIndex) => add(
       "reliability",
-      `Target ${target.id || targetIndex + 1}`,
+      `上游节点 ${target.id || targetIndex + 1}`,
       `config.targets[${targetIndex}].models[${modelIndex}]`,
       value,
     ));
@@ -119,10 +119,13 @@ export function modelReferences(draft, modelID) {
 }
 
 function routingReadiness(auto, models, sectionHref) {
-  if (models.length === 0) {
+  const recordedModelCount = new Set(
+    models.map((model) => String(model.id || "").trim()).filter(Boolean),
+  ).size;
+  if (recordedModelCount < 2) {
     return state(
       "blocked",
-      ["请先录入模型，才能启用智能路由。"],
+      ["请先录入模型，至少需要两个不同模型才能启用智能路由。"],
       "录入模型",
       sectionHref("models"),
     );
@@ -144,8 +147,8 @@ function routingReadiness(auto, models, sectionHref) {
 
   const catalog = new Map(models.map((model) => [String(model.id), model]));
   const reasons = [];
-  if ((auto.participants || []).length === 0) {
-    reasons.push("请选择至少一个参与路由的模型。");
+  if (new Set(auto.participants || []).size < 2) {
+    reasons.push("请至少选择两个不同的参与模型。");
   }
   if (!auto.strong_baseline_model) {
     reasons.push("请选择强模型基线。");
@@ -172,6 +175,22 @@ function routingReadiness(auto, models, sectionHref) {
     !(auto.participants || []).includes(auto.strong_baseline_model)
   ) {
     reasons.push("强模型基线必须同时是参与模型。");
+  }
+  if (auto.self_escalation?.enabled) {
+    if (Number(auto.strategy?.budget?.max_model_switches ?? 0) < 1) {
+      reasons.push("启用模型主动升级时，模型切换上限至少需要 1 次。");
+    }
+    const routedModels = new Set(
+      (auto.strategy?.routes || []).flatMap((route) =>
+        (route.candidates || []).map((candidate) => String(candidate.model || "")),
+      ),
+    );
+    routedModels.delete(String(auto.strong_baseline_model || ""));
+    for (const id of routedModels) {
+      if (id && catalog.get(id)?.supports_tools !== true) {
+        reasons.push(`主动升级候选模型 ${id} 必须明确支持工具调用。`);
+      }
+    }
   }
   return reasons.length === 0
     ? state("ready")

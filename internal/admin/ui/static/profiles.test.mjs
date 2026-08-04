@@ -3,7 +3,11 @@ import test from "node:test";
 
 import { api } from "./api.js";
 import { bootstrap } from "./app.js";
-import { MODELS_DEV_SOURCE } from "./model-catalog.js";
+import {
+  currentModelCatalog,
+  installModelCatalog,
+  MODELS_DEV_SOURCE,
+} from "./model-catalog.js";
 import {
   addModelCapability,
   addRetryRule,
@@ -29,19 +33,25 @@ test("new Anthropic Profile contains explicit defaults", () => {
   assert.equal(draft.config.vision.unlisted_model_policy, "bypass");
   assert.deepEqual(draft.config.models, []);
   assert.equal(draft.config.auto_routing.enabled, false);
+  assert.match(draft.config.auto_routing.strategy.name, /^\d{8}-001$/);
+  assert.equal(draft.config.auto_routing.strategy.default_route, "default");
+  assert.deepEqual(draft.config.auto_routing.strategy.routes, [{
+    id: "default",
+    min_quality_bps: 9000,
+    max_severe_error_rate_bps: 100,
+    candidates: [],
+  }]);
 	assert.deepEqual(draft.config.auto_routing.risk_policy, {
+		version: 2,
 		sensitive_text_patterns: [
 			"delete production", "drop table", "deploy to production", "rotate credential",
 			"删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
-			"edit the file", "modify the code", "fix the code", "implement this", "refactor",
-			"修改代码", "修复代码", "重构", "开始开发", "写代码",
 		],
 		sensitive_tool_patterns: [
-			"shell", "exec", "write", "edit", "delete", "apply_patch", "apply-patch",
-			"deploy", "rotate_credential", "rotate_secret", "rotate_key", "payment", "transfer",
+			"delete_production", "deploy_production", "rotate_credential", "rotate_secret", "payment", "transfer",
 			"database_mutation", "database_write", "database_delete", "db_write", "db_delete",
 		],
-		structured_output_high_risk: true,
+		structured_output_high_risk: false,
 		long_context_threshold_bps: 7500,
 	});
 	assert.equal(
@@ -49,6 +59,62 @@ test("new Anthropic Profile contains explicit defaults", () => {
 		false,
 	);
   assert.deepEqual(draft.config.overload_rules, []);
+});
+
+test("legacy disabled Auto budgets reopen with safe editable defaults", () => {
+  const draft = profileDraft(profileFixture({
+    config: {
+      version: 1,
+      protocol: "anthropic",
+      upstream: "https://profile.example",
+      auto_routing: {
+        enabled: false,
+        strategy: {
+          name: "",
+          budget: {
+            max_answer_attempts: 0,
+            max_auxiliary_calls: 0,
+            max_total_outbound_calls: 0,
+            deadline: "",
+          },
+        },
+      },
+      vision: profileFixture().config.vision,
+      overload_rules: [],
+    },
+  }));
+
+  assert.match(draft.config.auto_routing.strategy.name, /^\d{8}-001$/);
+  assert.equal(draft.config.auto_routing.strategy.budget.max_answer_attempts, 2);
+  assert.equal(draft.config.auto_routing.strategy.budget.max_auxiliary_calls, 2);
+  assert.equal(draft.config.auto_routing.strategy.budget.max_total_outbound_calls, 5);
+  assert.equal(draft.config.auto_routing.strategy.budget.deadline, "2m");
+  assert.equal(draft.config.auto_routing.strategy.default_route, "default");
+  assert.equal(draft.config.auto_routing.strategy.routes[0].id, "default");
+});
+
+test("routing budget controls never render legacy zero values", (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  Object.assign(draft.config.auto_routing.strategy.budget, {
+    max_answer_attempts: 0,
+    max_auxiliary_calls: 0,
+    max_total_outbound_calls: 0,
+    deadline: "",
+  });
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  assert.equal(controlByName(root, "auto-budget-answer").value, "2");
+  assert.equal(controlByName(root, "auto-budget-auxiliary").value, "2");
+  assert.equal(controlByName(root, "auto-budget-total").value, "5");
+  assert.equal(controlByName(root, "auto-budget-deadline").value, "2m");
+  assert.equal(controlByName(root, "auto_default_route").value, "default");
+  assert.equal(controlByName(root, "auto-route-0-id").value, "default");
 });
 
 test("saved Profile model capabilities and unlisted policy remain authoritative in its draft", () => {
@@ -105,8 +171,9 @@ test("saved risk policy preserves explicit empty arrays booleans basis points an
 			...profileFixture().config,
 			auto_routing: {
 				...defaultProfileDraft().config.auto_routing,
-				enabled: true,
+				enabled: false,
 				risk_policy: {
+					version: 2,
 					sensitive_text_patterns: [],
 					sensitive_tool_patterns: ["second", "first"],
 					structured_output_high_risk: false,
@@ -117,6 +184,7 @@ test("saved risk policy preserves explicit empty arrays booleans basis points an
 	}));
 	const policy = profilePayload(draft).config.auto_routing.risk_policy;
 	assert.deepEqual(policy, {
+		version: 2,
 		sensitive_text_patterns: [],
 		sensitive_tool_patterns: ["second", "first"],
 		structured_output_high_risk: false,
@@ -126,8 +194,9 @@ test("saved risk policy preserves explicit empty arrays booleans basis points an
 
 test("saved empty or partial risk policy drafts use the Go missing-boolean contract", () => {
 	for (const riskPolicy of [
-		{},
+		{ version: 2 },
 		{
+			version: 2,
 			sensitive_text_patterns: ["text"],
 			sensitive_tool_patterns: ["tool"],
 			long_context_threshold_bps: 8125,
@@ -138,7 +207,7 @@ test("saved empty or partial risk policy drafts use the Go missing-boolean contr
 				...profileFixture().config,
 				auto_routing: {
 					...defaultProfileDraft().config.auto_routing,
-					enabled: true,
+					enabled: false,
 					risk_policy: riskPolicy,
 				},
 			},
@@ -156,6 +225,7 @@ test("saved empty or partial risk policy drafts use the Go missing-boolean contr
 
 test("disabled Auto routing persists and round-trips an explicit risk policy", () => {
 	const expected = {
+		version: 2,
 		sensitive_text_patterns: [],
 		sensitive_tool_patterns: ["second", "first"],
 		structured_output_high_risk: false,
@@ -210,6 +280,8 @@ test("model capability helpers append an explicit row and remove without sorting
       supports_structured_output: "",
       input_price_micro_usd_per_million: "",
       output_price_micro_usd_per_million: "",
+      cache_read_price_micro_usd_per_million: "",
+      cache_write_price_micro_usd_per_million: "",
     },
   ]);
   assert.deepEqual(removeModelCapability([first, second], 0), [second]);
@@ -268,7 +340,7 @@ test("Target payload rejects malformed or incompatible trust identifiers", () =>
     models: ["fast"],
   }];
 
-  assert.throws(() => profilePayload(draft), /供应商.*主 Target/);
+  assert.throws(() => profilePayload(draft), /供应商.*主上游节点/);
   draft.config.targets[0].provider_id = "acme-ai";
   draft.config.targets[0].credential_scope = "team b";
   assert.throws(() => profilePayload(draft), /凭据范围.*安全标识/);
@@ -307,6 +379,7 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
       context_window: 128000,
       max_output_tokens: 16000,
       supports_vision: false,
+      supports_tools: true,
       input_price_micro_usd_per_million: 100000,
       output_price_micro_usd_per_million: 400000,
     },
@@ -327,6 +400,7 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: "7000",
     session_ttl: "24h",
+		self_escalation: { enabled: true },
 		dynamic_optimization: {
 			enabled: true,
 			sample_rate_bps: "1250",
@@ -369,6 +443,7 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
   assert.deepEqual(auto.participants, ["fast", "strong"]);
   assert.equal(auto.analyzer_min_confidence_bps, 7000);
   assert.equal(auto.session_ttl, "24h");
+	assert.deepEqual(auto.self_escalation, { enabled: true });
 	assert.deepEqual(auto.dynamic_optimization, {
 		enabled: true,
 		sample_rate_bps: 1250,
@@ -870,7 +945,7 @@ test("editor renders exact accessible labels and sections and submits every conf
 
   assert.deepEqual(sectionHeadings(root), [
     "基础配置",
-    "Target 容错",
+    "上游节点容错",
     "模型能力",
     "智能路由",
     "视觉增强",
@@ -994,26 +1069,26 @@ test("Target editor preserves visible failover order and exact model IDs", async
     generate: () => {},
   });
 
-  assert.match(findText(root, "Upstream 是主 Target").textContent, /仅供 model=auto/);
+  assert.match(findText(root, "Upstream 是主上游节点").textContent, /仅供 model=auto/);
   assert.equal(controlByName(root, "provider_id").value, "acme-ai");
   assert.match(fieldDescription(root, controlByName(root, "provider_id")), /供应商/);
   assert.equal(controlByName(root, "credential_scope").value, "team-a");
   assert.match(fieldDescription(root, controlByName(root, "credential_scope")), /凭据/);
   assert.equal(controlByName(root, "target-0-id").value, "region_b");
   assert.equal(controlByName(root, "target-0-provider-id").value, "acme-ai");
-  assert.match(fieldDescription(root, controlByName(root, "target-0-provider-id")), /主 Target/);
+  assert.match(fieldDescription(root, controlByName(root, "target-0-provider-id")), /主上游节点/);
   assert.equal(controlByName(root, "target-0-credential-scope").value, "team-a");
-  assert.match(fieldDescription(root, controlByName(root, "target-0-credential-scope")), /主 Target/);
+  assert.match(fieldDescription(root, controlByName(root, "target-0-credential-scope")), /主上游节点/);
   assert.equal(controlByName(root, "target-0-models").value, "fast, strong");
   assert.match(fieldDescription(root, controlByName(root, "target-0-models")), /精确 ID/);
 
-  await buttonsByText(root, "上移 Target")[1].dispatch("click");
+  await buttonsByText(root, "上移节点")[1].dispatch("click");
   assert.equal(controlByName(root, "target-0-id").value, "region_c");
-  await buttonsByText(root, "下移 Target")[0].dispatch("click");
+  await buttonsByText(root, "下移节点")[0].dispatch("click");
   assert.equal(controlByName(root, "target-0-id").value, "region_b");
-  await buttonByText(root, "添加备用 Target").dispatch("click");
+  await buttonByText(root, "添加备用上游节点").dispatch("click");
   assert.equal(controls(root).filter((control) => /^target-\d+-id$/.test(control.name)).length, 3);
-  await buttonsByText(root, "删除 Target")[2].dispatch("click");
+  await buttonsByText(root, "删除节点")[2].dispatch("click");
 
   await findTag(root, "FORM").dispatch("submit");
   assert.deepEqual(saved.config.targets, draft.config.targets);
@@ -1070,8 +1145,19 @@ test("model editor rows add and remove in Profile order with explicit token and 
         root,
         controlByField(row, "input_price_micro_usd_per_million"),
       ),
-      /微美元\/百万 Token/,
+      /美元价格.*最多 6 位小数/,
     );
+    for (const field of [
+      "input_price_micro_usd_per_million",
+      "output_price_micro_usd_per_million",
+      "cache_read_price_micro_usd_per_million",
+      "cache_write_price_micro_usd_per_million",
+    ]) {
+      const price = controlByField(row, field);
+      assert.equal(price.type, "number");
+      assert.equal(price.getAttribute("min"), "0");
+      assert.equal(price.getAttribute("step"), "0.000001");
+    }
   }
   assert.ok(findText(root, "不添加时不影响请求转发"));
 
@@ -1084,6 +1170,182 @@ test("model editor rows add and remove in Profile order with explicit token and 
   await buttonsByText(root, "删除模型")[0].dispatch("click");
   assert.deepEqual(modelIDs(root), ["manual-second", ""]);
   assert.equal(buttonTexts(root).includes("上移"), false);
+});
+
+test("editor uses dollar decimals while preserving integer micro-USD API values", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = autoLifecycleDraft();
+  draft.config.auto_routing.dynamic_optimization = {
+    enabled: true,
+    sample_rate_bps: 1000,
+    daily_budget_micro_usd: 250000,
+    reviewer_model: "strong",
+    max_concurrency: 2,
+    queue_capacity: 128,
+    task_timeout: "90s",
+  };
+  draft.config.models[0].cache_read_price_micro_usd_per_million = 10000;
+  draft.config.models[0].cache_write_price_micro_usd_per_million = 125000;
+  let saved;
+  renderProfileEditor(root, draft, {
+    save: async (payload) => { saved = payload; },
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const fast = modelRows(root)[0];
+  const inputPrice = controlByField(
+    fast,
+    "input_price_micro_usd_per_million",
+  );
+  const outputPrice = controlByField(
+    fast,
+    "output_price_micro_usd_per_million",
+  );
+  const cacheReadPrice = controlByField(
+    fast,
+    "cache_read_price_micro_usd_per_million",
+  );
+  const cacheWritePrice = controlByField(
+    fast,
+    "cache_write_price_micro_usd_per_million",
+  );
+  assert.equal(inputPrice.value, "0.1");
+  assert.equal(outputPrice.value, "0.4");
+  assert.equal(cacheReadPrice.value, "0.01");
+  assert.equal(cacheWritePrice.value, "0.125");
+  assert.equal(controlByName(root, "auto_dynamic_daily_budget").value, "0.25");
+  assert.equal(controlByName(root, "auto-budget-cost").value, "0.5");
+
+  inputPrice.value = "0.123456";
+  outputPrice.value = "4.25";
+  cacheReadPrice.value = "0.012345";
+  cacheWritePrice.value = "0.625";
+  controlByName(root, "auto_dynamic_daily_budget").value = "1.5";
+  controlByName(root, "auto-budget-cost").value = "0.75";
+  await findTag(root, "FORM").dispatch("submit");
+
+  assert.equal(saved.config.models[0].input_price_micro_usd_per_million, 123456);
+  assert.equal(saved.config.models[0].output_price_micro_usd_per_million, 4250000);
+  assert.equal(saved.config.models[0].cache_read_price_micro_usd_per_million, 12345);
+  assert.equal(saved.config.models[0].cache_write_price_micro_usd_per_million, 625000);
+  assert.equal(
+    saved.config.auto_routing.dynamic_optimization.daily_budget_micro_usd,
+    1500000,
+  );
+  assert.equal(
+    saved.config.auto_routing.strategy.budget.max_worst_case_cost_micro_usd,
+    750000,
+  );
+});
+
+test("unmatched model ID can apply a searchable catalog preset without changing its ID", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "private-shadow-model",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: false,
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const preset = controlByName(row, "model-0-preset");
+  assert.equal(preset.type, "search");
+  assert.ok(preset.getAttribute("list"));
+  preset.value = "claude-haiku-4-5-20251001";
+  await preset.dispatch("input");
+  await buttonByText(row, "应用参数模板").dispatch("click");
+
+  assert.equal(controlByField(row, "id").value, "private-shadow-model");
+  assert.equal(controlByField(row, "context_window").value, "200000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "64000");
+  assert.equal(controlByField(row, "supports_vision").value, "true");
+  assert.equal(controlByField(row, "supports_tools").value, "true");
+  assert.equal(
+    controlByField(row, "input_price_micro_usd_per_million").value,
+    "1",
+  );
+  assert.equal(
+    controlByField(row, "output_price_micro_usd_per_million").value,
+    "5",
+  );
+});
+
+test("every model row keeps the searchable template beside model ID", (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "claude-haiku-4-5-20251001",
+    context_window: 200000,
+    max_output_tokens: 64000,
+    supports_vision: true,
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const preset = controlByName(row, "model-0-preset");
+  assert.equal(preset.type, "search");
+  assert.equal(preset.value, "anthropic/claude-haiku-4-5-20251001");
+  assert.equal(buttonByText(row, "应用参数模板").disabled, false);
+  assert.deepEqual(
+    labelTexts(findClass(row, "model-capability-fields")).slice(0, 4),
+    ["模型 ID", "模型模板", "上下文窗口", "最大输出 Token"],
+  );
+});
+
+test("model editor imports matched and unknown batch IDs with one action", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+  });
+  const input = controlByName(root, "model_batch_ids");
+  input.value = [
+    "claude-haiku-4-5-20251001",
+    "unknown-batch-model",
+    "claude-haiku-4-5-20251001",
+  ].join("\n");
+  assert.deepEqual(
+    buttonTexts(root).filter((text) => text.includes("批量")),
+    ["批量导入"],
+  );
+  await buttonByText(root, "批量导入").dispatch("click");
+
+  assert.deepEqual(modelIDs(root), [
+    "claude-haiku-4-5-20251001",
+    "unknown-batch-model",
+  ]);
+  assert.equal(
+    controlByField(modelRows(root)[0], "context_window").value,
+    "200000",
+  );
+});
+
+test("model batch import skips an exact ID already saved in the Profile", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{ id: "saved", context_window: 999 }];
+  renderProfileEditor(root, draft, { save: async () => {}, cancel: () => {} });
+
+  controlByName(root, "model_batch_ids").value = "saved";
+  await buttonByText(root, "批量导入").dispatch("click");
+
+  assert.ok(findText(root, "没有可导入的新模型"));
+  assert.equal(controlByField(modelRows(root)[0], "context_window").value, "999");
 });
 
 test("model editor blocks deletion while an exact feature reference remains", async (t) => {
@@ -1155,7 +1417,9 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
     session_ttl: "48h",
+		self_escalation: { enabled: true },
 		risk_policy: {
+			version: 2,
 			sensitive_text_patterns: ["private mutation", "second"],
 			sensitive_tool_patterns: ["exec", "apply_patch"],
 			structured_output_high_risk: true,
@@ -1207,22 +1471,16 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.equal(controlByName(root, "auto_routing_enabled").checked, true);
   assert.equal(controlByName(root, "auto_analyzer_confidence").value, "70");
   assert.equal(controlByName(root, "auto_session_ttl").value, "48h");
+	assert.equal(controlByName(root, "auto_self_escalation_enabled").checked, true);
+	assert.match(
+		fieldDescription(root, controlByName(root, "auto_self_escalation_enabled")),
+		/输出任何文本前.*原始请求|原始请求.*低级模型/,
+	);
 	assert.equal(controlByName(root, "auto_sensitive_text_patterns").value, "private mutation\nsecond");
 	assert.equal(controlByName(root, "auto_sensitive_tool_patterns").value, "exec\napply_patch");
-	assert.equal(controlByName(root, "auto_structured_output_high_risk").checked, true);
-	assert.equal(controlByName(root, "auto_long_context_threshold").value, "75");
-	assert.match(
-		fieldDescription(root, controlByName(root, "auto_sensitive_tool_patterns")),
-		/仅.*强制|已经调用|暴露工具.*不会/,
-	);
-	assert.match(
-		fieldDescription(root, controlByName(root, "auto_sensitive_text_patterns")),
-		/不区分大小写.*子串|空列表.*停用/,
-	);
-	assert.match(
-		fieldDescription(root, controlByName(root, "auto_structured_output_high_risk")),
-		/强模型基线/,
-	);
+	assert.match(fieldDescription(root, controlByName(root, "auto_sensitive_tool_patterns")), /当前请求.*强制|历史调用/);
+	assert.match(fieldDescription(root, controlByName(root, "auto_sensitive_text_patterns")), /当前轮.*用户文本/);
+	assert.equal(controlByName(root, "auto-task-0-difficulty").value, "");
 	assert.equal(controlByName(root, "auto_dynamic_enabled").checked, true);
 	assert.equal(controlByName(root, "auto_dynamic_sample_rate").value, "10");
 	assert.equal(controlByName(root, "auto_dynamic_reviewer_model").value, "strong");
@@ -1235,6 +1493,19 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     /X-LLM-Proxy-Session-ID/,
   );
   assert.equal(controlByName(root, "auto-route-0-min-quality").value, "90");
+  assert.match(
+    fieldDescription(root, controlByName(root, "auto-route-0-min-quality")),
+    /质量估计 89.*排除.*92.*参与选型/,
+  );
+  assert.match(
+    fieldDescription(root, controlByName(root, "auto-route-0-candidate-0-quality")),
+    /当前 Route.*不是模型的全局评分/,
+  );
+  const strategyGuide = linkByText(root, "查看完整字段说明和选模示例 ↗");
+  assert.equal(
+    strategyGuide.href,
+    "/_admin/help/intelligent-routing",
+  );
   assert.match(
     fieldDescription(root, controlByName(root, "auto_strong_baseline_model")),
     /高风险/,
@@ -1249,8 +1520,8 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
 	controlByName(root, "auto_dynamic_sample_rate").value = "12.5";
 	controlByName(root, "auto_sensitive_text_patterns").value = "";
 	controlByName(root, "auto_sensitive_tool_patterns").value = "apply_patch\nexec";
-	controlByName(root, "auto_structured_output_high_risk").checked = false;
-	controlByName(root, "auto_long_context_threshold").value = "62.5";
+	controlByName(root, "auto-task-0-difficulty").value = "easy";
+	controlByName(root, "auto_self_escalation_enabled").checked = false;
   controlByName(root, "auto-route-0-min-quality").value = "91.25";
   await findTag(root, "FORM").dispatch("submit");
 
@@ -1268,11 +1539,14 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_quality_bps, 9125);
   assert.deepEqual(saves[0].config.auto_routing.participants, ["fast", "strong"]);
 	assert.deepEqual(saves[0].config.auto_routing.risk_policy, {
+		version: 2,
 		sensitive_text_patterns: [],
 		sensitive_tool_patterns: ["apply_patch", "exec"],
 		structured_output_high_risk: false,
-		long_context_threshold_bps: 6250,
+		long_context_threshold_bps: 7500,
 	});
+	assert.equal(saves[0].config.auto_routing.strategy.task_routes[0].difficulty, "easy");
+	assert.deepEqual(saves[0].config.auto_routing.self_escalation, { enabled: false });
 
   controlByName(root, "auto-route-0-min-quality").value = "";
   await findTag(root, "FORM").dispatch("submit");
@@ -1282,7 +1556,7 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   assert.match(findClass(root, "error-banner").textContent, /最低质量必须是/);
 });
 
-test("Auto enable control waits for at least one recorded model", (t) => {
+test("Auto enable control waits for two recorded models", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();
   draft.id = 7;
@@ -1292,6 +1566,29 @@ test("Auto enable control waits for at least one recorded model", (t) => {
 
   renderProfileEditor(root, draft, { save: async () => {}, cancel: () => {} });
   assert.equal(controlByName(root, "auto_routing_enabled").disabled, true);
+
+  await buttonByText(root, "添加模型").dispatch("click");
+  controlByField(modelRows(root)[0], "id").value = "fast";
+  await controlByField(modelRows(root)[0], "id").dispatch("input");
+  assert.equal(controlByName(root, "auto_routing_enabled").disabled, true);
+
+  await buttonByText(root, "添加模型").dispatch("click");
+  controlByField(modelRows(root)[1], "id").value = "strong";
+  await controlByField(modelRows(root)[1], "id").dispatch("input");
+  assert.equal(controlByName(root, "auto_routing_enabled").disabled, false);
+});
+
+test("incomplete enabled Auto configuration fails locally with actionable guidance", () => {
+  const draft = autoLifecycleDraft();
+  draft.config.auto_routing.dynamic_optimization = structuredClone(
+    defaultProfileDraft().config.auto_routing.dynamic_optimization,
+  );
+  draft.config.auto_routing.participants = [];
+
+  assert.throws(
+    () => profilePayload(draft),
+    /至少选择两个参与模型/,
+  );
 });
 
 test("strategy lifecycle UI creates drafts and exposes only valid publication actions", async (t) => {
@@ -1431,6 +1728,13 @@ test("strategy lifecycle shows conservative evidence and generates only a draft"
 			quality_lower_bps: 9134,
 			severe_error_mean_bps: 120,
 			severe_error_upper_bps: 364,
+			self_escalation_eligible_samples: 20,
+			self_escalations: 5,
+			supported_self_escalations: 4,
+			unnecessary_self_escalations: 1,
+			missed_self_escalations: 2,
+			self_escalation_precision_bps: 8000,
+			missed_self_escalation_rate_bps: 1333,
 		}],
 	};
 	let generated = 0;
@@ -1439,15 +1743,15 @@ test("strategy lifecycle shows conservative evidence and generates only a draft"
 		save: async () => {}, cancel: () => {}, generate: () => {},
 	});
 
-	assert.ok(findText(root, "今日评测：5,000 / 250,000 微美元"));
-	assert.ok(findText(root, "fast ↔ strong"));
-	assert.ok(findText(root, "保守质量 91.34%"));
-	assert.ok(findText(root, "严重错误上界 3.64%"));
+	assert.ok(findText(root, "今日评测：$0.005 / $0.25"));
+	assert.ok(findText(root, "模型表现：1 个分组，其中 1 个证据可靠。"));
+	const performanceLink = findText(root, "查看模型表现");
+	assert.equal(performanceLink.getAttribute("href"), "/_admin/stats/models?profile_id=7");
 	await buttonByText(root, "生成学习候选").dispatch("click");
 	assert.equal(generated, 1);
 });
 
-test("saved model rows retain empty optional limits while still showing catalog provenance", async (t) => {
+test("saved model rows fill blank catalog values while preserving configured values", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();
   draft.config.models = [
@@ -1468,14 +1772,14 @@ test("saved model rows retain empty optional limits while still showing catalog 
   const [exact] = modelRows(root);
   assert.equal(controlByField(exact, "id").value, "GLM-5");
   assert.equal(controlByField(exact, "context_window").value, "204800");
-  assert.equal(controlByField(exact, "max_output_tokens").value, "");
+  assert.equal(controlByField(exact, "max_output_tokens").value, "131072");
   assert.equal(controlByField(exact, "supports_vision").value, "false");
   assert.ok(findText(exact, "来源：Models.dev"));
   assert.ok(findText(exact, "更新：2026-02-12"));
   assert.ok(findText(exact, `获取：${MODELS_DEV_SOURCE.retrieved}`));
 });
 
-test("progressive model input renders recommendations but waits for change before applying exact values", async (t) => {
+test("unique model input immediately applies exact values", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();
   draft.config.models = [{
@@ -1499,15 +1803,9 @@ test("progressive model input renders recommendations but waits for change befor
 
   id.value = "glm-5";
   await id.dispatch("input");
-  assert.equal(context.value, "");
 
   id.value = "glm-5.2";
   await id.dispatch("input");
-  assert.equal(context.value, "");
-  assert.equal(output.value, "");
-  assert.equal(vision.value, "");
-
-  await id.dispatch("change");
   assert.equal(context.value, "1000000");
   assert.equal(output.value, "131072");
   assert.equal(vision.value, "false");
@@ -1542,17 +1840,17 @@ test("pasting a unique model ID immediately applies its safe recommendation", as
   assert.equal(controlByField(row, "supports_tools").value, "true");
   assert.equal(
     controlByField(row, "input_price_micro_usd_per_million").value,
-    "1000000",
+    "1",
   );
   assert.equal(
     controlByField(row, "output_price_micro_usd_per_million").value,
-    "5000000",
+    "5",
   );
   assert.ok(findText(row, "参考价格"));
   assert.ok(findText(row, "实际上游账单"));
 });
 
-test("compatibility aliases retain the exact entered ID when change auto-applies values", async (t) => {
+test("compatibility aliases immediately apply all template values without changing the entered ID", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();
   draft.config.models = [{
@@ -1572,16 +1870,75 @@ test("compatibility aliases retain the exact entered ID when change auto-applies
   const id = controlByField(row, "id");
   id.value = "claude-glm-5.2";
   await id.dispatch("input");
-  assert.equal(controlByField(row, "context_window").value, "");
 
-  await id.dispatch("change");
   assert.equal(id.value, "claude-glm-5.2");
+  assert.equal(
+    controlByName(row, "model-0-preset").value,
+    "zhipuai/glm-5.2",
+  );
   assert.equal(controlByField(row, "context_window").value, "1000000");
   assert.equal(controlByField(row, "max_output_tokens").value, "131072");
   assert.equal(controlByField(row, "supports_vision").value, "false");
+  assert.equal(
+    controlByField(row, "input_price_micro_usd_per_million").value,
+    "1.4",
+  );
+  assert.equal(
+    controlByField(row, "output_price_micro_usd_per_million").value,
+    "4.4",
+  );
+  assert.equal(
+    controlByField(row, "cache_read_price_micro_usd_per_million").value,
+    "0.26",
+  );
+  assert.equal(
+    controlByField(row, "cache_write_price_micro_usd_per_million").value,
+    "0",
+  );
 });
 
-test("initial render shows an exact recommendation without filling saved blank fields", (t) => {
+test("an unmatched committed model prompts for a template and applies it without changing the ID", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "",
+    context_window: "",
+    max_output_tokens: "",
+    supports_vision: "",
+  }];
+
+  renderProfileEditor(root, draft, {
+    save: async () => {},
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const row = modelRows(root)[0];
+  const id = controlByField(row, "id");
+  id.value = "private-glm-wrapper";
+  await id.dispatch("change");
+
+  const dialog = findClass(root, "model-template-dialog");
+  assert.ok(findText(dialog, "未能为 private-glm-wrapper 自动匹配参数"));
+  const template = controlByName(dialog, "model_template_0");
+  template.value = "zhipuai/glm-5.2";
+  await template.dispatch("input");
+  await buttonByText(dialog, "应用所选模板").dispatch("click");
+
+  assert.equal(elementsByClass(root, "model-template-dialog").length, 0);
+  assert.equal(id.value, "private-glm-wrapper");
+  assert.equal(controlByField(row, "context_window").value, "1000000");
+  assert.equal(
+    controlByField(row, "input_price_micro_usd_per_million").value,
+    "1.4",
+  );
+  assert.equal(
+    controlByField(row, "cache_read_price_micro_usd_per_million").value,
+    "0.26",
+  );
+});
+
+test("initial render fills blank fields from an exact recommendation", (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();
   draft.config.models = [{
@@ -1598,9 +1955,17 @@ test("initial render shows an exact recommendation without filling saved blank f
   });
 
   const row = modelRows(root)[0];
-  assert.equal(controlByField(row, "context_window").value, "");
-  assert.equal(controlByField(row, "max_output_tokens").value, "");
-  assert.equal(controlByField(row, "supports_vision").value, "");
+  assert.equal(controlByField(row, "context_window").value, "1000000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "131072");
+  assert.equal(controlByField(row, "supports_vision").value, "false");
+  assert.equal(
+    controlByField(row, "input_price_micro_usd_per_million").value,
+    "1.4",
+  );
+  assert.equal(
+    controlByField(row, "cache_read_price_micro_usd_per_million").value,
+    "0.26",
+  );
   assert.ok(findText(row, "GLM-5.2"));
   assert.ok(findText(row, "精确匹配"));
 });
@@ -1635,8 +2000,8 @@ test("switching exact models preserves manually edited fields and replaces still
   id.value = "gpt-5.6-sol";
   await id.dispatch("input");
   assert.equal(context.value, "900000");
-  assert.equal(output.value, "131072");
-  assert.equal(vision.value, "false");
+  assert.equal(output.value, "128000");
+  assert.equal(vision.value, "true");
 
   await id.dispatch("change");
   assert.equal(context.value, "900000");
@@ -2332,6 +2697,10 @@ test("authenticated app creates a Profile only through the injected API client",
   assert.equal(creates[0].make_default, true);
   assert.equal(creates[0].config.upstream, "https://new.example");
   assert.equal(typeof creates[0].config.vision.max_tokens, "number");
+  const created = findClass(root, "success-banner");
+  assert.equal(created.hidden, false);
+  assert.equal(created.getAttribute("role"), "status");
+  assert.equal(created.textContent, "Profile 保存成功。");
 });
 
 test("authenticated Profile detail route mounts only its selected settings section", async (t) => {
@@ -2359,6 +2728,83 @@ test("authenticated Profile detail route mounts only its selected settings secti
     false,
   );
   assert.equal(findText(root, "视觉增强"), linkByText(root, "视觉增强"));
+});
+
+test("authenticated help route renders the built-in intelligent routing guide", async (t) => {
+  const root = installFakeDOM(t);
+  await bootstrap({
+    root,
+    path: "/_admin/help/intelligent-routing",
+    client: {
+      session: async () => ({ username: "admin", must_change_password: false }),
+    },
+  });
+
+  assert.equal(findAllTags(root, "H1")[0].textContent, "帮助");
+  assert.equal(linkByText(root, "帮助").getAttribute("aria-current"), "page");
+  assert.equal(
+    linkByText(root, "智能路由").getAttribute("aria-current"),
+    "page",
+  );
+  assert.ok(findText(root, "智能路由配置说明"));
+  assert.ok(findText(root, "先过门槛，再比成本"));
+  assert.ok(findText(root, "为什么候选会被排除"));
+});
+
+test("authenticated help overview renders the secondary help navigation", async (t) => {
+  const root = installFakeDOM(t);
+  await bootstrap({
+    root,
+    path: "/_admin/help/overview",
+    client: {
+      session: async () => ({ username: "admin", must_change_password: false }),
+    },
+  });
+
+  assert.equal(findAllTags(root, "H1")[0].textContent, "帮助");
+  assert.equal(linkByText(root, "帮助").getAttribute("href"), "/_admin/help/overview");
+  assert.equal(
+    linkByText(root, "使用概览").getAttribute("aria-current"),
+    "page",
+  );
+  assert.ok(findText(root, "推荐配置顺序"));
+  assert.ok(findText(root, "智能路由只是其中一个主题"));
+});
+
+test("model detail loads the active server catalog before rendering recommendations", async (t) => {
+  const root = installFakeDOM(t);
+  const originalCatalog = currentModelCatalog();
+  t.after(() => installModelCatalog(originalCatalog));
+  const profile = profileFixture({
+    id: 7,
+    slug: "coding",
+    display_name: "Coding",
+    config: {
+      version: 1,
+      protocol: "anthropic",
+      upstream: "https://upstream.example",
+      models: [{ id: "remote-alpha" }],
+      vision: { enabled: false, model: "" },
+      overload_rules: [],
+    },
+  });
+  let catalogCalls = 0;
+  await bootstrap({
+    root,
+    path: "/_admin/profiles/7/models",
+    client: {
+      session: async () => ({ username: "admin", must_change_password: false }),
+      getProfile: async () => profile,
+      listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+      modelCatalog: async () => {
+        catalogCalls++;
+        return remoteCatalogFixture();
+      },
+    },
+  });
+
+  assert.equal(catalogCalls, 1);
+  assert.ok(findText(root, "Remote Alpha"));
 });
 
 test("saving one Profile detail section keeps unrelated configuration", async (t) => {
@@ -2408,6 +2854,10 @@ test("saving one Profile detail section keeps unrelated configuration", async (t
   assert.equal(updates[0].config.vision.prompt, "保留这个提示词");
   assert.equal(updates[0].config.vision.cache_ttl, "2h");
   assert.deepEqual(updates[0].config.overload_rules, profile.config.overload_rules);
+  const success = findClass(root, "success-banner");
+  assert.equal(success.hidden, false);
+  assert.equal(success.getAttribute("role"), "status");
+  assert.equal(success.textContent, "Profile 保存成功。");
 });
 
 test("Agent detail generates protocol-specific configuration without a model catalog", async (t) => {
@@ -2514,6 +2964,36 @@ function profileListFixture() {
         },
       }),
     ],
+  };
+}
+
+function remoteCatalogFixture() {
+  return {
+    source: {
+      name: "Models.dev",
+      revision: "d".repeat(64),
+      modelsSha256: "e".repeat(64),
+      providersSha256: "f".repeat(64),
+      retrieved: "2026-08-02",
+    },
+    models: [{
+      id: "remote-alpha",
+      canonicalId: "acme/remote-alpha",
+      apiIds: [],
+      aliases: ["acme/remote-alpha"],
+      compatibilityAliases: [],
+      provider: "Acme",
+      name: "Remote Alpha",
+      family: "remote-alpha",
+      context_window: 128000,
+      max_output_tokens: 16000,
+      supports_vision: false,
+      supports_tools: true,
+      input_price_micro_usd_per_million: 100000,
+      output_price_micro_usd_per_million: 400000,
+      lifecycle: "stable",
+      references: [],
+    }],
   };
 }
 
@@ -2633,7 +3113,7 @@ class FakeElement {
     this.id = "";
     this.name = "";
     this.type = "";
-    this.value = "";
+    this._value = "";
     this.checked = false;
     this.required = false;
     this.disabled = false;
@@ -2643,6 +3123,25 @@ class FakeElement {
 
   set innerHTML(_) {
     throw new Error("innerHTML is forbidden");
+  }
+
+  get value() {
+    if (this.tagName !== "SELECT") {
+      return this._value;
+    }
+    return this.children.find((child) => child.selected)?.value ??
+      this.children[0]?.value ?? "";
+  }
+
+  set value(value) {
+    const normalized = String(value ?? "");
+    if (this.tagName !== "SELECT") {
+      this._value = normalized;
+      return;
+    }
+    for (const child of this.children) {
+      child.selected = child.value === normalized;
+    }
   }
 
   append(...children) {

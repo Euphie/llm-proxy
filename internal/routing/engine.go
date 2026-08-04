@@ -42,13 +42,22 @@ func (e *Engine) EvaluationPair(
 	return e.planner.EvaluationPair(request, classification, selectedModel)
 }
 
+func (e *Engine) UsesDefaultRoute(taskType string) bool {
+	return e.UsesDefaultRouteFor(taskType, DifficultyUnknown)
+}
+
+func (e *Engine) UsesDefaultRouteFor(taskType string, difficulty Difficulty) bool {
+	_, mapped := e.auto.Strategy.RouteFor(taskType, string(difficulty))
+	return !mapped
+}
+
 func (e *Engine) Route(
 	ctx context.Context,
 	headers http.Header,
 	request Request,
 	budget *AttemptBudget,
 ) (ExecutionPlan, Classification, error) {
-	return e.RouteWithPreference(ctx, headers, request, budget, nil)
+	return e.RouteWithPreference(ctx, headers, request, budget, SessionPreference{})
 }
 
 func (e *Engine) RouteWithPreference(
@@ -56,10 +65,25 @@ func (e *Engine) RouteWithPreference(
 	headers http.Header,
 	request Request,
 	budget *AttemptBudget,
-	resolvePreference func(routeID string) SessionPreference,
+	preference SessionPreference,
 ) (ExecutionPlan, Classification, error) {
-	if classification, matched := ClassifyLocal(request, e.baseline, e.auto.RiskPolicy); matched {
-		plan, err := e.plan(request, classification, resolvePreference, budget)
+	cachePreference := SessionPreference{CacheMetrics: preference.CacheMetrics}
+	fallbackReason := ""
+	if classification, matched := ClassifyHardRisk(request, e.baseline, e.auto.RiskPolicy); matched {
+		if session, ok := e.sessionClassification(preference); ok {
+			classification.TaskType = session.TaskType
+			classification.Difficulty = session.Difficulty
+			classification.ReasonCodes = append(classification.ReasonCodes, "session_context_preserved")
+		}
+		plan, err := e.plan(request, classification, preference, budget)
+		return plan, classification, err
+	}
+	if classification, ok := e.sessionClassification(preference); ok {
+		plan, err := e.plan(request, classification, preference, budget)
+		return plan, classification, err
+	}
+	if classification, matched := classifySimple(request); matched {
+		plan, err := e.plan(request, classification, cachePreference, budget)
 		return plan, classification, err
 	}
 
@@ -80,32 +104,55 @@ func (e *Engine) RouteWithPreference(
 			provider.FailureOperationTimeout,
 			provider.FailureUnknownTransport,
 			provider.FailureMalformedResponse:
+			fallbackReason = "task_analyzer_" + string(class)
 		default:
 			return ExecutionPlan{}, Classification{}, err
 		}
 	}
 	if err != nil || classification.ConfidenceBPS < e.auto.AnalyzerMinConfidenceBPS {
-		fallback := Classification{
-			TaskType: "high_risk", Risk: RiskHigh,
-			Source: ClassificationSourceFallback,
+		confidence := 0
+		if err == nil {
+			fallbackReason = "task_analyzer_low_confidence"
+			confidence = classification.ConfidenceBPS
 		}
-		plan, planErr := e.plan(request, fallback, resolvePreference, budget)
+		fallback := Classification{
+			TaskType: "unknown", Difficulty: DifficultyUnknown, Risk: RiskUnknown,
+			ConfidenceBPS: confidence, Source: ClassificationSourceFallback,
+			ReasonCodes: []string{fallbackReason},
+		}
+		plan, planErr := e.plan(request, fallback, cachePreference, budget)
 		return plan, fallback, planErr
 	}
-	plan, err := e.plan(request, classification, resolvePreference, budget)
+	plan, err := e.plan(request, classification, cachePreference, budget)
 	return plan, classification, err
+}
+
+func (e *Engine) sessionClassification(preference SessionPreference) (Classification, bool) {
+	if preference.TaskType == "" || preference.RouteID == "" || preference.Model == "" ||
+		preference.Strategy != e.auto.Strategy.Name || preference.MinQualityScoreBPS < 0 ||
+		preference.MinQualityScoreBPS > 10_000 {
+		return Classification{}, false
+	}
+	classification := Classification{
+		TaskType: preference.TaskType, Difficulty: preference.Difficulty, Risk: RiskNormal,
+		ConfidenceBPS: 10_000, Source: ClassificationSourceSession,
+		ReasonCodes: []string{"session_reuse"},
+	}
+	if classification.Difficulty == "" {
+		classification.Difficulty = DifficultyUnknown
+	}
+	if e.planner.RouteID(classification) != preference.RouteID {
+		return Classification{}, false
+	}
+	return classification, true
 }
 
 func (e *Engine) plan(
 	request Request,
 	classification Classification,
-	resolvePreference func(routeID string) SessionPreference,
+	preference SessionPreference,
 	budget *AttemptBudget,
 ) (ExecutionPlan, error) {
-	preference := SessionPreference{}
-	if resolvePreference != nil {
-		preference = resolvePreference(e.planner.RouteID(classification))
-	}
 	if budget == nil {
 		return e.planner.PlanWithPreference(request, classification, preference)
 	}

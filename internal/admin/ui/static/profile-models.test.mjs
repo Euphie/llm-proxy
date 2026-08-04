@@ -23,7 +23,7 @@ test("every exact routing vision and Target reference blocks deletion", () => {
     "仲裁模型",
     "视觉模型",
     "Route balanced",
-    "Target backup",
+    "上游节点 backup",
   ]);
 });
 

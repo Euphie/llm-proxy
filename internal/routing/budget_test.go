@@ -74,6 +74,33 @@ func TestAttemptBudgetRejectsCostAndSwitchOverflowWithoutMutation(t *testing.T) 
 	}
 }
 
+func TestAttemptBudgetZeroCostLimitAllowsPositiveCost(t *testing.T) {
+	limits := profile.AttemptBudgetRuntime{
+		MaxAnswerAttempts: 2, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 3,
+		Deadline: time.Minute, MaxWorstCaseCostMicroUSD: 0,
+	}
+
+	t.Run("direct call", func(t *testing.T) {
+		budget, ctx, cancel := NewAttemptBudget(context.Background(), limits)
+		defer cancel()
+		if err := budget.ReserveCall(ctx, CallAnswer, 25); err != nil {
+			t.Fatalf("reserve positive cost with unlimited budget: %v", err)
+		}
+	})
+
+	t.Run("attempt lease", func(t *testing.T) {
+		budget, ctx, cancel := NewAttemptBudget(context.Background(), limits)
+		defer cancel()
+		lease, err := budget.ReserveAttempt(ctx, AttemptReservation{
+			Model: "fast", Target: "primary", AnswerCallCostMicroUSD: 25,
+		})
+		if err != nil {
+			t.Fatalf("reserve attempt with unlimited budget: %v", err)
+		}
+		lease.ReleaseUnused()
+	})
+}
+
 func TestAttemptBudgetUsesOneDeadlineAndCancellationSignal(t *testing.T) {
 	parent, parentCancel := context.WithCancel(context.Background())
 	budget, ctx, cancel := NewAttemptBudget(parent, profile.AttemptBudgetRuntime{

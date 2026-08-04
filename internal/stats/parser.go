@@ -9,6 +9,7 @@ type Usage struct {
 	OutputTokens        int
 	CacheReadTokens     int
 	CacheCreationTokens int
+	InputIncludesCache  bool
 	Model               string
 	invalid             bool
 }

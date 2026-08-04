@@ -292,6 +292,10 @@ h3 {
   background: linear-gradient(145deg, #a4abb4, #626a75);
 }
 
+.nav-icon-violet {
+  background: linear-gradient(145deg, #b797ff, #7650ca);
+}
+
 .app-content {
   min-width: 0;
   min-height: 0;
@@ -636,7 +640,8 @@ h3 {
 }
 
 .warning-banner,
-.error-banner {
+.error-banner,
+.success-banner {
   padding: 0.82rem 0.95rem;
   border-radius: 0.7rem;
   line-height: 1.45;
@@ -652,6 +657,23 @@ h3 {
   border: 1px solid rgb(255 69 58 / 28%);
   background: var(--danger-surface);
   color: var(--danger);
+}
+
+.success-banner {
+  border: 1px solid rgb(48 209 88 / 28%);
+  background: var(--success-surface);
+  color: var(--success);
+}
+
+.app-flash {
+  position: fixed;
+  z-index: 1000;
+  top: clamp(1rem, 3vw, 2rem);
+  right: clamp(1rem, 3vw, 2rem);
+  width: min(24rem, calc(100vw - 2rem));
+  box-shadow: 0 0.55rem 1.5rem rgb(38 52 70 / 18%);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
 }
 
 .form-grid {
@@ -1074,6 +1096,18 @@ caption {
   padding: 0 0.35rem;
 }
 
+.model-preset-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.model-preset-controls .button {
+  min-height: 2.8rem;
+  white-space: nowrap;
+}
+
 .model-recommendation {
   gap: 0.65rem;
   margin-top: 0.85rem;
@@ -1126,6 +1160,26 @@ caption {
   margin-top: 1rem;
 }
 
+.model-batch-card {
+  gap: 0.8rem;
+  background: linear-gradient(
+    135deg,
+    rgb(255 255 255 / 78%),
+    rgb(236 247 255 / 64%)
+  );
+  box-shadow: none;
+}
+
+.model-batch-card h3,
+.model-batch-card p {
+  margin: 0;
+}
+
+.model-batch-card > .button,
+.model-catalog-system > .button {
+  justify-self: start;
+}
+
 .auto-routing-details {
   margin-top: 1rem;
 }
@@ -1140,6 +1194,146 @@ caption {
 .auto-routing-subsection > h3 {
   margin: 0;
   font-size: 0.96rem;
+}
+
+.routing-strategy-guide {
+  gap: 0.35rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgb(10 111 200 / 18%);
+  border-radius: 0.65rem;
+  background: rgb(232 244 255 / 58%);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.routing-strategy-guide p {
+  margin: 0;
+}
+
+.routing-strategy-guide a {
+  justify-self: start;
+  font-weight: 650;
+}
+
+.routing-help-page {
+  max-width: 72rem;
+}
+
+.help-detail-layout {
+  display: grid;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.help-section-nav {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.55rem;
+  border: 1px solid var(--separator);
+  border-radius: 0.82rem;
+  background: rgb(255 255 255 / 56%);
+}
+
+.help-section-nav a {
+  min-height: 2.35rem;
+  padding: 0.48rem 0.6rem;
+  border-radius: 0.52rem;
+  color: var(--text-muted);
+  font-size: 0.87rem;
+  font-weight: 620;
+  text-decoration: none;
+}
+
+.help-section-nav a:hover {
+  background: rgb(255 255 255 / 62%);
+  color: var(--text);
+}
+
+.help-section-nav a[aria-current="page"] {
+  background: rgb(0 109 204 / 12%);
+  color: var(--primary);
+}
+
+.help-topic-content {
+  min-width: 0;
+}
+
+.help-topic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.help-topic-card h3,
+.help-topic-card p {
+  margin: 0;
+}
+
+.help-topic-card a {
+  justify-self: start;
+  font-weight: 650;
+}
+
+.help-topic-list {
+  gap: 0.55rem;
+  margin: 0;
+  line-height: 1.55;
+}
+
+.routing-help-hero,
+.routing-help-section {
+  padding: clamp(1rem, 2.4vw, 1.45rem);
+}
+
+.routing-help-hero h2,
+.routing-help-section h2,
+.routing-help-section h3,
+.routing-help-section p {
+  margin-bottom: 0;
+}
+
+.routing-help-diagram figure {
+  margin: 0;
+}
+
+.routing-help-diagram img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--separator);
+  border-radius: 0.65rem;
+  background: #ffffff;
+}
+
+.routing-help-diagram-flow img {
+  width: min(100%, 46rem);
+  margin-inline: auto;
+}
+
+.routing-help-diagram figcaption {
+  line-height: 1.55;
+}
+
+.routing-help-example {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(16rem, 0.9fr);
+  gap: 1rem;
+}
+
+.routing-help-example > * {
+  min-width: 0;
+}
+
+.routing-help-note {
+  padding: 0.8rem 0.9rem;
+  border-left: 0.24rem solid var(--primary);
+  border-radius: 0.45rem;
+  background: rgb(232 244 255 / 58%);
+  line-height: 1.55;
 }
 
 .strategy-lifecycle-summary,
@@ -1330,6 +1524,149 @@ dialog::backdrop {
   justify-self: start;
 }
 
+.stats-nav {
+	display: flex;
+	gap: 0.4rem;
+	padding: 0.35rem;
+	border: 1px solid var(--separator);
+	border-radius: 0.8rem;
+	background: rgb(255 255 255 / 48%);
+	width: fit-content;
+}
+
+.stats-nav a {
+	padding: 0.55rem 0.85rem;
+	border-radius: 0.58rem;
+	color: var(--text-muted);
+	font-weight: 650;
+	text-decoration: none;
+}
+
+.stats-nav a[aria-current="page"] {
+	background: rgb(255 255 255 / 88%);
+	box-shadow: 0 0.12rem 0.4rem rgb(30 48 70 / 12%);
+	color: var(--text);
+}
+
+.routing-categories {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+	gap: 0.7rem;
+}
+
+.category-card {
+	min-height: 3rem;
+	border: 1px solid var(--separator);
+	border-radius: 0.72rem;
+	background: rgb(255 255 255 / 58%);
+	color: var(--text-muted);
+	font-weight: 680;
+	cursor: pointer;
+}
+
+.category-card.selected {
+	border-color: rgb(10 132 255 / 30%);
+	background: rgb(10 132 255 / 10%);
+	color: var(--primary);
+}
+
+.routing-trace-card {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0.65rem 1rem;
+}
+
+.routing-trace-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	grid-column: 1 / -1;
+}
+
+.routing-trace-card p,
+.routing-trace-header h2 {
+	margin: 0;
+}
+
+.routing-trace-card .button-secondary {
+	grid-column: 2;
+	grid-row: 2 / span 3;
+	align-self: center;
+}
+
+.routing-pager {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.8rem;
+}
+
+.routing-trace-detail {
+	display: grid;
+	gap: 1rem;
+}
+
+.detail-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(9rem, max-content) minmax(0, 1fr));
+	gap: 0.5rem 0.8rem;
+	margin: 0;
+}
+
+.detail-grid dt {
+	color: var(--text-muted);
+	font-weight: 650;
+}
+
+.detail-grid dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.model-performance-list,
+.model-dimension-grid {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.model-performance-card {
+	padding: 1rem;
+}
+
+.model-performance-header,
+.model-dimension-row {
+	display: grid;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.model-performance-header {
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.model-performance-header h2 {
+	margin: 0;
+	font-size: 1.05rem;
+}
+
+.model-dimension-grid {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.model-dimension-row {
+	grid-template-columns: minmax(8rem, auto) minmax(8rem, 1fr) 4rem;
+}
+
+.model-dimension-row progress {
+	width: 100%;
+	accent-color: var(--accent);
+}
+
+.model-dimension-row strong {
+	text-align: right;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
@@ -1388,6 +1725,67 @@ dialog::backdrop {
 
 .system-password .auth-card {
   width: 100%;
+}
+
+.model-catalog-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  gap: 0.65rem;
+}
+
+.model-catalog-summary p {
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  margin: 0;
+  border: 1px solid var(--separator);
+  border-radius: 0.65rem;
+  background: rgb(255 255 255 / 48%);
+  overflow-wrap: anywhere;
+}
+
+.catalog-impact-output {
+  margin-top: 0.35rem;
+}
+
+.catalog-impact-row {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--separator);
+  border-left-width: 0.28rem;
+  border-radius: 0.72rem;
+  background: rgb(255 255 255 / 54%);
+}
+
+.catalog-impact-row p {
+  margin: 0;
+}
+
+.impact-high {
+  border-left-color: var(--danger);
+}
+
+.impact-medium {
+  border-left-color: var(--warning);
+}
+
+.impact-low {
+  border-left-color: var(--primary);
+}
+
+.impact-badge-high {
+  background: var(--danger-surface);
+  color: var(--danger);
+}
+
+.impact-badge-medium {
+  background: var(--warning-surface);
+  color: var(--warning);
+}
+
+.impact-badge-low {
+  background: rgb(0 109 204 / 10%);
+  color: var(--primary);
 }
 
 .dialog-body {
@@ -1510,6 +1908,15 @@ dialog::backdrop {
     grid-template-columns: 1fr;
   }
 
+  .help-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .help-section-nav {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .profile-section-nav {
     position: static;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1531,6 +1938,22 @@ dialog::backdrop {
   .retry-actions,
   .editor-actions {
     justify-content: flex-start;
+  }
+
+  .model-batch-row {
+    grid-template-columns: 1fr;
+  }
+
+  .model-batch-row .form-field {
+    grid-column: auto;
+  }
+
+  .routing-help-example {
+    grid-template-columns: 1fr;
+  }
+
+  .help-topic-grid {
+    grid-template-columns: 1fr;
   }
 }
 

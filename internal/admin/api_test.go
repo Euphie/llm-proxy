@@ -22,6 +22,7 @@ import (
 	"github.com/Euphie/llm-proxy/internal/database"
 	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/gateway"
+	"github.com/Euphie/llm-proxy/internal/modelcatalog"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/stats"
 	"github.com/Euphie/llm-proxy/internal/strategy"
@@ -753,8 +754,10 @@ func TestAPIGeneratesCandidateDraftOnlyFromReliableQualityEvidence(t *testing.T)
 	for range 30 {
 		if err := fixture.evidence.RecordEvidence(context.Background(), evaluation.Evidence{
 			ProfileID: profileBody.ID, Strategy: "20260802-001", Route: "balanced",
-			TaskType: "simple", CandidateModel: "fast", ReferenceModel: "strong",
+			TaskType: "simple", Difficulty: "easy", Risk: "normal", VisionMode: "none",
+			CandidateModel: "fast", ReferenceModel: "strong",
 			ReviewerModel: "strong", Outcome: evaluation.OutcomeCandidateWin,
+			Dimensions: evaluationDimensionOutcomes(evaluation.OutcomeCandidateWin),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -874,7 +877,7 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"data_dir":             fixture.dataDir,
 		"database_file":        "llm-proxy.db",
 		"database_bytes":       float64(databaseInfo.Size()),
-		"schema_version":       float64(7),
+		"schema_version":       float64(15),
 		"default_profile_id":   float64(first.ID),
 		"password_must_change": false,
 	}
@@ -889,14 +892,14 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"username", "dsn", "environment")
 }
 
-func TestAPIRoutingTracesReturnsAnEmptyListAndValidatesLimit(t *testing.T) {
+func TestAPIRoutingTracesReturnsAPageAndValidatesFilters(t *testing.T) {
 	fixture := newTestAPI(t)
 	cookies, _ := fixture.changePassword(t)
 
 	response := fixture.request(
 		t,
 		http.MethodGet,
-		"/_admin/api/routing-traces?limit=25",
+		"/_admin/api/routing-traces?page=1&page_size=25&category=all",
 		"",
 		cookies,
 		"",
@@ -904,22 +907,125 @@ func TestAPIRoutingTracesReturnsAnEmptyListAndValidatesLimit(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	var rows []map[string]any
-	decodeTestJSON(t, response, &rows)
-	if rows == nil || len(rows) != 0 {
-		t.Fatalf("rows=%+v", rows)
+	var page stats.RoutingTracePage
+	decodeTestJSON(t, response, &page)
+	if page.Items == nil || len(page.Items) != 0 || page.Page != 1 || page.PageSize != 25 {
+		t.Fatalf("page=%+v", page)
 	}
 
 	invalid := fixture.request(
 		t,
 		http.MethodGet,
-		"/_admin/api/routing-traces?limit=0",
+		"/_admin/api/routing-traces?page_size=0",
 		"",
 		cookies,
 		"",
 	)
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	invalid = fixture.request(t, http.MethodGet, "/_admin/api/routing-traces?category=shell", "", cookies, "")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("category status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	invalid = fixture.request(t, http.MethodGet, "/_admin/api/routing-traces?page=9223372036854775807", "", cookies, "")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("overflow page status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestAPIRoutingTraceDetailReturnsCandidatesAndCalls(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+	store := stats.New(fixture.db)
+	store.RecordRoutingTraceWithCallsAndCandidatesAsync(stats.RoutingTrace{
+		CorrelationID: "detail-1", Difficulty: "medium", ClassificationReasonCodes: []string{"task_analyzer"},
+	}, []stats.PhysicalCall{{
+		Sequence: 1, Kind: "answer", Model: "fast", Target: "primary", ImageIndex: -1,
+	}}, []stats.CandidateDecision{{
+		Model: "fast", Decision: "selected", ReasonCode: "lowest_expected_cost", VisionMode: "none",
+	}})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var traceID int64
+	if err := fixture.db.QueryRow(`SELECT id FROM routing_traces WHERE correlation_id = 'detail-1'`).Scan(&traceID); err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.request(t, http.MethodGet, fmt.Sprintf("/_admin/api/routing-traces/%d", traceID), "", cookies, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var detail stats.RoutingTraceDetail
+	decodeTestJSON(t, response, &detail)
+	if detail.Trace.Difficulty != "medium" || len(detail.Candidates) != 1 || len(detail.Calls) != 1 {
+		t.Fatalf("detail=%+v", detail)
+	}
+	missing := fixture.request(t, http.MethodGet, "/_admin/api/routing-traces/999999", "", cookies, "")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing status=%d body=%s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestModelPerformancePageFiltersAndPaginates(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	createBody, err := json.Marshal(saveProfileRequest{
+		Slug: "performance", DisplayName: "Performance", Enabled: true,
+		Config: apiAutoRoutingConfig(), MakeDefault: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := fixture.request(t, http.MethodPost, "/_admin/api/profiles", string(createBody), cookies, csrf)
+	var profileBody profileResponse
+	decodeTestJSON(t, created, &profileBody)
+	for _, difficulty := range []string{"easy", "hard"} {
+		for range 24 {
+			if err := fixture.evidence.RecordEvidence(context.Background(), evaluation.Evidence{
+				ProfileID: profileBody.ID, Strategy: "20260802-001", Route: "balanced",
+				TaskType: "code", Difficulty: difficulty, Risk: "normal", VisionMode: "none",
+				CandidateModel: "fast", ReferenceModel: "strong", ReviewerModel: "strong",
+				Outcome:    evaluation.OutcomeCandidateWin,
+				Dimensions: evaluationDimensionOutcomes(evaluation.OutcomeCandidateWin),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	response := fixture.request(t, http.MethodGet,
+		fmt.Sprintf("/_admin/api/model-performance?profile_id=%d&difficulty=hard&page=1&page_size=25", profileBody.ID),
+		"", cookies, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var page evaluation.PerformancePage
+	decodeTestJSON(t, response, &page)
+	if page.Page != 1 || page.PageSize != 25 || page.Total != 1 || len(page.Items) != 1 {
+		t.Fatalf("page=%+v", page)
+	}
+	item := page.Items[0]
+	if item.ProfileID != profileBody.ID || item.Difficulty != "hard" ||
+		item.CandidateModel != "fast" || !item.Estimate.Reliable ||
+		len(item.Estimate.Dimensions) != len(evaluation.ReviewDimensions) {
+		t.Fatalf("item=%+v", item)
+	}
+}
+
+func TestModelPerformanceAPIValidation(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+	for _, path := range []string{
+		"/_admin/api/model-performance?page_size=0",
+		"/_admin/api/model-performance?page=9223372036854775807",
+		"/_admin/api/model-performance?difficulty=extreme",
+		"/_admin/api/model-performance?profile_id=nope",
+		"/_admin/api/model-performance?from=tomorrow",
+	} {
+		response := fixture.request(t, http.MethodGet, path, "", cookies, "")
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("path=%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -1239,12 +1345,27 @@ func TestAPILoginRateLimitErrorMapping(t *testing.T) {
 }
 
 func newTestAPI(t *testing.T) *apiTestFixture {
-	return newTestAPIWithActivation(t, nil)
+	return newTestAPIWithDependencies(t, nil, nil)
 }
 
 func newTestAPIWithActivation(
 	t *testing.T,
 	activateProfiles func(context.Context) error,
+) *apiTestFixture {
+	return newTestAPIWithDependencies(t, activateProfiles, nil)
+}
+
+func newTestAPIWithCatalog(
+	t *testing.T,
+	catalog ModelCatalogService,
+) *apiTestFixture {
+	return newTestAPIWithDependencies(t, nil, catalog)
+}
+
+func newTestAPIWithDependencies(
+	t *testing.T,
+	activateProfiles func(context.Context) error,
+	catalog ModelCatalogService,
 ) *apiTestFixture {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -1296,6 +1417,12 @@ func newTestAPIWithActivation(
 		},
 	)
 	logs := &bytes.Buffer{}
+	if catalog == nil {
+		catalog, err = modelcatalog.NewService(dataDir, http.DefaultClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	handler := NewAPI(Dependencies{
 		Auth:             auth,
 		Profiles:         NewProfileService(store, coordinator, strategyStore),
@@ -1306,6 +1433,7 @@ func newTestAPIWithActivation(
 		DataDir:          dataDir,
 		Logger:           slog.New(slog.NewTextHandler(logs, nil)),
 		ActivateProfiles: activateProfiles,
+		ModelCatalog:     catalog,
 	})
 	return &apiTestFixture{
 		handler:  handler,

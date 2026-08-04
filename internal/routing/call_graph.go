@@ -71,11 +71,13 @@ func (p *Planner) finalizePlan(
 		plan.usesStrongBaseline = selected.model == p.auto.StrongBaselineModel
 		plan.answerCallCostMicroUSD = selected.answerCallCostMicroUSD
 		plan.visionCallCostMicroUSD = selected.visionCallCostMicroUSD
-		plan.estimatedCostMicroUSD = addCost(
-			selected.answerCallCostMicroUSD,
-			multiplyCost(selected.visionCallCostMicroUSD, request.Facts.ImageCount),
-		)
+		plan.estimatedCostMicroUSD = selected.expectedCostMicroUSD
 		plan.reason = "first budget-compatible fallback"
+		plan.candidateDecisions = markSelectedCandidate(
+			plan.candidateDecisions,
+			selected.model,
+			plan.reason,
+		)
 	}
 	plan.modelAttempts = trimModelAttemptsToGraph(selectedAttempts, graph)
 	plan.callGraph = graph
@@ -235,6 +237,16 @@ func (p *Planner) freezeCallGraph(
 			if attempt.visionMode == VisionComposite {
 				succeededVision.visionCached = true
 			}
+			if p.auto.SelfEscalation.Enabled {
+				escalated, fits := succeededVision.addCalls(
+					CallAnswer, 1, node.AnswerCallCostMicroUSD, limits,
+				)
+				if fits {
+					planned.AnswerCalls = max(planned.AnswerCalls, 1)
+					recordCallGraphPath(&graph, escalated)
+					queue = enqueueStrongerCallGraphNode(queue, work, escalated, attempts)
+				}
+			}
 			for _, configuredRetries := range p.configuredRetryCounts {
 				answered, answerCalls, fits := addFrozenAnswers(
 					succeededVision,
@@ -272,6 +284,21 @@ func (p *Planner) freezeCallGraph(
 		return CallGraphSnapshot{}, fmt.Errorf("%w: frozen call graph", ErrAttemptBudgetExceeded)
 	}
 	return graph, nil
+}
+
+func enqueueStrongerCallGraphNode(
+	queue []callGraphWork,
+	current callGraphWork,
+	path callGraphPath,
+	attempts []ModelAttemptPlan,
+) []callGraphWork {
+	next, ok := NextStrongerModelAttempt(attempts, current.modelIndex)
+	if !ok {
+		return queue
+	}
+	return append(queue, callGraphWork{
+		modelIndex: next, switchKind: callGraphSwitchModel, path: path,
+	})
 }
 
 const maxCallGraphPathStates = 100_000
@@ -517,10 +544,17 @@ func remainingCount(limit, consumed, held int) (int, bool) {
 }
 
 func remainingCostCapacity(limit, consumed, held int64) (int64, bool) {
-	if limit < 0 || consumed < 0 || held < 0 || consumed > limit || held > limit-consumed {
+	if limit < 0 || consumed < 0 || held < 0 {
 		return 0, false
 	}
-	return limit - consumed - held, true
+	used := addCost(consumed, held)
+	if used == maxCost || limit > 0 && used > limit {
+		return 0, false
+	}
+	if limit == 0 {
+		return maxCost - used, true
+	}
+	return limit - used, true
 }
 
 func multiplyCount(value, count int) (int, bool) {

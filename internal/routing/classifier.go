@@ -16,41 +16,42 @@ func ClassifyLocal(
 	strongBaseline profile.ModelCapability,
 	riskPolicy profile.RiskPolicyRuntime,
 ) (Classification, bool) {
-	if riskPolicy.StructuredOutputHighRisk && request.Facts.RequiresStructuredOutput {
-		return localHighRisk(), true
+	if classification, matched := ClassifyHardRisk(request, strongBaseline, riskPolicy); matched {
+		return classification, true
 	}
-	text := strings.ToLower(strings.TrimSpace(request.routingText()))
+	return classifySimple(request)
+}
+
+func ClassifyHardRisk(
+	request Request,
+	strongBaseline profile.ModelCapability,
+	riskPolicy profile.RiskPolicyRuntime,
+) (Classification, bool) {
+	_ = strongBaseline
+	text := strings.ToLower(strings.TrimSpace(request.LatestUserText()))
 	for _, signal := range riskPolicy.SensitiveTextPatterns {
 		if strings.Contains(text, strings.ToLower(signal)) {
-			return localHighRisk(), true
+			return localHighRisk("sensitive_latest_user_text"), true
 		}
 	}
-	for _, operation := range request.Facts.ActualToolOperations {
-		operation = strings.ToLower(operation)
-		for _, pattern := range riskPolicy.SensitiveToolPatterns {
-			if strings.Contains(operation, strings.ToLower(pattern)) {
-				return localHighRisk(), true
-			}
+	operation := strings.ToLower(request.Facts.ForcedToolOperation)
+	for _, pattern := range riskPolicy.SensitiveToolPatterns {
+		if operation != "" && strings.Contains(operation, strings.ToLower(pattern)) {
+			return localHighRisk("forced_sensitive_tool"), true
 		}
 	}
-	if strongBaseline.HasContextWindow {
-		total := saturatingTokenSum(
-			request.Facts.EstimatedInputTokens,
-			request.Facts.RequestedOutputTokens,
-		)
-		if total >= thresholdTokens(
-			uint64(strongBaseline.ContextWindow),
-			uint64(riskPolicy.LongContextThresholdBPS),
-		) {
-			return localHighRisk(), true
-		}
-	}
+	return Classification{}, false
+}
+
+func classifySimple(request Request) (Classification, bool) {
+	text := strings.ToLower(strings.TrimSpace(request.LatestUserText()))
 	if request.Facts.EstimatedInputTokens <= 256 && !request.Facts.HasImages {
 		for _, prefix := range simpleTextPrefixes {
 			if strings.HasPrefix(text, prefix) {
 				return Classification{
-					TaskType: "simple", Risk: RiskNormal,
+					TaskType: "simple", Difficulty: DifficultyEasy, Risk: RiskNormal,
 					ConfidenceBPS: 9500, Source: ClassificationSourceRule,
+					ReasonCodes: []string{"short_simple_prefix"},
 				}, true
 			}
 		}
@@ -74,9 +75,10 @@ func thresholdTokens(contextWindow, thresholdBPS uint64) uint64 {
 	return quotient*thresholdBPS + (remainder*thresholdBPS+9_999)/10_000
 }
 
-func localHighRisk() Classification {
+func localHighRisk(reason string) Classification {
 	return Classification{
-		TaskType: "high_risk", Risk: RiskHigh,
+		TaskType: "unknown", Difficulty: DifficultyUnknown, Risk: RiskHigh,
 		ConfidenceBPS: 10_000, Source: ClassificationSourceRule,
+		ReasonCodes: []string{reason},
 	}
 }

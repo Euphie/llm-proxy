@@ -84,7 +84,9 @@ test("statistics and System API methods omit blanks and encode exact queries", a
     to: "",
   });
   await api.stats({});
-  await api.routingTraces({ profile_id: "7", limit: 50 });
+	await api.routingTraces({ profile_id: "7", page: 2, page_size: 50 });
+	await api.routingTrace(19);
+	await api.modelPerformance({ profile_id: 7, difficulty: "hard", page: 1 });
   await api.system();
 
   assert.deepEqual(calls, [
@@ -93,7 +95,9 @@ test("statistics and System API methods omit blanks and encode exact queries", a
       "GET",
     ],
     ["/_admin/api/stats", "GET"],
-    ["/_admin/api/routing-traces?profile_id=7&limit=50", "GET"],
+	["/_admin/api/routing-traces?profile_id=7&page=2&page_size=50", "GET"],
+	["/_admin/api/routing-traces/19", "GET"],
+	["/_admin/api/model-performance?profile_id=7&difficulty=hard&page=1", "GET"],
     ["/_admin/api/system", "GET"],
   ]);
 });
@@ -141,7 +145,6 @@ test("statistics page exposes loading then exact summary and accessible tables",
       { id: 1, display_name: "Coding", slug: "coding" },
     ],
     loadStats: async () => pending,
-    loadRoutingTraces: async () => routingTraceFixture(),
     onUnauthorized: () => {},
   });
 
@@ -171,19 +174,16 @@ test("statistics page exposes loading then exact summary and accessible tables",
   }
   assert.deepEqual(
     findAllTags(root, "CAPTION").map((caption) => caption.textContent),
-    ["按日期", "按模型", "最近 Auto 路由"],
+	["按日期", "按模型"],
   );
   assert.ok(findText(root, "2026-07-29"));
   assert.ok(findText(root, "sonnet"));
-  assert.ok(findText(root, "fast → strong · Target primary → region_b"));
-  assert.ok(findText(root, "回答 2 / 辅助 1 / 模型切换 1 / Target 切换 1"));
-  assert.ok(findText(root, "计划上限 $0.030126 / 已消费估算 $0.0155 / 持有 $0 / 已知实际（部分） $0.012"));
+	assert.ok(findText(root, "路由轨迹"));
 });
 
 test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
   const root = installFakeDOM(t);
   const filters = [];
-  const traceFilters = [];
 
   await renderStatsPage(root, {
     profiles: [
@@ -192,10 +192,6 @@ test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
     loadStats: async (current) => {
       filters.push(current);
       return statsFixture();
-    },
-    loadRoutingTraces: async (current) => {
-      traceFilters.push(current);
-      return [];
     },
     onUnauthorized: () => {},
   });
@@ -215,11 +211,169 @@ test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
     kind: "vision",
     from: "2026-07-29T10:30:00.000Z",
   });
-  assert.deepEqual(traceFilters[1], {
-    profile_id: "7",
-    from: "2026-07-29T10:30:00.000Z",
-    limit: 100,
-  });
+});
+
+test("routing statistics page exposes classification filters pagination and detail", async (t) => {
+	const root = installFakeDOM(t);
+	const filters = [];
+	const details = [];
+	await renderStatsPage(root, {
+		section: "routing",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadRoutingTraces: async (current) => {
+			filters.push(current);
+			return routingTraceFixture();
+		},
+		loadRoutingTrace: async (id) => {
+			details.push(id);
+			return routingTraceDetailFixture();
+		},
+	});
+	assert.deepEqual(labelTexts(root), [
+		"Profile", "任务类型", "难度", "风险", "模型", "判断来源", "视觉", "开始时间", "结束时间", "每页",
+	]);
+	assert.equal(filters[0].page, 1);
+	assert.equal(filters[0].page_size, 25);
+	assert.equal(filters[0].category, "all");
+	assert.ok(findText(root, "coding · 20260802-001 / balanced · fast → strong"));
+	assert.ok(findText(root, "置信度 91%"));
+	assert.ok(findText(root, "第 1 / 3 页 · 共 6 条"));
+	await buttonByText(root, "查看详情").dispatch("click");
+	assert.deepEqual(details, [1]);
+	assert.ok(findText(root, "路由详情 #1"));
+	assert.ok(findText(root, "task_analyzer"));
+	assert.ok(findText(root, "lowest_expected_cost"));
+});
+
+test("routing statistics separates analyzer fallback from high risk", async (t) => {
+	const root = installFakeDOM(t);
+	const fallback = {
+		...routingTraceFixture().items[0],
+		id: 2,
+		task_type: "unknown",
+		difficulty: "unknown",
+		risk: "unknown",
+		classification_source: "fallback",
+		classification_confidence_bps: 0,
+		initial_model: "strong",
+		final_model: "strong",
+	};
+	await renderStatsPage(root, {
+		section: "routing",
+		loadRoutingTraces: async () => ({
+			items: [fallback], page: 1, page_size: 25, total: 1, total_pages: 1,
+			category_counts: { all: 1, normal: 0, high_risk: 0, fallback: 1 },
+		}),
+		loadRoutingTrace: async () => ({
+			...routingTraceDetailFixture(),
+			trace: {
+				...fallback,
+				classification_reason_codes: ["task_analyzer_malformed_response"],
+				decision_reason: "task analyzer fallback",
+			},
+		}),
+	});
+	assert.ok(findText(root, "分析回退 1"));
+	assert.ok(findText(root, "分析失败 · 已使用强模型兜底"));
+	await buttonByText(root, "查看详情").dispatch("click");
+	assert.ok(findText(root, "不可用"));
+	assert.ok(findText(root, "task_analyzer_malformed_response"));
+});
+
+test("routing filters category and page survive reload through the URL", async (t) => {
+	const root = installFakeDOM(t);
+	const urls = installFakeNavigation(t,
+		"?profile_id=7&task_type=code&difficulty=hard&risk=high&model=fast" +
+		"&source=analyzer&vision=composite&category=changed&page=2&page_size=50" +
+		"&from=2026-08-01T01%3A02%3A00.000Z&to=2026-08-02T03%3A04%3A00.000Z");
+	const filters = [];
+	await renderStatsPage(root, {
+		section: "routing",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadRoutingTraces: async (current) => {
+			filters.push(current);
+			return {
+				...routingTraceFixture(), page: Number(current.page),
+				page_size: Number(current.page_size), total_pages: 3,
+			};
+		},
+	});
+	assert.equal(filters[0].page, 2);
+	assert.equal(filters[0].page_size, 50);
+	assert.equal(filters[0].category, "changed");
+	assert.equal(filters[0].profile_id, "7");
+	assert.equal(filters[0].task_type, "code");
+	assert.equal(filters[0].difficulty, "hard");
+	assert.equal(filters[0].risk, "high");
+	assert.equal(filters[0].source, "analyzer");
+	assert.equal(filters[0].vision, "composite");
+	assert.equal(controlByName(root, "page_size").value, "50");
+	assert.equal(controlByName(root, "from").value, "2026-08-01T01:02");
+	assert.match(urls.at(-1), /^\/_admin\/stats\/routing\?/);
+	assert.match(urls.at(-1), /category=changed/);
+	assert.match(urls.at(-1), /page=2/);
+	await buttonByText(root, "下一页").dispatch("click");
+	assert.equal(filters.at(-1).page, 3);
+	assert.match(urls.at(-1), /page=3/);
+});
+
+test("model performance page shows five dimensions summary filters and pagination", async (t) => {
+	const root = installFakeDOM(t);
+	const filters = [];
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadModelPerformance: async (current) => {
+			filters.push(current);
+			return modelPerformanceFixture();
+		},
+		initialProfileID: 7,
+	});
+	assert.deepEqual(labelTexts(root), [
+		"Profile", "候选模型", "任务类型", "难度", "风险", "视觉处理",
+		"开始日期", "结束日期", "每页",
+	]);
+	assert.equal(filters[0].profile_id, "7");
+	assert.ok(findText(root, "评测分组：2"));
+	assert.ok(findText(root, "fast ↔ strong"));
+	assert.ok(findText(root, "正确性"));
+	assert.ok(findText(root, "格式与工具安全"));
+	assert.ok(findText(root, "保守总质量 91.2%"));
+	assert.ok(findText(root, "第 1 / 2 页 · 共 2 个分组"));
+	assert.ok(findText(root, "30 天前的证据权重减半"));
+});
+
+test("model performance filters and page survive reload and flag missing priors", async (t) => {
+	const root = installFakeDOM(t);
+	const urls = installFakeNavigation(t,
+		"?profile_id=7&model=fast&task_type=code&difficulty=hard&risk=normal" +
+		"&vision=none&from=2026-08-01T00%3A00%3A00.000Z&page=2&page_size=50");
+	const filters = [];
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadModelPerformance: async (current) => {
+			filters.push(current);
+			const fixture = modelPerformanceFixture();
+			fixture.page = Number(current.page);
+			fixture.page_size = Number(current.page_size);
+			fixture.total_pages = 3;
+			fixture.items[0].prior_known = false;
+			return fixture;
+		},
+	});
+	assert.deepEqual(filters[0], {
+		profile_id: "7", model: "fast", task_type: "code", difficulty: "hard",
+		risk: "normal", vision: "none", page: "2", page_size: "50",
+		from: "2026-08-01T00:00:00.000Z",
+	});
+	assert.equal(controlByName(root, "from").value, "2026-08-01");
+	assert.ok(findText(root, "策略先验不可用"));
+	assert.match(urls.at(-1), /^\/_admin\/stats\/models\?/);
+	assert.match(urls.at(-1), /page=2/);
+	await buttonByText(root, "下一页").dispatch("click");
+	assert.equal(filters.at(-1).page, "3");
+	assert.match(urls.at(-1), /page=3/);
 });
 
 test("statistics page announces empty and error states and delegates 401 recovery", async (t) => {
@@ -585,7 +739,13 @@ function emptyStatsFixture() {
 }
 
 function routingTraceFixture() {
-  return [{
+	return {
+		page: 1,
+		page_size: 25,
+		total: 6,
+		total_pages: 3,
+		category_counts: { all: 6, normal: 3, high_risk: 1, changed: 2, failed: 1, cost_anomaly: 1 },
+		items: [{
     id: 1,
     created_at: "2026-07-29T02:30:00Z",
     profile_id: 7,
@@ -595,8 +755,10 @@ function routingTraceFixture() {
     strategy: "20260802-001",
     route: "balanced",
     task_type: "simple",
+		difficulty: "medium",
     risk: "normal",
     classification_source: "rule",
+	classification_confidence_bps: 9100,
     initial_model: "fast",
     final_model: "strong",
     initial_target: "primary",
@@ -608,6 +770,8 @@ function routingTraceFixture() {
     auxiliary_calls: 1,
     total_outbound_calls: 3,
     model_switches: 1,
+		self_escalations: 1,
+		self_escalation_reason: "insufficient_reasoning",
     target_switches: 1,
     planned_worst_case_cost_micro_usd: 30126,
     consumed_estimated_cost_micro_usd: 15500,
@@ -615,7 +779,63 @@ function routingTraceFixture() {
     known_actual_cost_micro_usd: 12000,
     all_actual_costs_known: false,
     elapsed_ms: 42,
-  }];
+	  }],
+	};
+}
+
+function routingTraceDetailFixture() {
+	const page = routingTraceFixture();
+	return {
+		trace: {
+			...page.items[0],
+			classification_confidence_bps: 9100,
+			classification_reason_codes: ["task_analyzer"],
+			estimated_input_tokens: 1200,
+			requested_output_tokens: 800,
+			decision_reason: "lowest expected cost",
+		},
+		candidates: [{
+			model: "fast", decision: "selected", reason_code: "lowest_expected_cost",
+			quality_score_bps: 9200, severe_error_rate_bps: 50,
+			expected_cost_micro_usd: 400,
+		}],
+		calls: [{
+			sequence: 1, kind: "answer", model: "fast", target: "primary",
+			status_code: 200, outcome: "success", estimated_cost_micro_usd: 400,
+			actual_cost_known: true, actual_cost_micro_usd: 350,
+		}],
+	};
+}
+
+function modelPerformanceFixture() {
+	const dimensions = Object.fromEntries([
+		"correctness", "completeness", "instruction_following",
+		"format_tool_safety", "task_completion",
+	].map((dimension) => [dimension, {
+		dimension, weight_bps: 2000, raw_samples: 30, effective_samples: 29.5,
+		mean_bps: 9500, lower_bps: 9120, reliable: true,
+	}]));
+	return {
+		page: 1, page_size: 25, total: 2, total_pages: 2,
+		summary: {
+			groups: 2, reliable_groups: 1, raw_samples: 30,
+			candidate_cost_micro_usd: 1000, reference_cost_micro_usd: 4000,
+			reviewer_cost_micro_usd: 500,
+		},
+		items: [{
+			profile_id: 7, profile_slug: "coding", profile_name: "Coding",
+			strategy: "20260802-001", route: "balanced", task_type: "code",
+			difficulty: "hard", risk: "normal", vision_mode: "none",
+			candidate_model: "fast", reference_model: "strong",
+			estimate: {
+				reliable: true, raw_samples: 30, effective_samples: 29.5,
+				quality_lower_bps: 9120, severe_error_upper_bps: 250,
+				candidate_cost_micro_usd: 1000, reference_cost_micro_usd: 4000,
+				reviewer_cost_micro_usd: 500, self_escalation_precision_bps: 8000,
+				missed_self_escalation_rate_bps: 1000, dimensions,
+			},
+		}],
+	};
 }
 
 function systemFixture() {
@@ -724,6 +944,25 @@ function installFakeDOM(t) {
     restoreGlobal("sessionStorage", originalSessionStorage);
   });
   return root;
+}
+
+function installFakeNavigation(t, search) {
+	const originalLocation = globalThis.location;
+	const originalHistory = globalThis.history;
+	const urls = [];
+	Object.defineProperty(globalThis, "location", {
+		configurable: true,
+		value: { search },
+	});
+	Object.defineProperty(globalThis, "history", {
+		configurable: true,
+		value: { replaceState: (_state, _title, url) => urls.push(url) },
+	});
+	t.after(() => {
+		restoreGlobal("location", originalLocation);
+		restoreGlobal("history", originalHistory);
+	});
+	return urls;
 }
 
 function restoreGlobal(name, value) {

@@ -12,7 +12,7 @@ const (
 	uiCSP              = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 )
 
-//go:embed static/*.html static/*.css static/*.js
+//go:embed static/*.html static/*.css static/*.js static/*.svg
 var assets embed.FS
 
 func NewHandler() http.Handler {
@@ -49,6 +49,8 @@ func serveAsset(w http.ResponseWriter, name string) {
 		contentType = "text/css; charset=utf-8"
 	case strings.HasSuffix(name, ".js"):
 		contentType = "text/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".svg"):
+		contentType = "image/svg+xml"
 	default:
 		http.NotFound(w, nil)
 		return

@@ -1,6 +1,9 @@
 package stats
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestOpenAIParserParsesResponsesJSON(t *testing.T) {
 	body := []byte(`{
@@ -27,9 +30,14 @@ func TestOpenAIParserParsesResponsesJSON(t *testing.T) {
 		OutputTokens:        23,
 		CacheReadTokens:     17,
 		CacheCreationTokens: 13,
+		InputIncludesCache:  true,
 	}
 	if got != want {
 		t.Fatalf("usage=%+v, want %+v", got, want)
+	}
+	field := reflect.ValueOf(got).FieldByName("InputIncludesCache")
+	if !field.IsValid() || !field.Bool() {
+		t.Fatalf("OpenAI usage must mark input tokens as cache-inclusive: %+v", got)
 	}
 }
 
@@ -50,6 +58,7 @@ func TestOpenAIParserParsesCompletedResponsesSSE(t *testing.T) {
 		OutputTokens:        19,
 		CacheReadTokens:     9,
 		CacheCreationTokens: 7,
+		InputIncludesCache:  true,
 	}
 	if got != want {
 		t.Fatalf("usage=%+v, want %+v", got, want)

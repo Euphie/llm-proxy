@@ -19,9 +19,16 @@ func TestHandlerServesSPAAndAssets(t *testing.T) {
 	}{
 		{"/_admin/", "text/html", `<main id="app"`},
 		{"/_admin/profiles", "text/html", `<main id="app"`},
+		{"/_admin/help/overview", "text/html", `<main id="app"`},
+		{"/_admin/help/glossary", "text/html", `<main id="app"`},
+		{"/_admin/help/intelligent-routing", "text/html", `<main id="app"`},
 		{"/_admin/assets/current/app.js", "text/javascript", "bootstrap"},
 		{"/_admin/assets/current/api.js", "text/javascript", "export const api"},
+		{"/_admin/assets/current/routing-guide.js", "text/javascript", "renderHelpPage"},
 		{"/_admin/assets/current/styles.css", "text/css", ":root"},
+		{"/_admin/assets/current/intelligent-routing-architecture.svg", "image/svg+xml", "智能路由整体架构"},
+		{"/_admin/assets/current/intelligent-routing-flow.svg", "image/svg+xml", "首次请求与后续追问"},
+		{"/_admin/assets/current/intelligent-routing-learning-flow.svg", "image/svg+xml", "异步评测与贝叶斯学习闭环"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			response := serveUI(handler, http.MethodGet, tc.path)

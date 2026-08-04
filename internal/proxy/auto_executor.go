@@ -159,6 +159,7 @@ func completeLedgerUsage(
 		InputPresent: usage.InputPresent, OutputPresent: usage.OutputPresent,
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
+		InputIncludesCache:  usage.InputIncludesCache,
 		Present:             ok,
 	}, model)
 }
@@ -173,7 +174,29 @@ func physicalCallsForStats(entries []routing.CallLedgerEntry) []stats.PhysicalCa
 			TargetSwitchIndex: entry.TargetSwitchIndex,
 			EstimatedMicroUSD: entry.EstimatedMicroUSD,
 			ActualCostKnown:   entry.ActualCostKnown, ActualMicroUSD: entry.ActualMicroUSD,
-			StatusCode: entry.StatusCode, Outcome: entry.Outcome,
+			UsagePresent: entry.Usage.Present && entry.Usage.InputPresent,
+			InputTokens:  entry.Usage.InputTokens, OutputTokens: entry.Usage.OutputTokens,
+			CacheReadTokens:    entry.Usage.CacheReadTokens,
+			CacheWriteTokens:   entry.Usage.CacheCreationTokens,
+			InputIncludesCache: entry.Usage.InputIncludesCache,
+			StatusCode:         entry.StatusCode, Outcome: entry.Outcome,
+		}
+	}
+	return result
+}
+
+func candidateDecisionsForStats(entries []routing.CandidateDecision) []stats.CandidateDecision {
+	result := make([]stats.CandidateDecision, len(entries))
+	for index, entry := range entries {
+		result[index] = stats.CandidateDecision{
+			Model: entry.Model, Decision: entry.Decision, ReasonCode: entry.Reason,
+			QualityScoreBPS:         entry.QualityScoreBPS,
+			SevereErrorRateBPS:      entry.SevereErrorRateBPS,
+			ExpectedCostMicroUSD:    entry.ExpectedCostMicroUSD,
+			AnswerWorstCostMicroUSD: entry.AnswerCallCostMicroUSD,
+			VisionCallCostMicroUSD:  entry.VisionCallCostMicroUSD,
+			VisionMode:              string(entry.VisionMode),
+			UpstreamNodes:           append([]string(nil), entry.UpstreamNodeIDs...),
 		}
 	}
 	return result

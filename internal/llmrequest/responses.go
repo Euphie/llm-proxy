@@ -16,7 +16,9 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 	}
 	var direct string
 	if isJSONType(rawInput, '"') && json.Unmarshal(rawInput, &direct) == nil {
-		document.texts = append(document.texts, nonEmptyText(direct)...)
+		texts := nonEmptyText(direct)
+		document.texts = append(document.texts, texts...)
+		document.setLatestUserTexts(texts)
 		return document, nil
 	}
 	if !isJSONType(rawInput, '[') {
@@ -44,7 +46,9 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 			_ = json.Unmarshal(node.fields["type"], &itemType)
 			_ = json.Unmarshal(node.fields["text"], &text)
 			if itemType == "input_text" {
-				document.texts = append(document.texts, nonEmptyText(text)...)
+				texts := nonEmptyText(text)
+				document.texts = append(document.texts, texts...)
+				document.setLatestUserTexts(texts)
 			}
 			document.nodes = append(document.nodes, node)
 			continue
@@ -54,7 +58,9 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 			var text string
 			if ok && isJSONType(rawBlocks, '"') && json.Unmarshal(rawBlocks, &text) == nil {
 				if isUserRole(node.fields) {
-					document.texts = append(document.texts, nonEmptyText(text)...)
+					texts := nonEmptyText(text)
+					document.texts = append(document.texts, texts...)
+					document.setLatestUserTexts(texts)
 				}
 				document.nodes = append(document.nodes, node)
 				continue
@@ -74,7 +80,9 @@ func parseResponses(root map[string]json.RawMessage) (*Document, error) {
 		taskContext := ""
 		if user {
 			taskContext = collectTextBlocks(node.blocks, "input_text")
-			document.texts = append(document.texts, splitCollectedText(taskContext)...)
+			texts := splitCollectedText(taskContext)
+			document.texts = append(document.texts, texts...)
+			document.setLatestUserTexts(texts)
 		}
 		for blockIndex, rawBlock := range node.blocks {
 			var block map[string]json.RawMessage

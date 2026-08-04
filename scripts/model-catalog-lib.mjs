@@ -64,6 +64,15 @@ export const BUILT_IN_MODELS = deepFreeze(${
 `;
 }
 
+export function renderCatalogJSON({ models, source }) {
+  validateSource(source);
+  validateCatalog(models);
+  return `${JSON.stringify({
+    source,
+    models: models.map(({ source: _source, ...entry }) => entry),
+  }, null, 2)}\n`;
+}
+
 function eligible(canonicalId, model, providers, providerModels) {
   if (!isRecord(model)) {
     return false;
@@ -119,6 +128,10 @@ function compactModel(
     conservativePrice(directModel?.cost ?? model.cost, "input", canonicalId);
   const outputPrice = override.output_price_micro_usd_per_million ??
     conservativePrice(directModel?.cost ?? model.cost, "output", canonicalId);
+  const cacheReadPrice = override.cache_read_price_micro_usd_per_million ??
+    conservativePrice(directModel?.cost ?? model.cost, "cache_read", canonicalId);
+  const cacheWritePrice = override.cache_write_price_micro_usd_per_million ??
+    conservativePrice(directModel?.cost ?? model.cost, "cache_write", canonicalId);
 
   validateOptionalLimit(context, `${canonicalId} context`);
   validateOptionalLimit(output, `${canonicalId} output`);
@@ -176,6 +189,12 @@ function compactModel(
   }
   if (outputPrice !== undefined) {
     entry.output_price_micro_usd_per_million = outputPrice;
+  }
+  if (cacheReadPrice !== undefined) {
+    entry.cache_read_price_micro_usd_per_million = cacheReadPrice;
+  }
+  if (cacheWritePrice !== undefined) {
+    entry.cache_write_price_micro_usd_per_million = cacheWritePrice;
   }
   entry.lifecycle = override.lifecycle ??
     lifecycle(model.status, known);

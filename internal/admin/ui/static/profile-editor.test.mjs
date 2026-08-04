@@ -58,7 +58,7 @@ test("Profile overview summarizes capabilities without mounting the legacy form"
   assert.ok(linkByText(root, "编辑连接"));
 });
 
-test("reliability keeps ordinary retries editable while Auto Target failover is unavailable", (t) => {
+test("reliability keeps ordinary retries editable while Auto upstream failover is unavailable", (t) => {
   const root = installFakeDOM(t);
   renderProfileEditor(root, profileFixture(), {
     section: "reliability",
@@ -67,8 +67,8 @@ test("reliability keeps ordinary retries editable while Auto Target failover is 
   });
 
   assert.ok(findText(root, "容错规则"));
-  assert.equal(findText(root, "Target 容错"), undefined);
-  assert.ok(findTextIncludes(root, "备用 Target"));
+  assert.equal(findText(root, "上游节点容错"), undefined);
+  assert.ok(findTextIncludes(root, "备用上游节点"));
   assert.equal(linkByText(root, "配置智能路由").getAttribute("href"), "/_admin/profiles/7/routing");
 });
 
@@ -96,7 +96,7 @@ function legacySectionFixture(root) {
   const form = document.createElement("form");
   for (const heading of [
     "基础配置",
-    "Target 容错",
+    "上游节点容错",
     "模型能力",
     "智能路由",
     "视觉增强",

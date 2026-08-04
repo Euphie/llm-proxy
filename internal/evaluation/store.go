@@ -33,47 +33,77 @@ type BudgetSnapshot struct {
 }
 
 type Evidence struct {
-	ProfileID             int64
-	Strategy              string
-	Route                 string
-	TaskType              string
-	CandidateModel        string
-	ReferenceModel        string
-	ReviewerModel         string
-	Outcome               Outcome
-	SevereError           bool
-	DeterministicFailure  bool
-	CandidateCostMicroUSD int64
-	ReferenceCostMicroUSD int64
-	ReviewerCostMicroUSD  int64
-	CandidateLatencyMS    int64
-	ReferenceLatencyMS    int64
+	ProfileID                 int64
+	Strategy                  string
+	Route                     string
+	TaskType                  string
+	Difficulty                string
+	Risk                      string
+	VisionMode                string
+	CandidateModel            string
+	ReferenceModel            string
+	ReviewerModel             string
+	Outcome                   Outcome
+	Dimensions                map[Dimension]Outcome
+	SevereError               bool
+	DeterministicFailure      bool
+	CandidateCostMicroUSD     int64
+	ReferenceCostMicroUSD     int64
+	ReviewerCostMicroUSD      int64
+	CandidateLatencyMS        int64
+	ReferenceLatencyMS        int64
+	SelfEscalationEligible    bool
+	SelfEscalationRequested   bool
+	SelfEscalationSupported   bool
+	SelfEscalationUnnecessary bool
+	SelfEscalationMissed      bool
 }
 
 type EvidenceAggregate struct {
-	Day                   string `json:"day"`
-	Strategy              string `json:"strategy"`
-	Route                 string `json:"route"`
-	TaskType              string `json:"task_type"`
-	CandidateModel        string `json:"candidate_model"`
-	ReferenceModel        string `json:"reference_model"`
-	ReviewerModel         string `json:"reviewer_model"`
-	Samples               int64  `json:"samples"`
-	CandidateWins         int64  `json:"candidate_wins"`
-	Ties                  int64  `json:"ties"`
-	ReferenceWins         int64  `json:"reference_wins"`
-	SevereErrors          int64  `json:"severe_errors"`
-	DeterministicFailures int64  `json:"deterministic_failures"`
-	CandidateCostMicroUSD int64  `json:"candidate_cost_micro_usd"`
-	ReferenceCostMicroUSD int64  `json:"reference_cost_micro_usd"`
-	ReviewerCostMicroUSD  int64  `json:"reviewer_cost_micro_usd"`
-	CandidateLatencyMS    int64  `json:"candidate_latency_ms"`
-	ReferenceLatencyMS    int64  `json:"reference_latency_ms"`
+	Day                           string                           `json:"day"`
+	Strategy                      string                           `json:"strategy"`
+	Route                         string                           `json:"route"`
+	TaskType                      string                           `json:"task_type"`
+	Difficulty                    string                           `json:"difficulty"`
+	Risk                          string                           `json:"risk"`
+	VisionMode                    string                           `json:"vision_mode"`
+	CandidateModel                string                           `json:"candidate_model"`
+	ReferenceModel                string                           `json:"reference_model"`
+	ReviewerModel                 string                           `json:"reviewer_model"`
+	Samples                       int64                            `json:"samples"`
+	CandidateWins                 int64                            `json:"candidate_wins"`
+	Ties                          int64                            `json:"ties"`
+	ReferenceWins                 int64                            `json:"reference_wins"`
+	SevereErrors                  int64                            `json:"severe_errors"`
+	DeterministicFailures         int64                            `json:"deterministic_failures"`
+	CandidateCostMicroUSD         int64                            `json:"candidate_cost_micro_usd"`
+	ReferenceCostMicroUSD         int64                            `json:"reference_cost_micro_usd"`
+	ReviewerCostMicroUSD          int64                            `json:"reviewer_cost_micro_usd"`
+	CandidateLatencyMS            int64                            `json:"candidate_latency_ms"`
+	ReferenceLatencyMS            int64                            `json:"reference_latency_ms"`
+	SelfEscalationEligibleSamples int64                            `json:"self_escalation_eligible_samples"`
+	SelfEscalations               int64                            `json:"self_escalations"`
+	SupportedSelfEscalations      int64                            `json:"supported_self_escalations"`
+	UnnecessarySelfEscalations    int64                            `json:"unnecessary_self_escalations"`
+	MissedSelfEscalations         int64                            `json:"missed_self_escalations"`
+	Dimensions                    map[Dimension]DimensionAggregate `json:"dimensions,omitempty"`
+}
+
+type DimensionAggregate struct {
+	Dimension     Dimension `json:"dimension"`
+	Samples       int64     `json:"samples"`
+	CandidateWins int64     `json:"candidate_wins"`
+	Ties          int64     `json:"ties"`
+	ReferenceWins int64     `json:"reference_wins"`
 }
 
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
+}
+
+type queryContext interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 func NewStore(db *sql.DB, now func() time.Time) *Store {
@@ -217,17 +247,32 @@ func (s *Store) RecordEvidence(ctx context.Context, evidence Evidence) error {
 	referenceWin := boolInt(evidence.Outcome == OutcomeReferenceWin)
 	day := s.now().UTC().Format(dayFormat)
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO routing_quality_evidence (
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin routing quality evidence: %w", err)
+	}
+	defer rollback(tx)
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO routing_quality_evidence_v2 (
 			profile_id, evidence_day, strategy_name, route_id, task_type,
+			difficulty, risk, vision_mode,
 			candidate_model, reference_model, reviewer_model,
 			samples, candidate_wins, ties, reference_wins,
 			severe_errors, deterministic_failures,
+			self_escalation_eligible_samples, self_escalations,
+			supported_self_escalations, unnecessary_self_escalations,
+			missed_self_escalations,
 			candidate_cost_micro_usd, reference_cost_micro_usd, reviewer_cost_micro_usd,
 			candidate_latency_ms, reference_latency_ms, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			1, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?
+		)
 		ON CONFLICT(
 			profile_id, evidence_day, strategy_name, route_id, task_type,
+			difficulty, risk, vision_mode,
 			candidate_model, reference_model, reviewer_model
 		) DO UPDATE SET
 			samples = samples + 1,
@@ -236,6 +281,11 @@ func (s *Store) RecordEvidence(ctx context.Context, evidence Evidence) error {
 			reference_wins = reference_wins + excluded.reference_wins,
 			severe_errors = severe_errors + excluded.severe_errors,
 			deterministic_failures = deterministic_failures + excluded.deterministic_failures,
+			self_escalation_eligible_samples = self_escalation_eligible_samples + excluded.self_escalation_eligible_samples,
+			self_escalations = self_escalations + excluded.self_escalations,
+			supported_self_escalations = supported_self_escalations + excluded.supported_self_escalations,
+			unnecessary_self_escalations = unnecessary_self_escalations + excluded.unnecessary_self_escalations,
+			missed_self_escalations = missed_self_escalations + excluded.missed_self_escalations,
 			candidate_cost_micro_usd = candidate_cost_micro_usd + excluded.candidate_cost_micro_usd,
 			reference_cost_micro_usd = reference_cost_micro_usd + excluded.reference_cost_micro_usd,
 			reviewer_cost_micro_usd = reviewer_cost_micro_usd + excluded.reviewer_cost_micro_usd,
@@ -243,26 +293,86 @@ func (s *Store) RecordEvidence(ctx context.Context, evidence Evidence) error {
 			reference_latency_ms = reference_latency_ms + excluded.reference_latency_ms,
 			updated_at = excluded.updated_at
 	`, evidence.ProfileID, day, evidence.Strategy, evidence.Route, evidence.TaskType,
+		evidence.Difficulty, evidence.Risk, evidence.VisionMode,
 		evidence.CandidateModel, evidence.ReferenceModel, evidence.ReviewerModel,
 		candidateWin, tie, referenceWin, boolInt(evidence.SevereError),
-		boolInt(evidence.DeterministicFailure), evidence.CandidateCostMicroUSD,
+		boolInt(evidence.DeterministicFailure), boolInt(evidence.SelfEscalationEligible),
+		boolInt(evidence.SelfEscalationRequested), boolInt(evidence.SelfEscalationSupported),
+		boolInt(evidence.SelfEscalationUnnecessary), boolInt(evidence.SelfEscalationMissed),
+		evidence.CandidateCostMicroUSD,
 		evidence.ReferenceCostMicroUSD, evidence.ReviewerCostMicroUSD,
 		evidence.CandidateLatencyMS, evidence.ReferenceLatencyMS, now)
 	if err != nil {
 		return fmt.Errorf("record routing quality evidence: %w", err)
 	}
+	for _, dimension := range ReviewDimensions {
+		outcome := evidence.Dimensions[dimension]
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO routing_quality_dimension_evidence (
+				profile_id, evidence_day, strategy_name, route_id, task_type,
+				difficulty, risk, vision_mode,
+				candidate_model, reference_model, reviewer_model, dimension,
+				samples, candidate_wins, ties, reference_wins, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+			ON CONFLICT(
+				profile_id, evidence_day, strategy_name, route_id, task_type,
+				difficulty, risk, vision_mode,
+				candidate_model, reference_model, reviewer_model, dimension
+			) DO UPDATE SET
+				samples = samples + 1,
+				candidate_wins = candidate_wins + excluded.candidate_wins,
+				ties = ties + excluded.ties,
+				reference_wins = reference_wins + excluded.reference_wins,
+				updated_at = excluded.updated_at
+		`, evidence.ProfileID, day, evidence.Strategy, evidence.Route, evidence.TaskType,
+			evidence.Difficulty, evidence.Risk, evidence.VisionMode,
+			evidence.CandidateModel, evidence.ReferenceModel, evidence.ReviewerModel,
+			dimension, boolInt(outcome == OutcomeCandidateWin), boolInt(outcome == OutcomeTie),
+			boolInt(outcome == OutcomeReferenceWin), now); err != nil {
+			return fmt.Errorf("record routing dimension evidence: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit routing quality evidence: %w", err)
+	}
 	return nil
 }
 
 func (s *Store) ListEvidence(ctx context.Context, profileID int64) ([]EvidenceAggregate, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT evidence_day, strategy_name, route_id, task_type,
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin routing quality evidence snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := listEvidenceAggregates(ctx, tx, profileID)
+	if err != nil {
+		return nil, err
+	}
+	if err := attachDimensionEvidence(ctx, tx, profileID, result); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit routing quality evidence snapshot: %w", err)
+	}
+	return result, nil
+}
+
+func listEvidenceAggregates(
+	ctx context.Context,
+	query queryContext,
+	profileID int64,
+) ([]EvidenceAggregate, error) {
+	rows, err := query.QueryContext(ctx, `
+		SELECT evidence_day, strategy_name, route_id, task_type, difficulty, risk, vision_mode,
 			candidate_model, reference_model, reviewer_model,
 			samples, candidate_wins, ties, reference_wins,
 			severe_errors, deterministic_failures,
+			self_escalation_eligible_samples, self_escalations,
+			supported_self_escalations, unnecessary_self_escalations,
+			missed_self_escalations,
 			candidate_cost_micro_usd, reference_cost_micro_usd, reviewer_cost_micro_usd,
 			candidate_latency_ms, reference_latency_ms
-		FROM routing_quality_evidence
+		FROM routing_quality_evidence_v2
 		WHERE profile_id = ?
 		ORDER BY evidence_day DESC, route_id, candidate_model, reference_model
 	`, profileID)
@@ -275,21 +385,85 @@ func (s *Store) ListEvidence(ctx context.Context, profileID int64) ([]EvidenceAg
 		var aggregate EvidenceAggregate
 		if err := rows.Scan(
 			&aggregate.Day, &aggregate.Strategy, &aggregate.Route, &aggregate.TaskType,
+			&aggregate.Difficulty, &aggregate.Risk, &aggregate.VisionMode,
 			&aggregate.CandidateModel, &aggregate.ReferenceModel, &aggregate.ReviewerModel,
 			&aggregate.Samples, &aggregate.CandidateWins, &aggregate.Ties,
 			&aggregate.ReferenceWins, &aggregate.SevereErrors,
-			&aggregate.DeterministicFailures, &aggregate.CandidateCostMicroUSD,
+			&aggregate.DeterministicFailures,
+			&aggregate.SelfEscalationEligibleSamples, &aggregate.SelfEscalations,
+			&aggregate.SupportedSelfEscalations, &aggregate.UnnecessarySelfEscalations,
+			&aggregate.MissedSelfEscalations, &aggregate.CandidateCostMicroUSD,
 			&aggregate.ReferenceCostMicroUSD, &aggregate.ReviewerCostMicroUSD,
 			&aggregate.CandidateLatencyMS, &aggregate.ReferenceLatencyMS,
 		); err != nil {
 			return nil, fmt.Errorf("scan routing quality evidence: %w", err)
 		}
+		aggregate.Dimensions = make(map[Dimension]DimensionAggregate)
 		result = append(result, aggregate)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("iterate routing quality evidence: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close routing quality evidence: %w", err)
+	}
 	return result, nil
+}
+
+func attachDimensionEvidence(
+	ctx context.Context,
+	query queryContext,
+	profileID int64,
+	result []EvidenceAggregate,
+) error {
+	rows, err := query.QueryContext(ctx, `
+		SELECT evidence_day, strategy_name, route_id, task_type, difficulty, risk, vision_mode,
+			candidate_model, reference_model, reviewer_model, dimension,
+			samples, candidate_wins, ties, reference_wins
+		FROM routing_quality_dimension_evidence
+		WHERE profile_id = ?
+	`, profileID)
+	if err != nil {
+		return fmt.Errorf("list routing dimension evidence: %w", err)
+	}
+	defer rows.Close()
+	byKey := make(map[string]*EvidenceAggregate, len(result))
+	for index := range result {
+		byKey[evidenceAggregateKey(result[index])] = &result[index]
+	}
+	for rows.Next() {
+		var day, strategy, route, taskType, difficulty, risk, visionMode string
+		var candidate, reference, reviewer string
+		var aggregate DimensionAggregate
+		if err := rows.Scan(
+			&day, &strategy, &route, &taskType, &difficulty, &risk, &visionMode,
+			&candidate, &reference, &reviewer, &aggregate.Dimension,
+			&aggregate.Samples, &aggregate.CandidateWins, &aggregate.Ties,
+			&aggregate.ReferenceWins,
+		); err != nil {
+			return fmt.Errorf("scan routing dimension evidence: %w", err)
+		}
+		key := strings.Join([]string{
+			day, strategy, route, taskType, difficulty, risk, visionMode,
+			candidate, reference, reviewer,
+		}, "\x00")
+		if parent := byKey[key]; parent != nil {
+			parent.Dimensions[aggregate.Dimension] = aggregate
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate routing dimension evidence: %w", err)
+	}
+	return nil
+}
+
+func evidenceAggregateKey(aggregate EvidenceAggregate) string {
+	return strings.Join([]string{
+		aggregate.Day, aggregate.Strategy, aggregate.Route, aggregate.TaskType,
+		aggregate.Difficulty, aggregate.Risk, aggregate.VisionMode,
+		aggregate.CandidateModel, aggregate.ReferenceModel, aggregate.ReviewerModel,
+	}, "\x00")
 }
 
 func validateEvidence(evidence Evidence) error {
@@ -297,6 +471,9 @@ func validateEvidence(evidence Evidence) error {
 		strings.TrimSpace(evidence.Strategy) == "" ||
 		strings.TrimSpace(evidence.Route) == "" ||
 		strings.TrimSpace(evidence.TaskType) == "" ||
+		strings.TrimSpace(evidence.Difficulty) == "" ||
+		strings.TrimSpace(evidence.Risk) == "" ||
+		strings.TrimSpace(evidence.VisionMode) == "" ||
 		strings.TrimSpace(evidence.CandidateModel) == "" ||
 		strings.TrimSpace(evidence.ReferenceModel) == "" ||
 		strings.TrimSpace(evidence.ReviewerModel) == "" ||
@@ -304,10 +481,37 @@ func validateEvidence(evidence Evidence) error {
 			evidence.Outcome != OutcomeReferenceWin) ||
 		evidence.CandidateCostMicroUSD < 0 || evidence.ReferenceCostMicroUSD < 0 ||
 		evidence.ReviewerCostMicroUSD < 0 || evidence.CandidateLatencyMS < 0 ||
-		evidence.ReferenceLatencyMS < 0 {
+		evidence.ReferenceLatencyMS < 0 || !validDimensionOutcomes(evidence.Dimensions) ||
+		!validSelfEscalationEvidence(evidence) {
 		return ErrInvalidEvidence
 	}
 	return nil
+}
+
+func validDimensionOutcomes(dimensions map[Dimension]Outcome) bool {
+	if len(dimensions) != len(ReviewDimensions) {
+		return false
+	}
+	for _, dimension := range ReviewDimensions {
+		outcome, ok := dimensions[dimension]
+		if !ok || (outcome != OutcomeCandidateWin && outcome != OutcomeTie &&
+			outcome != OutcomeReferenceWin) {
+			return false
+		}
+	}
+	return true
+}
+
+func validSelfEscalationEvidence(evidence Evidence) bool {
+	if !evidence.SelfEscalationEligible {
+		return !evidence.SelfEscalationRequested && !evidence.SelfEscalationSupported &&
+			!evidence.SelfEscalationUnnecessary && !evidence.SelfEscalationMissed
+	}
+	if evidence.SelfEscalationRequested {
+		return evidence.SelfEscalationSupported != evidence.SelfEscalationUnnecessary &&
+			!evidence.SelfEscalationMissed
+	}
+	return !evidence.SelfEscalationSupported && !evidence.SelfEscalationUnnecessary
 }
 
 func rollback(tx *sql.Tx) {

@@ -111,13 +111,16 @@ func TestRecordEvidenceAggregatesOnlyMetricsByDay(t *testing.T) {
 	store := NewStore(db, func() time.Time { return now })
 	base := Evidence{
 		ProfileID: profileID, Strategy: "20260802-001", Route: "balanced",
-		TaskType: "simple", CandidateModel: "fast", ReferenceModel: "strong",
+		TaskType: "simple", Difficulty: "easy", Risk: "normal", VisionMode: "none",
+		CandidateModel: "fast", ReferenceModel: "strong",
 		ReviewerModel: "judge", CandidateCostMicroUSD: 10,
 		ReferenceCostMicroUSD: 40, ReviewerCostMicroUSD: 5,
 		CandidateLatencyMS: 20, ReferenceLatencyMS: 30,
+		Dimensions: dimensionOutcomes(OutcomeTie),
 	}
 	first := base
 	first.Outcome = OutcomeCandidateWin
+	first.SelfEscalationEligible = true
 	if err := store.RecordEvidence(context.Background(), first); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +128,25 @@ func TestRecordEvidenceAggregatesOnlyMetricsByDay(t *testing.T) {
 	second.Outcome = OutcomeTie
 	second.SevereError = true
 	second.DeterministicFailure = true
+	second.SelfEscalationEligible = true
+	second.SelfEscalationRequested = true
+	second.SelfEscalationSupported = true
 	if err := store.RecordEvidence(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	third := base
+	third.Outcome = OutcomeTie
+	third.SelfEscalationEligible = true
+	third.SelfEscalationRequested = true
+	third.SelfEscalationUnnecessary = true
+	if err := store.RecordEvidence(context.Background(), third); err != nil {
+		t.Fatal(err)
+	}
+	fourth := base
+	fourth.Outcome = OutcomeReferenceWin
+	fourth.SelfEscalationEligible = true
+	fourth.SelfEscalationMissed = true
+	if err := store.RecordEvidence(context.Background(), fourth); err != nil {
 		t.Fatal(err)
 	}
 
@@ -137,13 +158,99 @@ func TestRecordEvidenceAggregatesOnlyMetricsByDay(t *testing.T) {
 		t.Fatalf("evidence rows=%d, want 1", len(rows))
 	}
 	got := rows[0]
-	if got.Day != "2026-08-02" || got.Samples != 2 || got.CandidateWins != 1 ||
-		got.Ties != 1 || got.ReferenceWins != 0 || got.SevereErrors != 1 ||
-		got.DeterministicFailures != 1 || got.CandidateCostMicroUSD != 20 ||
-		got.ReferenceCostMicroUSD != 80 || got.ReviewerCostMicroUSD != 10 ||
-		got.CandidateLatencyMS != 40 || got.ReferenceLatencyMS != 60 {
+	if got.Day != "2026-08-02" || got.Samples != 4 || got.CandidateWins != 1 ||
+		got.Ties != 2 || got.ReferenceWins != 1 || got.SevereErrors != 1 ||
+		got.DeterministicFailures != 1 || got.CandidateCostMicroUSD != 40 ||
+		got.ReferenceCostMicroUSD != 160 || got.ReviewerCostMicroUSD != 20 ||
+		got.CandidateLatencyMS != 80 || got.ReferenceLatencyMS != 120 ||
+		got.SelfEscalationEligibleSamples != 4 || got.SelfEscalations != 2 ||
+		got.SupportedSelfEscalations != 1 || got.UnnecessarySelfEscalations != 1 ||
+		got.MissedSelfEscalations != 1 {
 		t.Fatalf("evidence=%+v", got)
 	}
+}
+
+func TestRecordEvidenceKeepsClassificationBucketsSeparate(t *testing.T) {
+	db := openEvaluationDB(t)
+	profileID := insertEvaluationProfile(t, db)
+	store := NewStore(db, func() time.Time {
+		return time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	})
+	base := Evidence{
+		ProfileID: profileID, Strategy: "20260802-001", Route: "balanced",
+		TaskType: "code", Difficulty: "easy", Risk: "normal", VisionMode: "none",
+		CandidateModel: "fast", ReferenceModel: "strong", ReviewerModel: "judge",
+		Outcome: OutcomeCandidateWin, Dimensions: dimensionOutcomes(OutcomeCandidateWin),
+	}
+	for _, mutate := range []func(*Evidence){
+		func(*Evidence) {},
+		func(e *Evidence) { e.Difficulty = "hard" },
+		func(e *Evidence) { e.Risk = "high" },
+		func(e *Evidence) { e.VisionMode = "composite" },
+	} {
+		evidence := base
+		mutate(&evidence)
+		if err := store.RecordEvidence(context.Background(), evidence); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := store.ListEvidence(context.Background(), profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("evidence buckets=%d, want 4: %+v", len(rows), rows)
+	}
+	for _, row := range rows {
+		if len(row.Dimensions) != len(ReviewDimensions) {
+			t.Fatalf("dimension aggregates=%+v", row.Dimensions)
+		}
+	}
+}
+
+func TestEvidenceAggregateAndDimensionsUseOneReadSnapshot(t *testing.T) {
+	db := openEvaluationDB(t)
+	profileID := insertEvaluationProfile(t, db)
+	store := NewStore(db, func() time.Time {
+		return time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	})
+	evidence := Evidence{
+		ProfileID: profileID, Strategy: "20260802-001", Route: "balanced",
+		TaskType: "code", Difficulty: "easy", Risk: "normal", VisionMode: "none",
+		CandidateModel: "fast", ReferenceModel: "strong", ReviewerModel: "judge",
+		Outcome: OutcomeCandidateWin, Dimensions: dimensionOutcomes(OutcomeCandidateWin),
+	}
+	if err := store.RecordEvidence(context.Background(), evidence); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	rows, err := listEvidenceAggregates(context.Background(), tx, profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordEvidence(context.Background(), evidence); err != nil {
+		t.Fatal(err)
+	}
+	if err := attachDimensionEvidence(context.Background(), tx, profileID, rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].Samples != 1 || rows[0].Dimensions[DimensionCorrectness].Samples != 1 {
+		t.Fatalf("mixed read snapshot: overall=%d dimension=%d", rows[0].Samples,
+			rows[0].Dimensions[DimensionCorrectness].Samples)
+	}
+}
+
+func dimensionOutcomes(outcome Outcome) map[Dimension]Outcome {
+	result := make(map[Dimension]Outcome, len(ReviewDimensions))
+	for _, dimension := range ReviewDimensions {
+		result[dimension] = outcome
+	}
+	return result
 }
 
 func openEvaluationDB(t *testing.T) *sql.DB {

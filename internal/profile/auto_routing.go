@@ -27,18 +27,17 @@ const (
 	defaultLongContextThresholdBPS = 7500
 	maxRiskPatterns                = 64
 	maxRiskPatternRunes            = 128
+	RiskPolicyVersion2             = 2
 )
 
 var defaultSensitiveTextPatterns = []string{
 	"delete production", "drop table", "deploy to production", "rotate credential",
 	"删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
-	"edit the file", "modify the code", "fix the code", "implement this", "refactor",
-	"修改代码", "修复代码", "重构", "开始开发", "写代码",
 }
 
 var defaultSensitiveToolPatterns = []string{
-	"shell", "exec", "write", "edit", "delete", "apply_patch", "apply-patch",
-	"deploy", "rotate_credential", "rotate_secret", "rotate_key", "payment", "transfer",
+	"delete_production", "deploy_production", "rotate_credential", "rotate_secret",
+	"payment", "transfer",
 	"database_mutation", "database_write", "database_delete", "db_write", "db_delete",
 }
 
@@ -51,15 +50,21 @@ type AutoRoutingConfig struct {
 	AnalyzerMinConfidenceBPS int                       `json:"analyzer_min_confidence_bps,omitempty"`
 	SessionTTL               string                    `json:"session_ttl,omitempty"`
 	RiskPolicy               RiskPolicyConfig          `json:"risk_policy,omitempty"`
+	SelfEscalation           SelfEscalationConfig      `json:"self_escalation,omitempty"`
 	DynamicOptimization      DynamicOptimizationConfig `json:"dynamic_optimization,omitempty"`
 	Strategy                 RoutingStrategyConfig     `json:"strategy,omitempty"`
 }
 
 type RiskPolicyConfig struct {
+	Version                  int      `json:"version,omitempty"`
 	SensitiveTextPatterns    []string `json:"sensitive_text_patterns"`
 	SensitiveToolPatterns    []string `json:"sensitive_tool_patterns"`
 	StructuredOutputHighRisk bool     `json:"structured_output_high_risk"`
 	LongContextThresholdBPS  int      `json:"long_context_threshold_bps"`
+}
+
+type SelfEscalationConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 type DynamicOptimizationConfig struct {
@@ -82,8 +87,9 @@ type RoutingStrategyConfig struct {
 }
 
 type TaskRouteConfig struct {
-	TaskType string `json:"task_type"`
-	Route    string `json:"route"`
+	TaskType   string `json:"task_type,omitempty"`
+	Difficulty string `json:"difficulty,omitempty"`
+	Route      string `json:"route"`
 }
 
 type RouteConfig struct {
@@ -119,6 +125,7 @@ type AutoRoutingRuntime struct {
 	AnalyzerMinConfidenceBPS int
 	SessionTTL               time.Duration
 	RiskPolicy               RiskPolicyRuntime
+	SelfEscalation           SelfEscalationRuntime
 	DynamicOptimization      DynamicOptimizationRuntime
 	Strategy                 RoutingStrategyRuntime
 
@@ -126,10 +133,15 @@ type AutoRoutingRuntime struct {
 }
 
 type RiskPolicyRuntime struct {
+	Version                  int
 	SensitiveTextPatterns    []string
 	SensitiveToolPatterns    []string
 	StructuredOutputHighRisk bool
 	LongContextThresholdBPS  int
+}
+
+type SelfEscalationRuntime struct {
+	Enabled bool
 }
 
 type DynamicOptimizationRuntime struct {
@@ -146,9 +158,33 @@ type RoutingStrategyRuntime struct {
 	Name         string
 	Alias        string
 	DefaultRoute string
-	TaskRoutes   map[string]string
+	TaskRoutes   map[TaskRouteKey]string
 	Routes       map[string]RouteRuntime
 	Budget       AttemptBudgetRuntime
+}
+
+type TaskRouteKey struct {
+	TaskType   string
+	Difficulty string
+}
+
+func (r RoutingStrategyRuntime) RouteFor(taskType, difficulty string) (string, bool) {
+	if taskType != "" && difficulty != "" && difficulty != "unknown" {
+		if route, ok := r.TaskRoutes[TaskRouteKey{TaskType: taskType, Difficulty: difficulty}]; ok {
+			return route, true
+		}
+	}
+	if taskType != "" {
+		if route, ok := r.TaskRoutes[TaskRouteKey{TaskType: taskType}]; ok {
+			return route, true
+		}
+	}
+	if difficulty != "" && difficulty != "unknown" {
+		if route, ok := r.TaskRoutes[TaskRouteKey{Difficulty: difficulty}]; ok {
+			return route, true
+		}
+	}
+	return "", false
 }
 
 type RouteRuntime struct {
@@ -188,6 +224,9 @@ func resolveAutoRouting(
 	if !config.Enabled {
 		return AutoRoutingRuntime{}, nil
 	}
+	if len(models) < 2 {
+		return AutoRoutingRuntime{}, invalidAuto("at least two recorded models are required")
+	}
 
 	participants, participantSet, err := resolveParticipants(config.Participants, models)
 	if err != nil {
@@ -206,6 +245,9 @@ func resolveAutoRouting(
 	}
 	if _, ok := models[analyzer]; !ok {
 		return AutoRoutingRuntime{}, invalidAuto("task analyzer model %q is not in the model catalog", analyzer)
+	}
+	if capability := models[analyzer]; !capability.HasSupportsTools || !capability.SupportsTools {
+		return AutoRoutingRuntime{}, invalidAuto("task analyzer model %q must confirm tool support", analyzer)
 	}
 
 	requiredModels := make(map[string]struct{}, len(participantSet)+2)
@@ -272,6 +314,30 @@ func resolveAutoRouting(
 	if analyzerTimeout > strategy.Budget.Deadline {
 		return AutoRoutingRuntime{}, invalidAuto("analyzer timeout must not exceed the strategy deadline")
 	}
+	if config.SelfEscalation.Enabled && strategy.Budget.MaxModelSwitches < 1 {
+		return AutoRoutingRuntime{}, invalidAuto("self escalation requires at least one model switch")
+	}
+	if config.SelfEscalation.Enabled {
+		checked := make(map[string]struct{})
+		for _, route := range strategy.Routes {
+			for _, candidate := range route.Candidates {
+				if candidate.Model == baseline {
+					continue
+				}
+				if _, ok := checked[candidate.Model]; ok {
+					continue
+				}
+				checked[candidate.Model] = struct{}{}
+				capability := models[candidate.Model]
+				if !capability.HasSupportsTools || !capability.SupportsTools {
+					return AutoRoutingRuntime{}, invalidAuto(
+						"self escalation candidate model %q must confirm tool support",
+						candidate.Model,
+					)
+				}
+			}
+		}
+	}
 
 	return AutoRoutingRuntime{
 		Enabled:                  true,
@@ -282,6 +348,7 @@ func resolveAutoRouting(
 		AnalyzerMinConfidenceBPS: config.AnalyzerMinConfidenceBPS,
 		SessionTTL:               sessionTTL,
 		RiskPolicy:               riskPolicy,
+		SelfEscalation:           SelfEscalationRuntime{Enabled: config.SelfEscalation.Enabled},
 		DynamicOptimization:      dynamicOptimization,
 		Strategy:                 strategy,
 		participantSet:           participantSet,
@@ -289,6 +356,12 @@ func resolveAutoRouting(
 }
 
 func resolveRiskPolicy(config RiskPolicyConfig) (RiskPolicyRuntime, error) {
+	if config.Version != 0 && config.Version != RiskPolicyVersion2 {
+		return RiskPolicyRuntime{}, invalidAuto("risk policy version must be %d", RiskPolicyVersion2)
+	}
+	if config.Version == 0 {
+		config = RiskPolicyConfig{Version: RiskPolicyVersion2}
+	}
 	textPatterns, err := resolveRiskPatterns(
 		config.SensitiveTextPatterns,
 		defaultSensitiveTextPatterns,
@@ -315,6 +388,7 @@ func resolveRiskPolicy(config RiskPolicyConfig) (RiskPolicyRuntime, error) {
 		)
 	}
 	return RiskPolicyRuntime{
+		Version:                  RiskPolicyVersion2,
 		SensitiveTextPatterns:    textPatterns,
 		SensitiveToolPatterns:    toolPatterns,
 		StructuredOutputHighRisk: config.StructuredOutputHighRisk,
@@ -418,8 +492,8 @@ func resolveParticipants(
 	configured []string,
 	models ModelCatalog,
 ) ([]string, map[string]struct{}, error) {
-	if len(configured) == 0 {
-		return nil, nil, invalidAuto("at least one participant is required")
+	if len(configured) < 2 {
+		return nil, nil, invalidAuto("at least two participants are required")
 	}
 	participants := make([]string, 0, len(configured))
 	participantSet := make(map[string]struct{}, len(configured))
@@ -471,18 +545,30 @@ func resolveRoutingStrategy(
 		return RoutingStrategyRuntime{}, invalidAuto("default route %q does not exist", config.DefaultRoute)
 	}
 
-	taskRoutes := make(map[string]string, len(config.TaskRoutes))
+	taskRoutes := make(map[TaskRouteKey]string, len(config.TaskRoutes))
 	for _, configured := range config.TaskRoutes {
-		if !routingIDPattern.MatchString(configured.TaskType) {
+		if configured.TaskType != "" && !routingIDPattern.MatchString(configured.TaskType) {
 			return RoutingStrategyRuntime{}, invalidAuto("task type %q is invalid", configured.TaskType)
 		}
-		if _, duplicate := taskRoutes[configured.TaskType]; duplicate {
-			return RoutingStrategyRuntime{}, invalidAuto("task type %q is duplicated", configured.TaskType)
+		if !validTaskRouteDifficulty(configured.Difficulty) {
+			return RoutingStrategyRuntime{}, invalidAuto("task route difficulty %q is invalid", configured.Difficulty)
+		}
+		if configured.TaskType == "" && configured.Difficulty == "" {
+			return RoutingStrategyRuntime{}, invalidAuto("task route requires a task type or difficulty")
+		}
+		key := TaskRouteKey{TaskType: configured.TaskType, Difficulty: configured.Difficulty}
+		if _, duplicate := taskRoutes[key]; duplicate {
+			return RoutingStrategyRuntime{}, invalidAuto(
+				"task route %q/%q is duplicated", configured.TaskType, configured.Difficulty,
+			)
 		}
 		if _, ok := routes[configured.Route]; !ok {
-			return RoutingStrategyRuntime{}, invalidAuto("task type %q references unknown route %q", configured.TaskType, configured.Route)
+			return RoutingStrategyRuntime{}, invalidAuto(
+				"task route %q/%q references unknown route %q",
+				configured.TaskType, configured.Difficulty, configured.Route,
+			)
 		}
-		taskRoutes[configured.TaskType] = configured.Route
+		taskRoutes[key] = configured.Route
 	}
 
 	budget, err := resolveAttemptBudget(config.Budget)
@@ -497,6 +583,15 @@ func resolveRoutingStrategy(
 		Routes:       routes,
 		Budget:       budget,
 	}, nil
+}
+
+func validTaskRouteDifficulty(value string) bool {
+	switch value {
+	case "", "easy", "medium", "hard":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveRoute(

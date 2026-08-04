@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildCatalog,
+  renderCatalogJSON,
   renderCatalogModule,
 } from "./model-catalog-lib.mjs";
 
@@ -150,6 +151,18 @@ test("buildCatalog filters ineligible records and compacts confirmed values", ()
   });
 });
 
+test("renderCatalogJSON emits deterministic shared data without repeated source metadata", () => {
+  const models = buildFixture();
+  const rendered = renderCatalogJSON({ models, source: sourceFixture });
+  const parsed = JSON.parse(rendered);
+
+  assert.deepEqual(parsed.source, sourceFixture);
+  assert.equal(parsed.models.length, 2);
+  assert.equal(Object.hasOwn(parsed.models[0], "source"), false);
+  assert.equal(rendered.endsWith("\n"), true);
+  assert.equal(rendered, renderCatalogJSON({ models, source: sourceFixture }));
+});
+
 test("buildCatalog does not treat audio input as vision support", () => {
   const models = buildCatalog({
     canonical: {
@@ -201,8 +214,12 @@ test("buildCatalog includes routing capabilities and conservative direct-provide
             cost: {
               input: 0.25,
               output: 1.5,
-              tiers: [{ input: 0.5, output: 2 }],
-              context_over_200k: { input: 0.75, output: 2.5 },
+              cache_read: 0.025,
+              cache_write: 0.3125,
+              tiers: [{ input: 0.5, output: 2, cache_read: 0.05, cache_write: 0.625 }],
+              context_over_200k: {
+                input: 0.75, output: 2.5, cache_read: 0.075, cache_write: 0.9375,
+              },
             },
           },
         },
@@ -216,6 +233,8 @@ test("buildCatalog includes routing capabilities and conservative direct-provide
   assert.equal(models[0].supports_structured_output, true);
   assert.equal(models[0].input_price_micro_usd_per_million, 750000);
   assert.equal(models[0].output_price_micro_usd_per_million, 2500000);
+  assert.equal(models[0].cache_read_price_micro_usd_per_million, 75000);
+  assert.equal(models[0].cache_write_price_micro_usd_per_million, 937500);
 });
 
 test("buildCatalog preserves zero direct-provider prices", () => {

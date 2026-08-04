@@ -1,0 +1,5978 @@
+{
+  "source": {
+    "name": "Models.dev",
+    "revision": "5b701eb1b0c50ba722f44aae382dea0cd312b87de5eb37193944ff5cef3376f0",
+    "modelsSha256": "67f2e31df6cdbb4bb54287850d2ea35cec060ba7e264274ab810bb0f9e6303b3",
+    "providersSha256": "b3a52ba98bb4b58714734f8bb98c9bc7ffeff3558f915bcc3211cfe5f276728d",
+    "retrieved": "2026-08-03"
+  },
+  "models": [
+    {
+      "id": "qwen-flash",
+      "canonicalId": "alibaba/qwen-flash",
+      "apiIds": [
+        "qwen-flash"
+      ],
+      "aliases": [
+        "alibaba/qwen-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen Flash",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 50000,
+      "output_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-07-28",
+      "lastUpdated": "2025-07-28",
+      "references": []
+    },
+    {
+      "id": "qwen-max",
+      "canonicalId": "alibaba/qwen-max",
+      "apiIds": [
+        "qwen-max"
+      ],
+      "aliases": [
+        "alibaba/qwen-max"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen Max",
+      "family": "qwen",
+      "context_window": 32768,
+      "max_output_tokens": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1600000,
+      "output_price_micro_usd_per_million": 6400000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-04-03",
+      "lastUpdated": "2025-01-25",
+      "references": []
+    },
+    {
+      "id": "qwen-omni-turbo",
+      "canonicalId": "alibaba/qwen-omni-turbo",
+      "apiIds": [
+        "qwen-omni-turbo"
+      ],
+      "aliases": [
+        "alibaba/qwen-omni-turbo"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen-Omni Turbo",
+      "family": "qwen",
+      "context_window": 32768,
+      "max_output_tokens": 2048,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 70000,
+      "output_price_micro_usd_per_million": 270000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-01-19",
+      "lastUpdated": "2025-03-26",
+      "references": []
+    },
+    {
+      "id": "qwen-plus",
+      "canonicalId": "alibaba/qwen-plus",
+      "apiIds": [
+        "qwen-plus"
+      ],
+      "aliases": [
+        "alibaba/qwen-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen Plus",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 400000,
+      "output_price_micro_usd_per_million": 1200000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-01-25",
+      "lastUpdated": "2025-09-11",
+      "references": []
+    },
+    {
+      "id": "qwen-turbo",
+      "canonicalId": "alibaba/qwen-turbo",
+      "apiIds": [
+        "qwen-turbo"
+      ],
+      "aliases": [
+        "alibaba/qwen-turbo"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen Turbo",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 16384,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 50000,
+      "output_price_micro_usd_per_million": 200000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-11-01",
+      "lastUpdated": "2025-04-28",
+      "references": []
+    },
+    {
+      "id": "qwen-vl-max",
+      "canonicalId": "alibaba/qwen-vl-max",
+      "apiIds": [
+        "qwen-vl-max"
+      ],
+      "aliases": [
+        "alibaba/qwen-vl-max"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen-VL Max",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 800000,
+      "output_price_micro_usd_per_million": 3200000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-04-08",
+      "lastUpdated": "2025-08-13",
+      "references": []
+    },
+    {
+      "id": "qwen-vl-plus",
+      "canonicalId": "alibaba/qwen-vl-plus",
+      "apiIds": [
+        "qwen-vl-plus"
+      ],
+      "aliases": [
+        "alibaba/qwen-vl-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen-VL Plus",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 210000,
+      "output_price_micro_usd_per_million": 630000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-01-25",
+      "lastUpdated": "2025-08-15",
+      "references": []
+    },
+    {
+      "id": "qwen2-5-vl-72b-instruct",
+      "canonicalId": "alibaba/qwen2-5-vl-72b-instruct",
+      "apiIds": [
+        "qwen2-5-vl-72b-instruct"
+      ],
+      "aliases": [
+        "alibaba/qwen2-5-vl-72b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen2.5-VL 72B Instruct",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2800000,
+      "output_price_micro_usd_per_million": 8400000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-09",
+      "lastUpdated": "2024-09",
+      "references": []
+    },
+    {
+      "id": "qwen3-235b-a22b",
+      "canonicalId": "alibaba/qwen3-235b-a22b",
+      "apiIds": [
+        "qwen3-235b-a22b"
+      ],
+      "aliases": [
+        "alibaba/qwen3-235b-a22b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3 235B-A22B",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 16384,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 700000,
+      "output_price_micro_usd_per_million": 2800000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04",
+      "lastUpdated": "2025-04",
+      "references": []
+    },
+    {
+      "id": "qwen3-32b",
+      "canonicalId": "alibaba/qwen3-32b",
+      "apiIds": [
+        "qwen3-32b"
+      ],
+      "aliases": [
+        "alibaba/qwen3-32b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3 32B",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 16384,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 700000,
+      "output_price_micro_usd_per_million": 2800000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04",
+      "lastUpdated": "2025-04",
+      "references": []
+    },
+    {
+      "id": "qwen3-coder-30b-a3b-instruct",
+      "canonicalId": "alibaba/qwen3-coder-30b-a3b-instruct",
+      "apiIds": [
+        "qwen3-coder-30b-a3b-instruct"
+      ],
+      "aliases": [
+        "alibaba/qwen3-coder-30b-a3b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3-Coder 30B-A3B Instruct",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 450000,
+      "output_price_micro_usd_per_million": 2250000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04",
+      "lastUpdated": "2025-04",
+      "references": []
+    },
+    {
+      "id": "qwen3-coder-480b-a35b-instruct",
+      "canonicalId": "alibaba/qwen3-coder-480b-a35b-instruct",
+      "apiIds": [
+        "qwen3-coder-480b-a35b-instruct"
+      ],
+      "aliases": [
+        "alibaba/qwen3-coder-480b-a35b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3-Coder 480B-A35B Instruct",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1500000,
+      "output_price_micro_usd_per_million": 7500000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04",
+      "lastUpdated": "2025-04",
+      "references": []
+    },
+    {
+      "id": "qwen3-coder-flash",
+      "canonicalId": "alibaba/qwen3-coder-flash",
+      "apiIds": [
+        "qwen3-coder-flash"
+      ],
+      "aliases": [
+        "alibaba/qwen3-coder-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3 Coder Flash",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 1500000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-07-28",
+      "lastUpdated": "2025-07-28",
+      "references": []
+    },
+    {
+      "id": "qwen3-coder-plus",
+      "canonicalId": "alibaba/qwen3-coder-plus",
+      "apiIds": [
+        "alibaba/qwen3-coder-plus",
+        "qwen3-coder-plus"
+      ],
+      "aliases": [
+        "alibaba/qwen3-coder-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3 Coder Plus",
+      "family": "qwen",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1000000,
+      "output_price_micro_usd_per_million": 5000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-07-23",
+      "lastUpdated": "2025-07-23",
+      "references": []
+    },
+    {
+      "id": "qwen3-max",
+      "canonicalId": "alibaba/qwen3-max",
+      "apiIds": [
+        "alibaba/qwen3-max",
+        "qwen3-max"
+      ],
+      "aliases": [
+        "alibaba/qwen3-max"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3 Max",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1200000,
+      "output_price_micro_usd_per_million": 6000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09-23",
+      "lastUpdated": "2025-09-23",
+      "references": []
+    },
+    {
+      "id": "qwen3-next-80b-a3b-instruct",
+      "canonicalId": "alibaba/qwen3-next-80b-a3b-instruct",
+      "apiIds": [
+        "alibaba/qwen3-next-80b-a3b-instruct",
+        "qwen3-next-80b-a3b-instruct"
+      ],
+      "aliases": [
+        "alibaba/qwen3-next-80b-a3b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3-Next 80B-A3B Instruct",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 500000,
+      "output_price_micro_usd_per_million": 2000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09",
+      "lastUpdated": "2025-09",
+      "references": []
+    },
+    {
+      "id": "qwen3-next-80b-a3b-thinking",
+      "canonicalId": "alibaba/qwen3-next-80b-a3b-thinking",
+      "apiIds": [
+        "alibaba/qwen3-next-80b-a3b-thinking",
+        "qwen3-next-80b-a3b-thinking"
+      ],
+      "aliases": [
+        "alibaba/qwen3-next-80b-a3b-thinking"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3-Next 80B-A3B (Thinking)",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 500000,
+      "output_price_micro_usd_per_million": 6000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09",
+      "lastUpdated": "2025-09",
+      "references": []
+    },
+    {
+      "id": "qwen3-vl-plus",
+      "canonicalId": "alibaba/qwen3-vl-plus",
+      "apiIds": [
+        "qwen3-vl-plus"
+      ],
+      "aliases": [
+        "alibaba/qwen3-vl-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3-VL Plus",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 200000,
+      "output_price_micro_usd_per_million": 1600000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09-23",
+      "lastUpdated": "2025-09-23",
+      "references": []
+    },
+    {
+      "id": "qwen3.5-122b-a10b",
+      "canonicalId": "alibaba/qwen3.5-122b-a10b",
+      "apiIds": [
+        "qwen3.5-122b-a10b"
+      ],
+      "aliases": [
+        "alibaba/qwen3.5-122b-a10b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.5 122B-A10B",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 400000,
+      "output_price_micro_usd_per_million": 3200000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-23",
+      "lastUpdated": "2026-02-23",
+      "references": []
+    },
+    {
+      "id": "qwen3.5-27b",
+      "canonicalId": "alibaba/qwen3.5-27b",
+      "apiIds": [
+        "qwen3.5-27b"
+      ],
+      "aliases": [
+        "alibaba/qwen3.5-27b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.5 27B",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 2400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-23",
+      "lastUpdated": "2026-02-23",
+      "references": []
+    },
+    {
+      "id": "qwen3.5-35b-a3b",
+      "canonicalId": "alibaba/qwen3.5-35b-a3b",
+      "apiIds": [
+        "qwen3.5-35b-a3b"
+      ],
+      "aliases": [
+        "alibaba/qwen3.5-35b-a3b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.5 35B-A3B",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 250000,
+      "output_price_micro_usd_per_million": 2000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-23",
+      "lastUpdated": "2026-02-23",
+      "references": []
+    },
+    {
+      "id": "qwen3.5-397b-a17b",
+      "canonicalId": "alibaba/qwen3.5-397b-a17b",
+      "apiIds": [
+        "qwen3.5-397b-a17b"
+      ],
+      "aliases": [
+        "alibaba/qwen3.5-397b-a17b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.5 397B-A17B",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 3600000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-15",
+      "lastUpdated": "2026-02-15",
+      "references": []
+    },
+    {
+      "id": "qwen3.5-9b",
+      "canonicalId": "alibaba/qwen3.5-9b",
+      "apiIds": [
+        "qwen3.5-9b"
+      ],
+      "aliases": [
+        "alibaba/qwen3.5-9b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.5 9B",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-23",
+      "lastUpdated": "2026-02-23",
+      "references": []
+    },
+    {
+      "id": "qwen3.5-plus",
+      "canonicalId": "alibaba/qwen3.5-plus",
+      "apiIds": [
+        "alibaba/qwen3.5-plus",
+        "qwen3.5-plus"
+      ],
+      "aliases": [
+        "alibaba/qwen3.5-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.5 Plus",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 400000,
+      "output_price_micro_usd_per_million": 2400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-16",
+      "lastUpdated": "2026-02-16",
+      "references": []
+    },
+    {
+      "id": "qwen3.6-27b",
+      "canonicalId": "alibaba/qwen3.6-27b",
+      "apiIds": [
+        "alibaba/qwen3.6-27b",
+        "qwen3.6-27b"
+      ],
+      "aliases": [
+        "alibaba/qwen3.6-27b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.6 27B",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 3600000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-22",
+      "lastUpdated": "2026-04-22",
+      "references": []
+    },
+    {
+      "id": "qwen3.6-35b-a3b",
+      "canonicalId": "alibaba/qwen3.6-35b-a3b",
+      "apiIds": [
+        "alibaba/qwen3.6-35b-a3b",
+        "qwen3.6-35b-a3b"
+      ],
+      "aliases": [
+        "alibaba/qwen3.6-35b-a3b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.6 35B-A3B",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 248000,
+      "output_price_micro_usd_per_million": 1485000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-17",
+      "lastUpdated": "2026-04-17",
+      "references": []
+    },
+    {
+      "id": "qwen3.6-flash",
+      "canonicalId": "alibaba/qwen3.6-flash",
+      "apiIds": [
+        "alibaba/qwen3.6-flash",
+        "qwen3.6-flash"
+      ],
+      "aliases": [
+        "alibaba/qwen3.6-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.6 Flash",
+      "family": "qwen3.6",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 187500,
+      "output_price_micro_usd_per_million": 1125000,
+      "cache_write_price_micro_usd_per_million": 234375,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-27",
+      "lastUpdated": "2026-04-27",
+      "references": []
+    },
+    {
+      "id": "qwen3.6-max-preview",
+      "canonicalId": "alibaba/qwen3.6-max-preview",
+      "apiIds": [
+        "qwen3.6-max-preview"
+      ],
+      "aliases": [
+        "alibaba/qwen3.6-max-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.6 Max Preview",
+      "family": "qwen",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1300000,
+      "output_price_micro_usd_per_million": 7800000,
+      "cache_read_price_micro_usd_per_million": 130000,
+      "cache_write_price_micro_usd_per_million": 1625000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-20",
+      "lastUpdated": "2026-04-20",
+      "references": []
+    },
+    {
+      "id": "qwen3.6-plus",
+      "canonicalId": "alibaba/qwen3.6-plus",
+      "apiIds": [
+        "alibaba/qwen3.6-plus",
+        "qwen3.6-plus"
+      ],
+      "aliases": [
+        "alibaba/qwen3.6-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.6 Plus",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 6000000,
+      "cache_read_price_micro_usd_per_million": 200000,
+      "cache_write_price_micro_usd_per_million": 2500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-02",
+      "lastUpdated": "2026-04-02",
+      "references": []
+    },
+    {
+      "id": "qwen3.7-flash",
+      "canonicalId": "alibaba/qwen3.7-flash",
+      "apiIds": [
+        "alibaba/qwen3.7-flash"
+      ],
+      "aliases": [
+        "alibaba/qwen3.7-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.7 Flash",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-15",
+      "lastUpdated": "2026-07-15",
+      "references": []
+    },
+    {
+      "id": "qwen3.7-max",
+      "canonicalId": "alibaba/qwen3.7-max",
+      "apiIds": [
+        "alibaba/qwen3.7-max",
+        "qwen3.7-max"
+      ],
+      "aliases": [
+        "alibaba/qwen3.7-max"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.7 Max",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 7500000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "cache_write_price_micro_usd_per_million": 3125000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-21",
+      "lastUpdated": "2026-05-21",
+      "references": []
+    },
+    {
+      "id": "qwen3.7-plus",
+      "canonicalId": "alibaba/qwen3.7-plus",
+      "apiIds": [
+        "alibaba/qwen3.7-plus",
+        "qwen3.7-plus"
+      ],
+      "aliases": [
+        "alibaba/qwen3.7-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.7 Plus",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 6000000,
+      "cache_read_price_micro_usd_per_million": 200000,
+      "cache_write_price_micro_usd_per_million": 2500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-02",
+      "lastUpdated": "2026-06-02",
+      "references": []
+    },
+    {
+      "id": "qwen3.8-max-preview",
+      "canonicalId": "alibaba/qwen3.8-max-preview",
+      "apiIds": [
+        "qwen3.8-max-preview"
+      ],
+      "aliases": [
+        "alibaba/qwen3.8-max-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "Qwen3.8 Max Preview",
+      "family": "qwen",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-19",
+      "lastUpdated": "2026-07-19",
+      "references": []
+    },
+    {
+      "id": "qwq-plus",
+      "canonicalId": "alibaba/qwq-plus",
+      "apiIds": [
+        "qwq-plus"
+      ],
+      "aliases": [
+        "alibaba/qwq-plus"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Alibaba",
+      "name": "QwQ Plus",
+      "family": "qwen",
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 800000,
+      "output_price_micro_usd_per_million": 2400000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-03-05",
+      "lastUpdated": "2025-03-05",
+      "references": []
+    },
+    {
+      "id": "claude-3-5-haiku-20241022",
+      "canonicalId": "anthropic/claude-3-5-haiku-20241022",
+      "apiIds": [
+        "claude-3-5-haiku-20241022"
+      ],
+      "aliases": [
+        "anthropic/claude-3-5-haiku-20241022"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Haiku 3.5",
+      "family": "claude-haiku",
+      "context_window": 200000,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2024-10-22",
+      "lastUpdated": "2024-10-22",
+      "references": []
+    },
+    {
+      "id": "claude-3-5-sonnet-20241022",
+      "canonicalId": "anthropic/claude-3-5-sonnet-20241022",
+      "apiIds": [
+        "claude-3-5-sonnet-20241022"
+      ],
+      "aliases": [
+        "anthropic/claude-3-5-sonnet-20241022"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 3.5 v2",
+      "family": "claude-sonnet",
+      "context_window": 200000,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2024-10-22",
+      "lastUpdated": "2024-10-22",
+      "references": []
+    },
+    {
+      "id": "claude-3-7-sonnet-20250219",
+      "canonicalId": "anthropic/claude-3-7-sonnet-20250219",
+      "apiIds": [
+        "anthropic/claude-3-7-sonnet-20250219"
+      ],
+      "aliases": [
+        "anthropic/claude-3-7-sonnet-20250219"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 3.7",
+      "family": "claude-sonnet",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-02-19",
+      "lastUpdated": "2025-02-19",
+      "references": []
+    },
+    {
+      "id": "claude-3-haiku-20240307",
+      "canonicalId": "anthropic/claude-3-haiku-20240307",
+      "apiIds": [
+        "claude-3-haiku-20240307"
+      ],
+      "aliases": [
+        "anthropic/claude-3-haiku-20240307"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Haiku 3",
+      "family": "claude-haiku",
+      "context_window": 200000,
+      "max_output_tokens": 4096,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2024-03-13",
+      "lastUpdated": "2024-03-13",
+      "references": []
+    },
+    {
+      "id": "claude-fable-5",
+      "canonicalId": "anthropic/claude-fable-5",
+      "apiIds": [
+        "anthropic/claude-fable-5",
+        "claude-fable-5"
+      ],
+      "aliases": [
+        "anthropic/claude-fable-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Fable 5",
+      "family": "claude-fable",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 10000000,
+      "output_price_micro_usd_per_million": 50000000,
+      "cache_read_price_micro_usd_per_million": 1000000,
+      "cache_write_price_micro_usd_per_million": 12500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-09",
+      "lastUpdated": "2026-06-09",
+      "references": []
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "canonicalId": "anthropic/claude-haiku-4-5",
+      "apiIds": [
+        "anthropic/claude-haiku-4-5",
+        "claude-haiku-4-5"
+      ],
+      "aliases": [
+        "anthropic/claude-haiku-4-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Haiku 4.5 (latest)",
+      "family": "claude-haiku",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1000000,
+      "output_price_micro_usd_per_million": 5000000,
+      "cache_read_price_micro_usd_per_million": 100000,
+      "cache_write_price_micro_usd_per_million": 1250000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-10-15",
+      "lastUpdated": "2025-10-15",
+      "references": []
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "canonicalId": "anthropic/claude-haiku-4-5-20251001",
+      "apiIds": [
+        "anthropic/claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001"
+      ],
+      "aliases": [
+        "anthropic/claude-haiku-4-5-20251001"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Haiku 4.5",
+      "family": "claude-haiku",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1000000,
+      "output_price_micro_usd_per_million": 5000000,
+      "cache_read_price_micro_usd_per_million": 100000,
+      "cache_write_price_micro_usd_per_million": 1250000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-10-15",
+      "lastUpdated": "2025-10-15",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-0",
+      "canonicalId": "anthropic/claude-opus-4-0",
+      "apiIds": [
+        "claude-opus-4-0"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-0"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4 (latest)",
+      "family": "claude-opus",
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-05-22",
+      "lastUpdated": "2025-05-22",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-1",
+      "canonicalId": "anthropic/claude-opus-4-1",
+      "apiIds": [
+        "anthropic/claude-opus-4-1",
+        "claude-opus-4-1"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4.1 (latest)",
+      "family": "claude-opus",
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 15000000,
+      "output_price_micro_usd_per_million": 75000000,
+      "cache_read_price_micro_usd_per_million": 1500000,
+      "cache_write_price_micro_usd_per_million": 18750000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-05",
+      "lastUpdated": "2025-08-05",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-1-20250805",
+      "canonicalId": "anthropic/claude-opus-4-1-20250805",
+      "apiIds": [
+        "anthropic/claude-opus-4-1-20250805",
+        "claude-opus-4-1-20250805"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-1-20250805"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4.1",
+      "family": "claude-opus",
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 15000000,
+      "output_price_micro_usd_per_million": 75000000,
+      "cache_read_price_micro_usd_per_million": 1500000,
+      "cache_write_price_micro_usd_per_million": 18750000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-05",
+      "lastUpdated": "2025-08-05",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-20250514",
+      "canonicalId": "anthropic/claude-opus-4-20250514",
+      "apiIds": [
+        "anthropic/claude-opus-4-20250514"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-20250514"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4",
+      "family": "claude-opus",
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-05-22",
+      "lastUpdated": "2025-05-22",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-5",
+      "canonicalId": "anthropic/claude-opus-4-5",
+      "apiIds": [
+        "anthropic/claude-opus-4-5",
+        "claude-opus-4-5"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4.5 (latest)",
+      "family": "claude-opus",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 25000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "cache_write_price_micro_usd_per_million": 6250000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-24",
+      "lastUpdated": "2025-11-24",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-5-20251101",
+      "canonicalId": "anthropic/claude-opus-4-5-20251101",
+      "apiIds": [
+        "anthropic/claude-opus-4-5-20251101",
+        "claude-opus-4-5-20251101"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-5-20251101"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4.5",
+      "family": "claude-opus",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 25000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "cache_write_price_micro_usd_per_million": 6250000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-01",
+      "lastUpdated": "2025-11-01",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-6",
+      "canonicalId": "anthropic/claude-opus-4-6",
+      "apiIds": [
+        "anthropic/claude-opus-4-6",
+        "claude-opus-4-6"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-6"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4.6",
+      "family": "claude-opus",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 25000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "cache_write_price_micro_usd_per_million": 6250000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-05",
+      "lastUpdated": "2026-03-13",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-7",
+      "canonicalId": "anthropic/claude-opus-4-7",
+      "apiIds": [
+        "anthropic/claude-opus-4-7",
+        "claude-opus-4-7"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-7"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4.7",
+      "family": "claude-opus",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 25000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "cache_write_price_micro_usd_per_million": 6250000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-16",
+      "lastUpdated": "2026-04-16",
+      "references": []
+    },
+    {
+      "id": "claude-opus-4-8",
+      "canonicalId": "anthropic/claude-opus-4-8",
+      "apiIds": [
+        "anthropic/claude-opus-4-8",
+        "claude-opus-4-8"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-4-8"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 4.8",
+      "family": "claude-opus",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 25000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "cache_write_price_micro_usd_per_million": 6250000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-28",
+      "lastUpdated": "2026-05-28",
+      "references": []
+    },
+    {
+      "id": "claude-opus-5",
+      "canonicalId": "anthropic/claude-opus-5",
+      "apiIds": [
+        "anthropic/claude-opus-5",
+        "claude-opus-5"
+      ],
+      "aliases": [
+        "anthropic/claude-opus-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Opus 5",
+      "family": "claude-opus",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 25000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "cache_write_price_micro_usd_per_million": 6250000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-24",
+      "lastUpdated": "2026-07-24",
+      "references": []
+    },
+    {
+      "id": "claude-sonnet-4-0",
+      "canonicalId": "anthropic/claude-sonnet-4-0",
+      "apiIds": [
+        "claude-sonnet-4-0"
+      ],
+      "aliases": [
+        "anthropic/claude-sonnet-4-0"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 4 (latest)",
+      "family": "claude-sonnet",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-05-22",
+      "lastUpdated": "2025-05-22",
+      "references": []
+    },
+    {
+      "id": "claude-sonnet-4-20250514",
+      "canonicalId": "anthropic/claude-sonnet-4-20250514",
+      "apiIds": [
+        "anthropic/claude-sonnet-4-20250514"
+      ],
+      "aliases": [
+        "anthropic/claude-sonnet-4-20250514"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 4",
+      "family": "claude-sonnet",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-05-22",
+      "lastUpdated": "2025-05-22",
+      "references": []
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "canonicalId": "anthropic/claude-sonnet-4-5",
+      "apiIds": [
+        "anthropic/claude-sonnet-4-5",
+        "claude-sonnet-4-5"
+      ],
+      "aliases": [
+        "anthropic/claude-sonnet-4-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 4.5 (latest)",
+      "family": "claude-sonnet",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 3000000,
+      "output_price_micro_usd_per_million": 15000000,
+      "cache_read_price_micro_usd_per_million": 300000,
+      "cache_write_price_micro_usd_per_million": 3750000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09-29",
+      "lastUpdated": "2025-09-29",
+      "references": []
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "canonicalId": "anthropic/claude-sonnet-4-5-20250929",
+      "apiIds": [
+        "anthropic/claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-5-20250929"
+      ],
+      "aliases": [
+        "anthropic/claude-sonnet-4-5-20250929"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 4.5",
+      "family": "claude-sonnet",
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 3000000,
+      "output_price_micro_usd_per_million": 15000000,
+      "cache_read_price_micro_usd_per_million": 300000,
+      "cache_write_price_micro_usd_per_million": 3750000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09-29",
+      "lastUpdated": "2025-09-29",
+      "references": []
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "canonicalId": "anthropic/claude-sonnet-4-6",
+      "apiIds": [
+        "anthropic/claude-sonnet-4-6",
+        "claude-sonnet-4-6"
+      ],
+      "aliases": [
+        "anthropic/claude-sonnet-4-6"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 4.6",
+      "family": "claude-sonnet",
+      "context_window": 1000000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 3000000,
+      "output_price_micro_usd_per_million": 15000000,
+      "cache_read_price_micro_usd_per_million": 300000,
+      "cache_write_price_micro_usd_per_million": 3750000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-17",
+      "lastUpdated": "2026-03-13",
+      "references": []
+    },
+    {
+      "id": "claude-sonnet-5",
+      "canonicalId": "anthropic/claude-sonnet-5",
+      "apiIds": [
+        "anthropic/claude-sonnet-5",
+        "claude-sonnet-5"
+      ],
+      "aliases": [
+        "anthropic/claude-sonnet-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Anthropic",
+      "name": "Claude Sonnet 5",
+      "family": "claude-sonnet",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 10000000,
+      "cache_read_price_micro_usd_per_million": 200000,
+      "cache_write_price_micro_usd_per_million": 2500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-30",
+      "lastUpdated": "2026-06-30",
+      "references": []
+    },
+    {
+      "id": "command-a-03-2025",
+      "canonicalId": "cohere/command-a-03-2025",
+      "apiIds": [
+        "cohere/command-a-03-2025",
+        "command-a-03-2025"
+      ],
+      "aliases": [
+        "cohere/command-a-03-2025"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command A",
+      "family": "command-a",
+      "context_window": 256000,
+      "max_output_tokens": 8000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-03-13",
+      "lastUpdated": "2025-03-13",
+      "references": []
+    },
+    {
+      "id": "command-a-plus-05-2026",
+      "canonicalId": "cohere/command-a-plus-05-2026",
+      "apiIds": [
+        "command-a-plus-05-2026"
+      ],
+      "aliases": [
+        "cohere/command-a-plus-05-2026"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command A Plus",
+      "family": "command-a",
+      "context_window": 128000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-20",
+      "lastUpdated": "2026-06-09",
+      "references": []
+    },
+    {
+      "id": "command-a-reasoning-08-2025",
+      "canonicalId": "cohere/command-a-reasoning-08-2025",
+      "apiIds": [
+        "command-a-reasoning-08-2025"
+      ],
+      "aliases": [
+        "cohere/command-a-reasoning-08-2025"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command A Reasoning",
+      "family": "command-a",
+      "context_window": 256000,
+      "max_output_tokens": 32000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-21",
+      "lastUpdated": "2025-08-21",
+      "references": []
+    },
+    {
+      "id": "command-a-translate-08-2025",
+      "canonicalId": "cohere/command-a-translate-08-2025",
+      "apiIds": [
+        "command-a-translate-08-2025"
+      ],
+      "aliases": [
+        "cohere/command-a-translate-08-2025"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command A Translate",
+      "family": "command-a",
+      "context_window": 8000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-28",
+      "lastUpdated": "2025-08-28",
+      "references": []
+    },
+    {
+      "id": "command-r-08-2024",
+      "canonicalId": "cohere/command-r-08-2024",
+      "apiIds": [
+        "cohere/command-r-08-2024",
+        "command-r-08-2024"
+      ],
+      "aliases": [
+        "cohere/command-r-08-2024"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command R",
+      "family": "command-r",
+      "context_window": 128000,
+      "max_output_tokens": 4000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 150000,
+      "output_price_micro_usd_per_million": 600000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-08-30",
+      "lastUpdated": "2024-08-30",
+      "references": []
+    },
+    {
+      "id": "command-r-plus-08-2024",
+      "canonicalId": "cohere/command-r-plus-08-2024",
+      "apiIds": [
+        "cohere/command-r-plus-08-2024",
+        "command-r-plus-08-2024"
+      ],
+      "aliases": [
+        "cohere/command-r-plus-08-2024"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command R+",
+      "family": "command-r",
+      "context_window": 128000,
+      "max_output_tokens": 4000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-08-30",
+      "lastUpdated": "2024-08-30",
+      "references": []
+    },
+    {
+      "id": "command-r7b-12-2024",
+      "canonicalId": "cohere/command-r7b-12-2024",
+      "apiIds": [
+        "cohere/command-r7b-12-2024",
+        "command-r7b-12-2024"
+      ],
+      "aliases": [
+        "cohere/command-r7b-12-2024"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command R7B",
+      "family": "command-r",
+      "context_window": 128000,
+      "max_output_tokens": 4000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 37500,
+      "output_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-12-02",
+      "lastUpdated": "2024-12-02",
+      "references": []
+    },
+    {
+      "id": "command-r7b-arabic-02-2025",
+      "canonicalId": "cohere/command-r7b-arabic-02-2025",
+      "apiIds": [
+        "command-r7b-arabic-02-2025"
+      ],
+      "aliases": [
+        "cohere/command-r7b-arabic-02-2025"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "Command R7B Arabic",
+      "family": "command-r",
+      "context_window": 128000,
+      "max_output_tokens": 4000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 37500,
+      "output_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-02-27",
+      "lastUpdated": "2025-02-27",
+      "references": []
+    },
+    {
+      "id": "north-mini-code-1-0",
+      "canonicalId": "cohere/north-mini-code-1-0",
+      "apiIds": [
+        "north-mini-code-1-0"
+      ],
+      "aliases": [
+        "cohere/north-mini-code-1-0"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Cohere",
+      "name": "North Mini Code",
+      "family": "north",
+      "context_window": 256000,
+      "max_output_tokens": 64000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 0,
+      "output_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-09",
+      "lastUpdated": "2026-06-09",
+      "references": []
+    },
+    {
+      "id": "ornith-1.0-31b",
+      "canonicalId": "deepreinforce/ornith-1.0-31b",
+      "apiIds": [
+        "ornith-1.0-31b"
+      ],
+      "aliases": [
+        "deepreinforce/ornith-1.0-31b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "deepreinforce",
+      "name": "Ornith 1.0 31B",
+      "family": "ornith",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-25",
+      "lastUpdated": "2026-06-25",
+      "references": []
+    },
+    {
+      "id": "ornith-1.0-35b",
+      "canonicalId": "deepreinforce/ornith-1.0-35b",
+      "apiIds": [
+        "ornith-1.0-35b"
+      ],
+      "aliases": [
+        "deepreinforce/ornith-1.0-35b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "deepreinforce",
+      "name": "Ornith 1.0 35B",
+      "family": "ornith",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-25",
+      "lastUpdated": "2026-06-25",
+      "references": []
+    },
+    {
+      "id": "ornith-1.0-397b",
+      "canonicalId": "deepreinforce/ornith-1.0-397b",
+      "apiIds": [
+        "ornith-1.0-397b"
+      ],
+      "aliases": [
+        "deepreinforce/ornith-1.0-397b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "deepreinforce",
+      "name": "Ornith 1.0 397B",
+      "family": "ornith",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-25",
+      "lastUpdated": "2026-06-25",
+      "references": []
+    },
+    {
+      "id": "ornith-1.0-9b",
+      "canonicalId": "deepreinforce/ornith-1.0-9b",
+      "apiIds": [
+        "ornith-1.0-9b"
+      ],
+      "aliases": [
+        "deepreinforce/ornith-1.0-9b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "deepreinforce",
+      "name": "Ornith 1.0 9B",
+      "family": "ornith",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-25",
+      "lastUpdated": "2026-06-25",
+      "references": []
+    },
+    {
+      "id": "deepseek-chat",
+      "canonicalId": "deepseek/deepseek-chat",
+      "apiIds": [
+        "deepseek-chat",
+        "deepseek/deepseek-chat"
+      ],
+      "aliases": [
+        "deepseek/deepseek-chat"
+      ],
+      "compatibilityAliases": [],
+      "provider": "DeepSeek",
+      "name": "DeepSeek Chat",
+      "family": "deepseek",
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 140000,
+      "output_price_micro_usd_per_million": 280000,
+      "cache_read_price_micro_usd_per_million": 2800,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-01",
+      "lastUpdated": "2026-02-28",
+      "references": []
+    },
+    {
+      "id": "deepseek-r1",
+      "canonicalId": "deepseek/deepseek-r1",
+      "apiIds": [
+        "deepseek/deepseek-r1"
+      ],
+      "aliases": [
+        "deepseek/deepseek-r1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "DeepSeek",
+      "name": "DeepSeek-R1",
+      "family": "deepseek-thinking",
+      "context_window": 128000,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-01-20",
+      "lastUpdated": "2025-05-29",
+      "references": []
+    },
+    {
+      "id": "deepseek-reasoner",
+      "canonicalId": "deepseek/deepseek-reasoner",
+      "apiIds": [
+        "deepseek-reasoner",
+        "deepseek/deepseek-reasoner"
+      ],
+      "aliases": [
+        "deepseek/deepseek-reasoner"
+      ],
+      "compatibilityAliases": [],
+      "provider": "DeepSeek",
+      "name": "DeepSeek Reasoner",
+      "family": "deepseek-thinking",
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 140000,
+      "output_price_micro_usd_per_million": 280000,
+      "cache_read_price_micro_usd_per_million": 2800,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-01",
+      "lastUpdated": "2026-02-28",
+      "references": []
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "canonicalId": "deepseek/deepseek-v4-flash",
+      "apiIds": [
+        "deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash"
+      ],
+      "aliases": [
+        "deepseek/deepseek-v4-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "DeepSeek",
+      "name": "DeepSeek V4 Flash",
+      "family": "deepseek-flash",
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 140000,
+      "output_price_micro_usd_per_million": 280000,
+      "cache_read_price_micro_usd_per_million": 2800,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-24",
+      "lastUpdated": "2026-04-24",
+      "references": []
+    },
+    {
+      "id": "deepseek-v4-flash-0731",
+      "canonicalId": "deepseek/deepseek-v4-flash-0731",
+      "apiIds": [
+        "deepseek/deepseek-v4-flash-0731"
+      ],
+      "aliases": [
+        "deepseek/deepseek-v4-flash-0731"
+      ],
+      "compatibilityAliases": [],
+      "provider": "DeepSeek",
+      "name": "DeepSeek V4 Flash 0731",
+      "family": "deepseek-flash",
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-31",
+      "lastUpdated": "2026-07-31",
+      "references": []
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "canonicalId": "deepseek/deepseek-v4-pro",
+      "apiIds": [
+        "deepseek-v4-pro",
+        "deepseek/deepseek-v4-pro"
+      ],
+      "aliases": [
+        "deepseek/deepseek-v4-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "DeepSeek",
+      "name": "DeepSeek V4 Pro",
+      "family": "deepseek-thinking",
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 435000,
+      "output_price_micro_usd_per_million": 870000,
+      "cache_read_price_micro_usd_per_million": 3625,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-24",
+      "lastUpdated": "2026-04-24",
+      "references": []
+    },
+    {
+      "id": "deep-research-max-preview-04-2026",
+      "canonicalId": "google/deep-research-max-preview-04-2026",
+      "apiIds": [
+        "deep-research-max-preview-04-2026"
+      ],
+      "aliases": [
+        "google/deep-research-max-preview-04-2026"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Deep Research Max Preview",
+      "family": "gemini-pro",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 18000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-21",
+      "lastUpdated": "2026-04-21",
+      "references": []
+    },
+    {
+      "id": "deep-research-preview-04-2026",
+      "canonicalId": "google/deep-research-preview-04-2026",
+      "apiIds": [
+        "deep-research-preview-04-2026"
+      ],
+      "aliases": [
+        "google/deep-research-preview-04-2026"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini Deep Research Preview",
+      "family": "gemini-pro",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 18000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-21",
+      "lastUpdated": "2026-04-21",
+      "references": []
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "canonicalId": "google/gemini-2.0-flash",
+      "apiIds": [
+        "gemini-2.0-flash",
+        "google/gemini-2.0-flash"
+      ],
+      "aliases": [
+        "google/gemini-2.0-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 2.0 Flash",
+      "family": "gemini-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 100000,
+      "output_price_micro_usd_per_million": 400000,
+      "cache_read_price_micro_usd_per_million": 25000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-12-11",
+      "lastUpdated": "2024-12-11",
+      "references": []
+    },
+    {
+      "id": "gemini-2.0-flash-lite",
+      "canonicalId": "google/gemini-2.0-flash-lite",
+      "apiIds": [
+        "gemini-2.0-flash-lite",
+        "google/gemini-2.0-flash-lite"
+      ],
+      "aliases": [
+        "google/gemini-2.0-flash-lite"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 2.0 Flash-Lite",
+      "family": "gemini-flash-lite",
+      "context_window": 1048576,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 75000,
+      "output_price_micro_usd_per_million": 300000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-12-11",
+      "lastUpdated": "2024-12-11",
+      "references": []
+    },
+    {
+      "id": "gemini-2.5-computer-use-preview-10-2025",
+      "canonicalId": "google/gemini-2.5-computer-use-preview-10-2025",
+      "apiIds": [
+        "gemini-2.5-computer-use-preview-10-2025",
+        "google/gemini-2.5-computer-use-preview-10-2025"
+      ],
+      "aliases": [
+        "google/gemini-2.5-computer-use-preview-10-2025"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 2.5 Computer Use Preview",
+      "family": "gemini-pro",
+      "context_window": 128000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 15000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-10-07",
+      "lastUpdated": "2025-10-07",
+      "references": []
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "canonicalId": "google/gemini-2.5-flash",
+      "apiIds": [
+        "gemini-2.5-flash",
+        "google/gemini-2.5-flash"
+      ],
+      "aliases": [
+        "google/gemini-2.5-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 2.5 Flash",
+      "family": "gemini-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 2500000,
+      "cache_read_price_micro_usd_per_million": 30000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-06-17",
+      "lastUpdated": "2025-06-17",
+      "references": []
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "canonicalId": "google/gemini-2.5-flash-lite",
+      "apiIds": [
+        "gemini-2.5-flash-lite",
+        "google/gemini-2.5-flash-lite"
+      ],
+      "aliases": [
+        "google/gemini-2.5-flash-lite"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 2.5 Flash-Lite",
+      "family": "gemini-flash-lite",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 100000,
+      "output_price_micro_usd_per_million": 400000,
+      "cache_read_price_micro_usd_per_million": 10000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-06-17",
+      "lastUpdated": "2025-06-17",
+      "references": []
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "canonicalId": "google/gemini-2.5-pro",
+      "apiIds": [
+        "gemini-2.5-pro",
+        "google/gemini-2.5-pro"
+      ],
+      "aliases": [
+        "google/gemini-2.5-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 2.5 Pro",
+      "family": "gemini-pro",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 15000000,
+      "cache_read_price_micro_usd_per_million": 250000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-06-17",
+      "lastUpdated": "2025-06-17",
+      "references": []
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "canonicalId": "google/gemini-3-flash-preview",
+      "apiIds": [
+        "gemini-3-flash-preview",
+        "google/gemini-3-flash-preview"
+      ],
+      "aliases": [
+        "google/gemini-3-flash-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3 Flash Preview",
+      "family": "gemini-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 500000,
+      "output_price_micro_usd_per_million": 3000000,
+      "cache_read_price_micro_usd_per_million": 50000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-17",
+      "lastUpdated": "2025-12-17",
+      "references": []
+    },
+    {
+      "id": "gemini-3-pro-preview",
+      "canonicalId": "google/gemini-3-pro-preview",
+      "apiIds": [
+        "gemini-3-pro-preview",
+        "google/gemini-3-pro-preview"
+      ],
+      "aliases": [
+        "google/gemini-3-pro-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3 Pro Preview",
+      "family": "gemini-pro",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 18000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-18",
+      "lastUpdated": "2025-11-18",
+      "references": []
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "canonicalId": "google/gemini-3.1-flash-lite",
+      "apiIds": [
+        "gemini-3.1-flash-lite",
+        "google/gemini-3.1-flash-lite"
+      ],
+      "aliases": [
+        "google/gemini-3.1-flash-lite"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.1 Flash Lite",
+      "family": "gemini-flash-lite",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 250000,
+      "output_price_micro_usd_per_million": 1500000,
+      "cache_read_price_micro_usd_per_million": 25000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-07",
+      "lastUpdated": "2026-05-07",
+      "references": []
+    },
+    {
+      "id": "gemini-3.1-flash-lite-image",
+      "canonicalId": "google/gemini-3.1-flash-lite-image",
+      "apiIds": [
+        "gemini-3.1-flash-lite-image",
+        "google/gemini-3.1-flash-lite-image"
+      ],
+      "aliases": [
+        "google/gemini-3.1-flash-lite-image"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Nano Banana 2 Lite",
+      "family": "gemini-flash-lite",
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "input_price_micro_usd_per_million": 250000,
+      "output_price_micro_usd_per_million": 30000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-30",
+      "lastUpdated": "2026-06-30",
+      "references": []
+    },
+    {
+      "id": "gemini-3.1-flash-lite-preview",
+      "canonicalId": "google/gemini-3.1-flash-lite-preview",
+      "apiIds": [
+        "gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-flash-lite-preview"
+      ],
+      "aliases": [
+        "google/gemini-3.1-flash-lite-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.1 Flash Lite Preview",
+      "family": "gemini-flash-lite",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 250000,
+      "output_price_micro_usd_per_million": 1500000,
+      "cache_read_price_micro_usd_per_million": 25000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-03",
+      "lastUpdated": "2026-03-03",
+      "references": []
+    },
+    {
+      "id": "gemini-3.1-flash-live-preview",
+      "canonicalId": "google/gemini-3.1-flash-live-preview",
+      "apiIds": [
+        "gemini-3.1-flash-live-preview"
+      ],
+      "aliases": [
+        "google/gemini-3.1-flash-live-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.1 Flash Live Preview",
+      "family": "gemini-flash",
+      "context_window": 131072,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "input_price_micro_usd_per_million": 750000,
+      "output_price_micro_usd_per_million": 4500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-26",
+      "lastUpdated": "2026-03-26",
+      "references": []
+    },
+    {
+      "id": "gemini-3.1-pro-preview",
+      "canonicalId": "google/gemini-3.1-pro-preview",
+      "apiIds": [
+        "gemini-3.1-pro-preview",
+        "google/gemini-3.1-pro-preview"
+      ],
+      "aliases": [
+        "google/gemini-3.1-pro-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.1 Pro Preview",
+      "family": "gemini-pro",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 18000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-19",
+      "lastUpdated": "2026-02-19",
+      "references": []
+    },
+    {
+      "id": "gemini-3.1-pro-preview-customtools",
+      "canonicalId": "google/gemini-3.1-pro-preview-customtools",
+      "apiIds": [
+        "gemini-3.1-pro-preview-customtools",
+        "google/gemini-3.1-pro-preview-customtools"
+      ],
+      "aliases": [
+        "google/gemini-3.1-pro-preview-customtools"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.1 Pro Preview Custom Tools",
+      "family": "gemini-pro",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 18000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-19",
+      "lastUpdated": "2026-02-19",
+      "references": []
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "canonicalId": "google/gemini-3.5-flash",
+      "apiIds": [
+        "gemini-3.5-flash",
+        "google/gemini-3.5-flash"
+      ],
+      "aliases": [
+        "google/gemini-3.5-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.5 Flash",
+      "family": "gemini-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1500000,
+      "output_price_micro_usd_per_million": 9000000,
+      "cache_read_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-19",
+      "lastUpdated": "2026-05-19",
+      "references": []
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "canonicalId": "google/gemini-3.5-flash-lite",
+      "apiIds": [
+        "gemini-3.5-flash-lite",
+        "google/gemini-3.5-flash-lite"
+      ],
+      "aliases": [
+        "google/gemini-3.5-flash-lite"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.5 Flash Lite",
+      "family": "gemini-flash-lite",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 2500000,
+      "cache_read_price_micro_usd_per_million": 30000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-21",
+      "lastUpdated": "2026-07-21",
+      "references": []
+    },
+    {
+      "id": "gemini-3.6-flash",
+      "canonicalId": "google/gemini-3.6-flash",
+      "apiIds": [
+        "gemini-3.6-flash",
+        "google/gemini-3.6-flash"
+      ],
+      "aliases": [
+        "google/gemini-3.6-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini 3.6 Flash",
+      "family": "gemini-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1500000,
+      "output_price_micro_usd_per_million": 7500000,
+      "cache_read_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-21",
+      "lastUpdated": "2026-07-21",
+      "references": []
+    },
+    {
+      "id": "gemini-flash-latest",
+      "canonicalId": "google/gemini-flash-latest",
+      "apiIds": [
+        "gemini-flash-latest",
+        "google/gemini-flash-latest"
+      ],
+      "aliases": [
+        "google/gemini-flash-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini Flash Latest",
+      "family": "gemini-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1500000,
+      "output_price_micro_usd_per_million": 9000000,
+      "cache_read_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-19",
+      "lastUpdated": "2026-05-19",
+      "references": []
+    },
+    {
+      "id": "gemini-flash-lite-latest",
+      "canonicalId": "google/gemini-flash-lite-latest",
+      "apiIds": [
+        "gemini-flash-lite-latest",
+        "google/gemini-flash-lite-latest"
+      ],
+      "aliases": [
+        "google/gemini-flash-lite-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini Flash-Lite Latest",
+      "family": "gemini-flash-lite",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 250000,
+      "output_price_micro_usd_per_million": 1500000,
+      "cache_read_price_micro_usd_per_million": 25000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-07",
+      "lastUpdated": "2026-05-07",
+      "references": []
+    },
+    {
+      "id": "gemini-robotics-er-1.6-preview",
+      "canonicalId": "google/gemini-robotics-er-1.6-preview",
+      "apiIds": [
+        "gemini-robotics-er-1.6-preview"
+      ],
+      "aliases": [
+        "google/gemini-robotics-er-1.6-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemini Robotics-ER 1.6 Preview",
+      "family": "gemini",
+      "context_window": 131072,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1000000,
+      "output_price_micro_usd_per_million": 5000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-14",
+      "lastUpdated": "2026-04-14",
+      "references": []
+    },
+    {
+      "id": "gemma-4-26b-a4b-it",
+      "canonicalId": "google/gemma-4-26b-a4b-it",
+      "apiIds": [
+        "gemma-4-26b-a4b-it",
+        "google/gemma-4-26b-a4b-it"
+      ],
+      "aliases": [
+        "google/gemma-4-26b-a4b-it"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemma 4 26B A4B IT",
+      "family": "gemma",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-02",
+      "lastUpdated": "2026-04-02",
+      "references": []
+    },
+    {
+      "id": "gemma-4-31b-it",
+      "canonicalId": "google/gemma-4-31b-it",
+      "apiIds": [
+        "gemma-4-31b-it",
+        "google/gemma-4-31b-it"
+      ],
+      "aliases": [
+        "google/gemma-4-31b-it"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemma 4 31B IT",
+      "family": "gemma",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-02",
+      "lastUpdated": "2026-04-02",
+      "references": []
+    },
+    {
+      "id": "gemma-4-E2B-it",
+      "canonicalId": "google/gemma-4-E2B-it",
+      "apiIds": [
+        "google/gemma-4-E2B-it"
+      ],
+      "aliases": [
+        "google/gemma-4-E2B-it"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemma 4 E2B IT",
+      "family": "gemma",
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-02",
+      "lastUpdated": "2026-04-02",
+      "references": []
+    },
+    {
+      "id": "gemma-4-E4B-it",
+      "canonicalId": "google/gemma-4-E4B-it",
+      "apiIds": [
+        "google/gemma-4-E4B-it"
+      ],
+      "aliases": [
+        "google/gemma-4-E4B-it"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Google",
+      "name": "Gemma 4 E4B IT",
+      "family": "gemma",
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-02",
+      "lastUpdated": "2026-04-02",
+      "references": []
+    },
+    {
+      "id": "longcat-2.0",
+      "canonicalId": "meituan/longcat-2.0",
+      "apiIds": [
+        "meituan/longcat-2.0"
+      ],
+      "aliases": [
+        "meituan/longcat-2.0"
+      ],
+      "compatibilityAliases": [],
+      "provider": "meituan",
+      "name": "LongCat-2.0",
+      "family": "longcat",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-30",
+      "lastUpdated": "2026-06-30",
+      "references": []
+    },
+    {
+      "id": "llama-3.3-70b-instruct",
+      "canonicalId": "meta/llama-3.3-70b-instruct",
+      "apiIds": [
+        "meta/llama-3.3-70b-instruct"
+      ],
+      "aliases": [
+        "meta/llama-3.3-70b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Meta",
+      "name": "Llama-3.3-70B-Instruct",
+      "family": "llama",
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2024-12-06",
+      "lastUpdated": "2024-12-06",
+      "references": []
+    },
+    {
+      "id": "llama-4-maverick-17b-instruct",
+      "canonicalId": "meta/llama-4-maverick-17b-instruct",
+      "apiIds": [
+        "llama-4-maverick-17b-instruct"
+      ],
+      "aliases": [
+        "meta/llama-4-maverick-17b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Meta",
+      "name": "Llama 4 Maverick 17B Instruct",
+      "family": "llama",
+      "context_window": 1000000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-05",
+      "lastUpdated": "2025-04-05",
+      "references": []
+    },
+    {
+      "id": "llama-4-scout-17b-instruct",
+      "canonicalId": "meta/llama-4-scout-17b-instruct",
+      "apiIds": [
+        "llama-4-scout-17b-instruct"
+      ],
+      "aliases": [
+        "meta/llama-4-scout-17b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Meta",
+      "name": "Llama 4 Scout 17B Instruct",
+      "family": "llama",
+      "context_window": 3500000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-05",
+      "lastUpdated": "2025-04-05",
+      "references": []
+    },
+    {
+      "id": "muse-spark-1.1",
+      "canonicalId": "meta/muse-spark-1.1",
+      "apiIds": [
+        "meta/muse-spark-1.1",
+        "muse-spark-1.1"
+      ],
+      "aliases": [
+        "meta/muse-spark-1.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Meta",
+      "name": "Muse Spark 1.1",
+      "family": "muse",
+      "context_window": 1000000,
+      "max_output_tokens": 32000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1250000,
+      "output_price_micro_usd_per_million": 4250000,
+      "cache_read_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-08",
+      "lastUpdated": "2026-07-09",
+      "references": []
+    },
+    {
+      "id": "mai-code-1-flash",
+      "canonicalId": "microsoft/mai-code-1-flash",
+      "apiIds": [
+        "mai-code-1-flash"
+      ],
+      "aliases": [
+        "microsoft/mai-code-1-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "microsoft",
+      "name": "MAI-Code-1-Flash",
+      "family": "mai",
+      "context_window": 256000,
+      "max_output_tokens": 128000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-02",
+      "lastUpdated": "2026-06-08",
+      "references": []
+    },
+    {
+      "id": "MiniMax-M2",
+      "canonicalId": "minimax/MiniMax-M2",
+      "apiIds": [
+        "MiniMax-M2"
+      ],
+      "aliases": [
+        "minimax/MiniMax-M2"
+      ],
+      "compatibilityAliases": [],
+      "provider": "MiniMax (minimax.io)",
+      "name": "MiniMax-M2",
+      "family": "minimax",
+      "context_window": 196608,
+      "max_output_tokens": 128000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 1200000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-10-27",
+      "lastUpdated": "2025-10-27",
+      "references": []
+    },
+    {
+      "id": "MiniMax-M2.1",
+      "canonicalId": "minimax/MiniMax-M2.1",
+      "apiIds": [
+        "MiniMax-M2.1"
+      ],
+      "aliases": [
+        "minimax/MiniMax-M2.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "MiniMax (minimax.io)",
+      "name": "MiniMax-M2.1",
+      "family": "minimax",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 1200000,
+      "cache_read_price_micro_usd_per_million": 30000,
+      "cache_write_price_micro_usd_per_million": 375000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-23",
+      "lastUpdated": "2025-12-23",
+      "references": []
+    },
+    {
+      "id": "MiniMax-M2.5",
+      "canonicalId": "minimax/MiniMax-M2.5",
+      "apiIds": [
+        "MiniMax-M2.5"
+      ],
+      "aliases": [
+        "minimax/MiniMax-M2.5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "MiniMax (minimax.io)",
+      "name": "MiniMax-M2.5",
+      "family": "minimax",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 1200000,
+      "cache_read_price_micro_usd_per_million": 30000,
+      "cache_write_price_micro_usd_per_million": 375000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-12",
+      "lastUpdated": "2026-02-12",
+      "references": []
+    },
+    {
+      "id": "MiniMax-M2.5-highspeed",
+      "canonicalId": "minimax/MiniMax-M2.5-highspeed",
+      "apiIds": [
+        "MiniMax-M2.5-highspeed"
+      ],
+      "aliases": [
+        "minimax/MiniMax-M2.5-highspeed"
+      ],
+      "compatibilityAliases": [],
+      "provider": "MiniMax (minimax.io)",
+      "name": "MiniMax-M2.5-highspeed",
+      "family": "minimax",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 2400000,
+      "cache_read_price_micro_usd_per_million": 60000,
+      "cache_write_price_micro_usd_per_million": 375000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-13",
+      "lastUpdated": "2026-02-13",
+      "references": []
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "canonicalId": "minimax/MiniMax-M2.7",
+      "apiIds": [
+        "MiniMax-M2.7"
+      ],
+      "aliases": [
+        "minimax/MiniMax-M2.7"
+      ],
+      "compatibilityAliases": [],
+      "provider": "MiniMax (minimax.io)",
+      "name": "MiniMax-M2.7",
+      "family": "minimax",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 1200000,
+      "cache_read_price_micro_usd_per_million": 60000,
+      "cache_write_price_micro_usd_per_million": 375000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-18",
+      "lastUpdated": "2026-03-18",
+      "references": []
+    },
+    {
+      "id": "MiniMax-M2.7-highspeed",
+      "canonicalId": "minimax/MiniMax-M2.7-highspeed",
+      "apiIds": [
+        "MiniMax-M2.7-highspeed"
+      ],
+      "aliases": [
+        "minimax/MiniMax-M2.7-highspeed"
+      ],
+      "compatibilityAliases": [],
+      "provider": "MiniMax (minimax.io)",
+      "name": "MiniMax-M2.7-highspeed",
+      "family": "minimax",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 2400000,
+      "cache_read_price_micro_usd_per_million": 60000,
+      "cache_write_price_micro_usd_per_million": 375000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-18",
+      "lastUpdated": "2026-03-18",
+      "references": []
+    },
+    {
+      "id": "MiniMax-M3",
+      "canonicalId": "minimax/MiniMax-M3",
+      "apiIds": [
+        "MiniMax-M3"
+      ],
+      "aliases": [
+        "minimax/MiniMax-M3"
+      ],
+      "compatibilityAliases": [],
+      "provider": "MiniMax (minimax.io)",
+      "name": "MiniMax-M3",
+      "family": "minimax",
+      "context_window": 512000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 2400000,
+      "cache_read_price_micro_usd_per_million": 120000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-01",
+      "lastUpdated": "2026-06-01",
+      "references": []
+    },
+    {
+      "id": "codestral-latest",
+      "canonicalId": "mistral/codestral-latest",
+      "apiIds": [
+        "codestral-latest",
+        "mistral/codestral-latest"
+      ],
+      "aliases": [
+        "mistral/codestral-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Codestral (latest)",
+      "family": "codestral",
+      "context_window": 256000,
+      "max_output_tokens": 4096,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 900000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-05-29",
+      "lastUpdated": "2025-01-04",
+      "references": []
+    },
+    {
+      "id": "devstral-2512",
+      "canonicalId": "mistral/devstral-2512",
+      "apiIds": [
+        "devstral-2512",
+        "mistral/devstral-2512"
+      ],
+      "aliases": [
+        "mistral/devstral-2512"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Devstral 2",
+      "family": "devstral",
+      "context_window": 262144,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 400000,
+      "output_price_micro_usd_per_million": 2000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-09",
+      "lastUpdated": "2025-12-09",
+      "references": []
+    },
+    {
+      "id": "magistral-medium-latest",
+      "canonicalId": "mistral/magistral-medium-latest",
+      "apiIds": [
+        "magistral-medium-latest",
+        "mistral/magistral-medium-latest"
+      ],
+      "aliases": [
+        "mistral/magistral-medium-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Magistral Medium (latest)",
+      "family": "magistral-medium",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 5000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-03-17",
+      "lastUpdated": "2025-03-20",
+      "references": []
+    },
+    {
+      "id": "mistral-large-2411",
+      "canonicalId": "mistral/mistral-large-2411",
+      "apiIds": [
+        "mistral-large-2411",
+        "mistral/mistral-large-2411"
+      ],
+      "aliases": [
+        "mistral/mistral-large-2411"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Large 2.1",
+      "family": "mistral-large",
+      "context_window": 131072,
+      "max_output_tokens": 16384,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 6000000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-11-18",
+      "lastUpdated": "2024-11-18",
+      "references": []
+    },
+    {
+      "id": "mistral-large-2512",
+      "canonicalId": "mistral/mistral-large-2512",
+      "apiIds": [
+        "mistral-large-2512",
+        "mistral/mistral-large-2512"
+      ],
+      "aliases": [
+        "mistral/mistral-large-2512"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Large 3",
+      "family": "mistral-large",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 500000,
+      "output_price_micro_usd_per_million": 1500000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-11-01",
+      "lastUpdated": "2025-12-02",
+      "references": []
+    },
+    {
+      "id": "mistral-large-latest",
+      "canonicalId": "mistral/mistral-large-latest",
+      "apiIds": [
+        "mistral-large-latest",
+        "mistral/mistral-large-latest"
+      ],
+      "aliases": [
+        "mistral/mistral-large-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Large (latest)",
+      "family": "mistral-large",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 500000,
+      "output_price_micro_usd_per_million": 1500000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-11-01",
+      "lastUpdated": "2025-12-02",
+      "references": []
+    },
+    {
+      "id": "mistral-medium-2505",
+      "canonicalId": "mistral/mistral-medium-2505",
+      "apiIds": [
+        "mistral-medium-2505",
+        "mistral/mistral-medium-2505"
+      ],
+      "aliases": [
+        "mistral/mistral-medium-2505"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Medium 3",
+      "family": "mistral-medium",
+      "context_window": 131072,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 400000,
+      "output_price_micro_usd_per_million": 2000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-05-07",
+      "lastUpdated": "2025-05-07",
+      "references": []
+    },
+    {
+      "id": "mistral-medium-2604",
+      "canonicalId": "mistral/mistral-medium-2604",
+      "apiIds": [
+        "mistral-medium-2604"
+      ],
+      "aliases": [
+        "mistral/mistral-medium-2604"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Medium 3.5",
+      "family": "mistral-medium",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1500000,
+      "output_price_micro_usd_per_million": 7500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-29",
+      "lastUpdated": "2026-04-29",
+      "references": []
+    },
+    {
+      "id": "mistral-medium-latest",
+      "canonicalId": "mistral/mistral-medium-latest",
+      "apiIds": [
+        "mistral-medium-latest",
+        "mistral/mistral-medium-latest"
+      ],
+      "aliases": [
+        "mistral/mistral-medium-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Medium (latest)",
+      "family": "mistral-medium",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1500000,
+      "output_price_micro_usd_per_million": 7500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-29",
+      "lastUpdated": "2026-04-29",
+      "references": []
+    },
+    {
+      "id": "mistral-nemo",
+      "canonicalId": "mistral/mistral-nemo",
+      "apiIds": [
+        "mistral-nemo",
+        "mistral/mistral-nemo"
+      ],
+      "aliases": [
+        "mistral/mistral-nemo"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Nemo",
+      "family": "mistral-nemo",
+      "context_window": 128000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 150000,
+      "output_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-07-01",
+      "lastUpdated": "2024-07-01",
+      "references": []
+    },
+    {
+      "id": "mistral-small-2506",
+      "canonicalId": "mistral/mistral-small-2506",
+      "apiIds": [
+        "mistral-small-2506"
+      ],
+      "aliases": [
+        "mistral/mistral-small-2506"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Small 3.2",
+      "family": "mistral-small",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 100000,
+      "output_price_micro_usd_per_million": 300000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-06-20",
+      "lastUpdated": "2025-06-20",
+      "references": []
+    },
+    {
+      "id": "mistral-small-2603",
+      "canonicalId": "mistral/mistral-small-2603",
+      "apiIds": [
+        "mistral-small-2603"
+      ],
+      "aliases": [
+        "mistral/mistral-small-2603"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Small 4",
+      "family": "mistral-small",
+      "context_window": 256000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 150000,
+      "output_price_micro_usd_per_million": 600000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-16",
+      "lastUpdated": "2026-03-16",
+      "references": []
+    },
+    {
+      "id": "mistral-small-latest",
+      "canonicalId": "mistral/mistral-small-latest",
+      "apiIds": [
+        "mistral-small-latest",
+        "mistral/mistral-small-latest"
+      ],
+      "aliases": [
+        "mistral/mistral-small-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Mistral Small (latest)",
+      "family": "mistral-small",
+      "context_window": 256000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 150000,
+      "output_price_micro_usd_per_million": 600000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-16",
+      "lastUpdated": "2026-03-16",
+      "references": []
+    },
+    {
+      "id": "pixtral-12b",
+      "canonicalId": "mistral/pixtral-12b",
+      "apiIds": [
+        "mistral/pixtral-12b",
+        "pixtral-12b"
+      ],
+      "aliases": [
+        "mistral/pixtral-12b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Pixtral 12B",
+      "family": "pixtral",
+      "context_window": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 150000,
+      "output_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-09-01",
+      "lastUpdated": "2024-09-01",
+      "references": []
+    },
+    {
+      "id": "pixtral-large-latest",
+      "canonicalId": "mistral/pixtral-large-latest",
+      "apiIds": [
+        "mistral/pixtral-large-latest",
+        "pixtral-large-latest"
+      ],
+      "aliases": [
+        "mistral/pixtral-large-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Mistral",
+      "name": "Pixtral Large (latest)",
+      "family": "pixtral",
+      "context_window": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 6000000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-11-01",
+      "lastUpdated": "2024-11-04",
+      "references": []
+    },
+    {
+      "id": "kimi-k2-thinking",
+      "canonicalId": "moonshotai/kimi-k2-thinking",
+      "apiIds": [
+        "kimi-k2-thinking",
+        "moonshotai/kimi-k2-thinking"
+      ],
+      "aliases": [
+        "moonshotai/kimi-k2-thinking"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Moonshot AI",
+      "name": "Kimi K2 Thinking",
+      "family": "kimi-thinking",
+      "context_window": 262144,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 2500000,
+      "cache_read_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-06",
+      "lastUpdated": "2025-11-06",
+      "references": []
+    },
+    {
+      "id": "kimi-k2-thinking-turbo",
+      "canonicalId": "moonshotai/kimi-k2-thinking-turbo",
+      "apiIds": [
+        "kimi-k2-thinking-turbo",
+        "moonshotai/kimi-k2-thinking-turbo"
+      ],
+      "aliases": [
+        "moonshotai/kimi-k2-thinking-turbo"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Moonshot AI",
+      "name": "Kimi K2 Thinking Turbo",
+      "family": "kimi-thinking",
+      "context_window": 262144,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1150000,
+      "output_price_micro_usd_per_million": 8000000,
+      "cache_read_price_micro_usd_per_million": 150000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-06",
+      "lastUpdated": "2025-11-06",
+      "references": []
+    },
+    {
+      "id": "kimi-k2.5",
+      "canonicalId": "moonshotai/kimi-k2.5",
+      "apiIds": [
+        "kimi-k2.5",
+        "moonshotai/kimi-k2.5"
+      ],
+      "aliases": [
+        "moonshotai/kimi-k2.5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Moonshot AI",
+      "name": "Kimi K2.5",
+      "family": "kimi-k2",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 3000000,
+      "cache_read_price_micro_usd_per_million": 100000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-01",
+      "lastUpdated": "2026-01",
+      "references": []
+    },
+    {
+      "id": "kimi-k2.6",
+      "canonicalId": "moonshotai/kimi-k2.6",
+      "apiIds": [
+        "kimi-k2.6",
+        "moonshotai/kimi-k2.6"
+      ],
+      "aliases": [
+        "moonshotai/kimi-k2.6"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Moonshot AI",
+      "name": "Kimi K2.6",
+      "family": "kimi-k2",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 950000,
+      "output_price_micro_usd_per_million": 4000000,
+      "cache_read_price_micro_usd_per_million": 160000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-21",
+      "lastUpdated": "2026-04-21",
+      "references": []
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "canonicalId": "moonshotai/kimi-k2.7-code",
+      "apiIds": [
+        "kimi-k2.7-code",
+        "moonshotai/kimi-k2.7-code"
+      ],
+      "aliases": [
+        "moonshotai/kimi-k2.7-code"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Moonshot AI",
+      "name": "Kimi K2.7 Code",
+      "family": "kimi-k2",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 950000,
+      "output_price_micro_usd_per_million": 4000000,
+      "cache_read_price_micro_usd_per_million": 190000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-12",
+      "lastUpdated": "2026-06-12",
+      "references": []
+    },
+    {
+      "id": "kimi-k2.7-code-highspeed",
+      "canonicalId": "moonshotai/kimi-k2.7-code-highspeed",
+      "apiIds": [
+        "kimi-k2.7-code-highspeed",
+        "moonshotai/kimi-k2.7-code-highspeed"
+      ],
+      "aliases": [
+        "moonshotai/kimi-k2.7-code-highspeed"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Moonshot AI",
+      "name": "Kimi K2.7 Code Highspeed",
+      "family": "kimi-k2",
+      "context_window": 262144,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1900000,
+      "output_price_micro_usd_per_million": 8000000,
+      "cache_read_price_micro_usd_per_million": 380000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-12",
+      "lastUpdated": "2026-06-12",
+      "references": []
+    },
+    {
+      "id": "kimi-k3",
+      "canonicalId": "moonshotai/kimi-k3",
+      "apiIds": [
+        "kimi-k3",
+        "moonshotai/kimi-k3"
+      ],
+      "aliases": [
+        "moonshotai/kimi-k3"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Moonshot AI",
+      "name": "Kimi K3",
+      "family": "kimi-k3",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 3000000,
+      "output_price_micro_usd_per_million": 15000000,
+      "cache_read_price_micro_usd_per_million": 300000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-16",
+      "lastUpdated": "2026-07-16",
+      "references": []
+    },
+    {
+      "id": "llama-3.1-nemotron-70b-instruct",
+      "canonicalId": "nvidia/llama-3.1-nemotron-70b-instruct",
+      "apiIds": [
+        "nvidia/llama-3.1-nemotron-70b-instruct"
+      ],
+      "aliases": [
+        "nvidia/llama-3.1-nemotron-70b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Llama 3.1 Nemotron 70B Instruct",
+      "family": "nemotron",
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-15",
+      "lastUpdated": "2025-04-15",
+      "references": []
+    },
+    {
+      "id": "llama-3.1-nemotron-ultra-253b",
+      "canonicalId": "nvidia/llama-3.1-nemotron-ultra-253b",
+      "apiIds": [
+        "llama-3.1-nemotron-ultra-253b"
+      ],
+      "aliases": [
+        "nvidia/llama-3.1-nemotron-ultra-253b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Llama 3.1 Nemotron Ultra 253B",
+      "family": "nemotron",
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-07",
+      "lastUpdated": "2025-04-07",
+      "references": []
+    },
+    {
+      "id": "llama-3.3-nemotron-super-49b-v1",
+      "canonicalId": "nvidia/llama-3.3-nemotron-super-49b-v1",
+      "apiIds": [
+        "nvidia/llama-3.3-nemotron-super-49b-v1"
+      ],
+      "aliases": [
+        "nvidia/llama-3.3-nemotron-super-49b-v1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Llama 3.3 Nemotron Super 49B v1",
+      "family": "nemotron",
+      "context_window": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-07",
+      "lastUpdated": "2025-04-07",
+      "references": []
+    },
+    {
+      "id": "llama-3.3-nemotron-super-49b-v1.5",
+      "canonicalId": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+      "apiIds": [
+        "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+      ],
+      "aliases": [
+        "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Llama 3.3 Nemotron Super 49B v1.5",
+      "family": "nemotron",
+      "context_window": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-07-25",
+      "lastUpdated": "2025-07-25",
+      "references": []
+    },
+    {
+      "id": "mistral-nemotron",
+      "canonicalId": "nvidia/mistral-nemotron",
+      "apiIds": [
+        "mistral-nemotron"
+      ],
+      "aliases": [
+        "nvidia/mistral-nemotron"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Mistral Nemotron",
+      "family": "nemotron",
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-06-11",
+      "lastUpdated": "2025-06-12",
+      "references": []
+    },
+    {
+      "id": "nemotron-3-nano-30b-a3b",
+      "canonicalId": "nvidia/nemotron-3-nano-30b-a3b",
+      "apiIds": [
+        "nvidia/nemotron-3-nano-30b-a3b"
+      ],
+      "aliases": [
+        "nvidia/nemotron-3-nano-30b-a3b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron 3 Nano 30B A3B",
+      "family": "nemotron",
+      "context_window": 262144,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-15",
+      "lastUpdated": "2025-12-15",
+      "references": []
+    },
+    {
+      "id": "nemotron-3-nano-omni-30b-a3b-reasoning",
+      "canonicalId": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "apiIds": [
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+      ],
+      "aliases": [
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron 3 Nano Omni 30B A3B Reasoning",
+      "family": "nemotron",
+      "context_window": 256000,
+      "max_output_tokens": 65536,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-28",
+      "lastUpdated": "2026-04-28",
+      "references": []
+    },
+    {
+      "id": "nemotron-3-super-120b-a12b",
+      "canonicalId": "nvidia/nemotron-3-super-120b-a12b",
+      "apiIds": [
+        "nvidia/nemotron-3-super-120b-a12b"
+      ],
+      "aliases": [
+        "nvidia/nemotron-3-super-120b-a12b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron 3 Super 120B A12B",
+      "family": "nemotron",
+      "context_window": 262144,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-11",
+      "lastUpdated": "2026-03-11",
+      "references": []
+    },
+    {
+      "id": "nemotron-3-ultra-550b-a55b",
+      "canonicalId": "nvidia/nemotron-3-ultra-550b-a55b",
+      "apiIds": [
+        "nvidia/nemotron-3-ultra-550b-a55b"
+      ],
+      "aliases": [
+        "nvidia/nemotron-3-ultra-550b-a55b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron 3 Ultra 550B A55B",
+      "family": "nemotron",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-04",
+      "lastUpdated": "2026-06-04",
+      "references": []
+    },
+    {
+      "id": "nemotron-cascade-2-30b-a3b",
+      "canonicalId": "nvidia/nemotron-cascade-2-30b-a3b",
+      "apiIds": [
+        "nemotron-cascade-2-30b-a3b"
+      ],
+      "aliases": [
+        "nvidia/nemotron-cascade-2-30b-a3b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron Cascade 2 30B A3B",
+      "family": "nemotron",
+      "context_window": 256000,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-24",
+      "lastUpdated": "2026-04-09",
+      "references": []
+    },
+    {
+      "id": "nemotron-mini-4b-instruct",
+      "canonicalId": "nvidia/nemotron-mini-4b-instruct",
+      "apiIds": [
+        "nvidia/nemotron-mini-4b-instruct"
+      ],
+      "aliases": [
+        "nvidia/nemotron-mini-4b-instruct"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron Mini 4B Instruct",
+      "family": "nemotron",
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2024-08-21",
+      "lastUpdated": "2024-08-26",
+      "references": []
+    },
+    {
+      "id": "nemotron-nano-12b-v2-vl",
+      "canonicalId": "nvidia/nemotron-nano-12b-v2-vl",
+      "apiIds": [
+        "nvidia/nemotron-nano-12b-v2-vl"
+      ],
+      "aliases": [
+        "nvidia/nemotron-nano-12b-v2-vl"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron Nano 12B v2 VL",
+      "family": "nemotron",
+      "context_window": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-10-28",
+      "lastUpdated": "2025-10-28",
+      "references": []
+    },
+    {
+      "id": "nemotron-nano-9b-v2",
+      "canonicalId": "nvidia/nemotron-nano-9b-v2",
+      "apiIds": [
+        "nvidia/nemotron-nano-9b-v2"
+      ],
+      "aliases": [
+        "nvidia/nemotron-nano-9b-v2"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron Nano 9B v2",
+      "family": "nemotron",
+      "context_window": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-18",
+      "lastUpdated": "2025-08-18",
+      "references": []
+    },
+    {
+      "id": "nemotron-voicechat",
+      "canonicalId": "nvidia/nemotron-voicechat",
+      "apiIds": [
+        "nvidia/nemotron-voicechat"
+      ],
+      "aliases": [
+        "nvidia/nemotron-voicechat"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Nvidia",
+      "name": "Nemotron VoiceChat",
+      "family": "nemotron",
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-16",
+      "lastUpdated": "2026-03-16",
+      "references": []
+    },
+    {
+      "id": "gpt-4",
+      "canonicalId": "openai/gpt-4",
+      "apiIds": [
+        "gpt-4",
+        "openai/gpt-4"
+      ],
+      "aliases": [
+        "openai/gpt-4"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4",
+      "family": "gpt",
+      "context_window": 8192,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "input_price_micro_usd_per_million": 30000000,
+      "output_price_micro_usd_per_million": 60000000,
+      "lifecycle": "stable",
+      "releaseDate": "2023-11-06",
+      "lastUpdated": "2024-04-09",
+      "references": []
+    },
+    {
+      "id": "gpt-4-turbo",
+      "canonicalId": "openai/gpt-4-turbo",
+      "apiIds": [
+        "gpt-4-turbo",
+        "openai/gpt-4-turbo"
+      ],
+      "aliases": [
+        "openai/gpt-4-turbo"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4 Turbo",
+      "family": "gpt",
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "input_price_micro_usd_per_million": 10000000,
+      "output_price_micro_usd_per_million": 30000000,
+      "lifecycle": "stable",
+      "releaseDate": "2023-11-06",
+      "lastUpdated": "2024-04-09",
+      "references": []
+    },
+    {
+      "id": "gpt-4.1",
+      "canonicalId": "openai/gpt-4.1",
+      "apiIds": [
+        "gpt-4.1",
+        "openai/gpt-4.1"
+      ],
+      "aliases": [
+        "openai/gpt-4.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4.1",
+      "family": "gpt",
+      "context_window": 1047576,
+      "max_output_tokens": 32768,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 8000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-14",
+      "lastUpdated": "2025-04-14",
+      "references": []
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "canonicalId": "openai/gpt-4.1-mini",
+      "apiIds": [
+        "gpt-4.1-mini",
+        "openai/gpt-4.1-mini"
+      ],
+      "aliases": [
+        "openai/gpt-4.1-mini"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4.1 mini",
+      "family": "gpt-mini",
+      "context_window": 1047576,
+      "max_output_tokens": 32768,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 400000,
+      "output_price_micro_usd_per_million": 1600000,
+      "cache_read_price_micro_usd_per_million": 100000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-14",
+      "lastUpdated": "2025-04-14",
+      "references": []
+    },
+    {
+      "id": "gpt-4.1-nano",
+      "canonicalId": "openai/gpt-4.1-nano",
+      "apiIds": [
+        "gpt-4.1-nano",
+        "openai/gpt-4.1-nano"
+      ],
+      "aliases": [
+        "openai/gpt-4.1-nano"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4.1 nano",
+      "family": "gpt-nano",
+      "context_window": 1047576,
+      "max_output_tokens": 32768,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 100000,
+      "output_price_micro_usd_per_million": 400000,
+      "cache_read_price_micro_usd_per_million": 25000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-14",
+      "lastUpdated": "2025-04-14",
+      "references": []
+    },
+    {
+      "id": "gpt-4o",
+      "canonicalId": "openai/gpt-4o",
+      "apiIds": [
+        "gpt-4o",
+        "openai/gpt-4o"
+      ],
+      "aliases": [
+        "openai/gpt-4o"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4o",
+      "family": "gpt",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "cache_read_price_micro_usd_per_million": 1250000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-05-13",
+      "lastUpdated": "2024-08-06",
+      "references": []
+    },
+    {
+      "id": "gpt-4o-2024-05-13",
+      "canonicalId": "openai/gpt-4o-2024-05-13",
+      "apiIds": [
+        "gpt-4o-2024-05-13",
+        "openai/gpt-4o-2024-05-13"
+      ],
+      "aliases": [
+        "openai/gpt-4o-2024-05-13"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4o (2024-05-13)",
+      "family": "gpt",
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 15000000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-05-13",
+      "lastUpdated": "2024-05-13",
+      "references": []
+    },
+    {
+      "id": "gpt-4o-2024-08-06",
+      "canonicalId": "openai/gpt-4o-2024-08-06",
+      "apiIds": [
+        "gpt-4o-2024-08-06",
+        "openai/gpt-4o-2024-08-06"
+      ],
+      "aliases": [
+        "openai/gpt-4o-2024-08-06"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4o (2024-08-06)",
+      "family": "gpt",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "cache_read_price_micro_usd_per_million": 1250000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-08-06",
+      "lastUpdated": "2024-08-06",
+      "references": []
+    },
+    {
+      "id": "gpt-4o-2024-11-20",
+      "canonicalId": "openai/gpt-4o-2024-11-20",
+      "apiIds": [
+        "gpt-4o-2024-11-20",
+        "openai/gpt-4o-2024-11-20"
+      ],
+      "aliases": [
+        "openai/gpt-4o-2024-11-20"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4o (2024-11-20)",
+      "family": "gpt",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 10000000,
+      "cache_read_price_micro_usd_per_million": 1250000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-11-20",
+      "lastUpdated": "2024-11-20",
+      "references": []
+    },
+    {
+      "id": "gpt-4o-mini",
+      "canonicalId": "openai/gpt-4o-mini",
+      "apiIds": [
+        "gpt-4o-mini",
+        "openai/gpt-4o-mini"
+      ],
+      "aliases": [
+        "openai/gpt-4o-mini"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-4o mini",
+      "family": "gpt-mini",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 150000,
+      "output_price_micro_usd_per_million": 600000,
+      "cache_read_price_micro_usd_per_million": 75000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-07-18",
+      "lastUpdated": "2024-07-18",
+      "references": []
+    },
+    {
+      "id": "gpt-5",
+      "canonicalId": "openai/gpt-5",
+      "apiIds": [
+        "gpt-5",
+        "openai/gpt-5"
+      ],
+      "aliases": [
+        "openai/gpt-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5",
+      "family": "gpt",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1250000,
+      "output_price_micro_usd_per_million": 10000000,
+      "cache_read_price_micro_usd_per_million": 125000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-07",
+      "lastUpdated": "2025-08-07",
+      "references": []
+    },
+    {
+      "id": "gpt-5-codex",
+      "canonicalId": "openai/gpt-5-codex",
+      "apiIds": [
+        "openai/gpt-5-codex"
+      ],
+      "aliases": [
+        "openai/gpt-5-codex"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5-Codex",
+      "family": "gpt-codex",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09-15",
+      "lastUpdated": "2025-09-15",
+      "references": []
+    },
+    {
+      "id": "gpt-5-mini",
+      "canonicalId": "openai/gpt-5-mini",
+      "apiIds": [
+        "gpt-5-mini",
+        "openai/gpt-5-mini"
+      ],
+      "aliases": [
+        "openai/gpt-5-mini"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5 Mini",
+      "family": "gpt-mini",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 250000,
+      "output_price_micro_usd_per_million": 2000000,
+      "cache_read_price_micro_usd_per_million": 25000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-07",
+      "lastUpdated": "2025-08-07",
+      "references": []
+    },
+    {
+      "id": "gpt-5-nano",
+      "canonicalId": "openai/gpt-5-nano",
+      "apiIds": [
+        "gpt-5-nano",
+        "openai/gpt-5-nano"
+      ],
+      "aliases": [
+        "openai/gpt-5-nano"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5 Nano",
+      "family": "gpt-nano",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 50000,
+      "output_price_micro_usd_per_million": 400000,
+      "cache_read_price_micro_usd_per_million": 5000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-07",
+      "lastUpdated": "2025-08-07",
+      "references": []
+    },
+    {
+      "id": "gpt-5-pro",
+      "canonicalId": "openai/gpt-5-pro",
+      "apiIds": [
+        "gpt-5-pro",
+        "openai/gpt-5-pro"
+      ],
+      "aliases": [
+        "openai/gpt-5-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5 Pro",
+      "family": "gpt-pro",
+      "context_window": 400000,
+      "max_output_tokens": 272000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 15000000,
+      "output_price_micro_usd_per_million": 120000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-10-06",
+      "lastUpdated": "2025-10-06",
+      "references": []
+    },
+    {
+      "id": "gpt-5.1",
+      "canonicalId": "openai/gpt-5.1",
+      "apiIds": [
+        "gpt-5.1",
+        "openai/gpt-5.1"
+      ],
+      "aliases": [
+        "openai/gpt-5.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.1",
+      "family": "gpt",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1250000,
+      "output_price_micro_usd_per_million": 10000000,
+      "cache_read_price_micro_usd_per_million": 125000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-13",
+      "lastUpdated": "2025-11-13",
+      "references": []
+    },
+    {
+      "id": "gpt-5.1-chat-latest",
+      "canonicalId": "openai/gpt-5.1-chat-latest",
+      "apiIds": [
+        "openai/gpt-5.1-chat-latest"
+      ],
+      "aliases": [
+        "openai/gpt-5.1-chat-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.1 Chat",
+      "family": "gpt-codex",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-13",
+      "lastUpdated": "2025-11-13",
+      "references": []
+    },
+    {
+      "id": "gpt-5.1-codex",
+      "canonicalId": "openai/gpt-5.1-codex",
+      "apiIds": [
+        "openai/gpt-5.1-codex"
+      ],
+      "aliases": [
+        "openai/gpt-5.1-codex"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.1 Codex",
+      "family": "gpt-codex",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-13",
+      "lastUpdated": "2025-11-13",
+      "references": []
+    },
+    {
+      "id": "gpt-5.1-codex-max",
+      "canonicalId": "openai/gpt-5.1-codex-max",
+      "apiIds": [
+        "openai/gpt-5.1-codex-max"
+      ],
+      "aliases": [
+        "openai/gpt-5.1-codex-max"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.1 Codex Max",
+      "family": "gpt-codex",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-13",
+      "lastUpdated": "2025-11-13",
+      "references": []
+    },
+    {
+      "id": "gpt-5.1-codex-mini",
+      "canonicalId": "openai/gpt-5.1-codex-mini",
+      "apiIds": [
+        "openai/gpt-5.1-codex-mini"
+      ],
+      "aliases": [
+        "openai/gpt-5.1-codex-mini"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.1 Codex mini",
+      "family": "gpt-codex",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-11-13",
+      "lastUpdated": "2025-11-13",
+      "references": []
+    },
+    {
+      "id": "gpt-5.2",
+      "canonicalId": "openai/gpt-5.2",
+      "apiIds": [
+        "gpt-5.2",
+        "openai/gpt-5.2"
+      ],
+      "aliases": [
+        "openai/gpt-5.2"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.2",
+      "family": "gpt",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1750000,
+      "output_price_micro_usd_per_million": 14000000,
+      "cache_read_price_micro_usd_per_million": 175000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-11",
+      "lastUpdated": "2025-12-11",
+      "references": []
+    },
+    {
+      "id": "gpt-5.2-chat-latest",
+      "canonicalId": "openai/gpt-5.2-chat-latest",
+      "apiIds": [
+        "gpt-5.2-chat-latest",
+        "openai/gpt-5.2-chat-latest"
+      ],
+      "aliases": [
+        "openai/gpt-5.2-chat-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.2 Chat",
+      "family": "gpt-codex",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1750000,
+      "output_price_micro_usd_per_million": 14000000,
+      "cache_read_price_micro_usd_per_million": 175000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-11",
+      "lastUpdated": "2025-12-11",
+      "references": []
+    },
+    {
+      "id": "gpt-5.2-codex",
+      "canonicalId": "openai/gpt-5.2-codex",
+      "apiIds": [
+        "openai/gpt-5.2-codex"
+      ],
+      "aliases": [
+        "openai/gpt-5.2-codex"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.2 Codex",
+      "family": "gpt-codex",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-11",
+      "lastUpdated": "2025-12-11",
+      "references": []
+    },
+    {
+      "id": "gpt-5.2-pro",
+      "canonicalId": "openai/gpt-5.2-pro",
+      "apiIds": [
+        "gpt-5.2-pro",
+        "openai/gpt-5.2-pro"
+      ],
+      "aliases": [
+        "openai/gpt-5.2-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.2 Pro",
+      "family": "gpt-pro",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "input_price_micro_usd_per_million": 21000000,
+      "output_price_micro_usd_per_million": 168000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-11",
+      "lastUpdated": "2025-12-11",
+      "references": []
+    },
+    {
+      "id": "gpt-5.3-chat-latest",
+      "canonicalId": "openai/gpt-5.3-chat-latest",
+      "apiIds": [
+        "gpt-5.3-chat-latest",
+        "openai/gpt-5.3-chat-latest"
+      ],
+      "aliases": [
+        "openai/gpt-5.3-chat-latest"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.3 Chat (latest)",
+      "family": "gpt",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1750000,
+      "output_price_micro_usd_per_million": 14000000,
+      "cache_read_price_micro_usd_per_million": 175000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-03",
+      "lastUpdated": "2026-03-03",
+      "references": []
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "canonicalId": "openai/gpt-5.3-codex",
+      "apiIds": [
+        "gpt-5.3-codex",
+        "openai/gpt-5.3-codex"
+      ],
+      "aliases": [
+        "openai/gpt-5.3-codex"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.3 Codex",
+      "family": "gpt-codex",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1750000,
+      "output_price_micro_usd_per_million": 14000000,
+      "cache_read_price_micro_usd_per_million": 175000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-05",
+      "lastUpdated": "2026-02-05",
+      "references": []
+    },
+    {
+      "id": "gpt-5.4",
+      "canonicalId": "openai/gpt-5.4",
+      "apiIds": [
+        "gpt-5.4",
+        "openai/gpt-5.4"
+      ],
+      "aliases": [
+        "openai/gpt-5.4"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.4",
+      "family": "gpt",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 22500000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-05",
+      "lastUpdated": "2026-03-05",
+      "references": []
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "canonicalId": "openai/gpt-5.4-mini",
+      "apiIds": [
+        "gpt-5.4-mini",
+        "openai/gpt-5.4-mini"
+      ],
+      "aliases": [
+        "openai/gpt-5.4-mini"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.4 mini",
+      "family": "gpt-mini",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 750000,
+      "output_price_micro_usd_per_million": 4500000,
+      "cache_read_price_micro_usd_per_million": 75000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-17",
+      "lastUpdated": "2026-03-17",
+      "references": []
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "canonicalId": "openai/gpt-5.4-nano",
+      "apiIds": [
+        "gpt-5.4-nano",
+        "openai/gpt-5.4-nano"
+      ],
+      "aliases": [
+        "openai/gpt-5.4-nano"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.4 nano",
+      "family": "gpt-nano",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 200000,
+      "output_price_micro_usd_per_million": 1250000,
+      "cache_read_price_micro_usd_per_million": 20000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-17",
+      "lastUpdated": "2026-03-17",
+      "references": []
+    },
+    {
+      "id": "gpt-5.4-pro",
+      "canonicalId": "openai/gpt-5.4-pro",
+      "apiIds": [
+        "gpt-5.4-pro",
+        "openai/gpt-5.4-pro"
+      ],
+      "aliases": [
+        "openai/gpt-5.4-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.4 Pro",
+      "family": "gpt-pro",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "input_price_micro_usd_per_million": 60000000,
+      "output_price_micro_usd_per_million": 270000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-05",
+      "lastUpdated": "2026-03-05",
+      "references": []
+    },
+    {
+      "id": "gpt-5.5",
+      "canonicalId": "openai/gpt-5.5",
+      "apiIds": [
+        "gpt-5.5",
+        "openai/gpt-5.5"
+      ],
+      "aliases": [
+        "openai/gpt-5.5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.5",
+      "family": "gpt",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 10000000,
+      "output_price_micro_usd_per_million": 45000000,
+      "cache_read_price_micro_usd_per_million": 1000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-23",
+      "lastUpdated": "2026-04-23",
+      "references": []
+    },
+    {
+      "id": "gpt-5.5-instant",
+      "canonicalId": "openai/gpt-5.5-instant",
+      "apiIds": [
+        "openai/gpt-5.5-instant"
+      ],
+      "aliases": [
+        "openai/gpt-5.5-instant"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.5 Instant",
+      "family": "gpt-5.5-instant",
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-05",
+      "lastUpdated": "2026-05-28",
+      "references": []
+    },
+    {
+      "id": "gpt-5.5-pro",
+      "canonicalId": "openai/gpt-5.5-pro",
+      "apiIds": [
+        "gpt-5.5-pro",
+        "openai/gpt-5.5-pro"
+      ],
+      "aliases": [
+        "openai/gpt-5.5-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.5 Pro",
+      "family": "gpt-pro",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 60000000,
+      "output_price_micro_usd_per_million": 270000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-23",
+      "lastUpdated": "2026-04-23",
+      "references": []
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "canonicalId": "openai/gpt-5.6-luna",
+      "apiIds": [
+        "gpt-5.6-luna",
+        "openai/gpt-5.6-luna"
+      ],
+      "aliases": [
+        "openai/gpt-5.6-luna"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.6 Luna",
+      "family": "gpt-luna",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 400000,
+      "output_price_micro_usd_per_million": 1800000,
+      "cache_read_price_micro_usd_per_million": 40000,
+      "cache_write_price_micro_usd_per_million": 500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-09",
+      "lastUpdated": "2026-07-09",
+      "references": []
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "canonicalId": "openai/gpt-5.6-sol",
+      "apiIds": [
+        "gpt-5.6-sol",
+        "openai/gpt-5.6-sol"
+      ],
+      "aliases": [
+        "openai/gpt-5.6-sol"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.6 Sol",
+      "family": "gpt-sol",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 10000000,
+      "output_price_micro_usd_per_million": 45000000,
+      "cache_read_price_micro_usd_per_million": 1000000,
+      "cache_write_price_micro_usd_per_million": 12500000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-09",
+      "lastUpdated": "2026-07-09",
+      "references": []
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "canonicalId": "openai/gpt-5.6-terra",
+      "apiIds": [
+        "gpt-5.6-terra",
+        "openai/gpt-5.6-terra"
+      ],
+      "aliases": [
+        "openai/gpt-5.6-terra"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-5.6 Terra",
+      "family": "gpt-terra",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 18000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "cache_write_price_micro_usd_per_million": 5000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-09",
+      "lastUpdated": "2026-07-09",
+      "references": []
+    },
+    {
+      "id": "gpt-oss-120b",
+      "canonicalId": "openai/gpt-oss-120b",
+      "apiIds": [
+        "openai/gpt-oss-120b"
+      ],
+      "aliases": [
+        "openai/gpt-oss-120b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT OSS 120B",
+      "family": "gpt-oss",
+      "context_window": 131072,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-05",
+      "lastUpdated": "2025-08-05",
+      "references": []
+    },
+    {
+      "id": "gpt-oss-20b",
+      "canonicalId": "openai/gpt-oss-20b",
+      "apiIds": [
+        "openai/gpt-oss-20b"
+      ],
+      "aliases": [
+        "openai/gpt-oss-20b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT OSS 20B",
+      "family": "gpt-oss",
+      "context_window": 131072,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-05",
+      "lastUpdated": "2025-08-05",
+      "references": []
+    },
+    {
+      "id": "gpt-oss-safeguard-120b",
+      "canonicalId": "openai/gpt-oss-safeguard-120b",
+      "apiIds": [
+        "openai/gpt-oss-safeguard-120b"
+      ],
+      "aliases": [
+        "openai/gpt-oss-safeguard-120b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT OSS Safeguard 120B",
+      "family": "gpt-oss",
+      "context_window": 131072,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-10-29",
+      "lastUpdated": "2025-10-29",
+      "references": []
+    },
+    {
+      "id": "gpt-realtime-2.1",
+      "canonicalId": "openai/gpt-realtime-2.1",
+      "apiIds": [
+        "gpt-realtime-2.1",
+        "openai/gpt-realtime-2.1"
+      ],
+      "aliases": [
+        "openai/gpt-realtime-2.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "GPT-Realtime-2.1",
+      "family": "gpt",
+      "context_window": 128000,
+      "max_output_tokens": 32000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 24000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-06",
+      "lastUpdated": "2026-07-06",
+      "references": []
+    },
+    {
+      "id": "o1",
+      "canonicalId": "openai/o1",
+      "apiIds": [
+        "o1",
+        "openai/o1"
+      ],
+      "aliases": [
+        "openai/o1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o1",
+      "family": "o",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 15000000,
+      "output_price_micro_usd_per_million": 60000000,
+      "cache_read_price_micro_usd_per_million": 7500000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-12-05",
+      "lastUpdated": "2024-12-05",
+      "references": []
+    },
+    {
+      "id": "o1-pro",
+      "canonicalId": "openai/o1-pro",
+      "apiIds": [
+        "o1-pro",
+        "openai/o1-pro"
+      ],
+      "aliases": [
+        "openai/o1-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o1-pro",
+      "family": "o-pro",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 150000000,
+      "output_price_micro_usd_per_million": 600000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-03-19",
+      "lastUpdated": "2025-03-19",
+      "references": []
+    },
+    {
+      "id": "o3",
+      "canonicalId": "openai/o3",
+      "apiIds": [
+        "o3",
+        "openai/o3"
+      ],
+      "aliases": [
+        "openai/o3"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o3",
+      "family": "o",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 8000000,
+      "cache_read_price_micro_usd_per_million": 500000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-16",
+      "lastUpdated": "2025-04-16",
+      "references": []
+    },
+    {
+      "id": "o3-deep-research",
+      "canonicalId": "openai/o3-deep-research",
+      "apiIds": [
+        "openai/o3-deep-research"
+      ],
+      "aliases": [
+        "openai/o3-deep-research"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o3-deep-research",
+      "family": "o",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2024-06-26",
+      "lastUpdated": "2024-06-26",
+      "references": []
+    },
+    {
+      "id": "o3-mini",
+      "canonicalId": "openai/o3-mini",
+      "apiIds": [
+        "o3-mini",
+        "openai/o3-mini"
+      ],
+      "aliases": [
+        "openai/o3-mini"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o3-mini",
+      "family": "o-mini",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1100000,
+      "output_price_micro_usd_per_million": 4400000,
+      "cache_read_price_micro_usd_per_million": 550000,
+      "lifecycle": "stable",
+      "releaseDate": "2024-12-20",
+      "lastUpdated": "2025-01-29",
+      "references": []
+    },
+    {
+      "id": "o3-pro",
+      "canonicalId": "openai/o3-pro",
+      "apiIds": [
+        "o3-pro",
+        "openai/o3-pro"
+      ],
+      "aliases": [
+        "openai/o3-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o3-pro",
+      "family": "o-pro",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 20000000,
+      "output_price_micro_usd_per_million": 80000000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-06-10",
+      "lastUpdated": "2025-06-10",
+      "references": []
+    },
+    {
+      "id": "o4-mini",
+      "canonicalId": "openai/o4-mini",
+      "apiIds": [
+        "o4-mini",
+        "openai/o4-mini"
+      ],
+      "aliases": [
+        "openai/o4-mini"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o4-mini",
+      "family": "o-mini",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1100000,
+      "output_price_micro_usd_per_million": 4400000,
+      "cache_read_price_micro_usd_per_million": 275000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-04-16",
+      "lastUpdated": "2025-04-16",
+      "references": []
+    },
+    {
+      "id": "o4-mini-deep-research",
+      "canonicalId": "openai/o4-mini-deep-research",
+      "apiIds": [
+        "openai/o4-mini-deep-research"
+      ],
+      "aliases": [
+        "openai/o4-mini-deep-research"
+      ],
+      "compatibilityAliases": [],
+      "provider": "OpenAI",
+      "name": "o4-mini-deep-research",
+      "family": "o-mini",
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2024-06-26",
+      "lastUpdated": "2024-06-26",
+      "references": []
+    },
+    {
+      "id": "laguna-m.1",
+      "canonicalId": "poolside/laguna-m.1",
+      "apiIds": [
+        "poolside/laguna-m.1"
+      ],
+      "aliases": [
+        "poolside/laguna-m.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Poolside",
+      "name": "Laguna M.1",
+      "family": "laguna",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-28",
+      "lastUpdated": "2026-06-13",
+      "references": []
+    },
+    {
+      "id": "laguna-s-2.1",
+      "canonicalId": "poolside/laguna-s-2.1",
+      "apiIds": [
+        "poolside/laguna-s-2.1"
+      ],
+      "aliases": [
+        "poolside/laguna-s-2.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Poolside",
+      "name": "Laguna S 2.1",
+      "family": "laguna",
+      "context_window": 1048576,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-21",
+      "lastUpdated": "2026-07-21",
+      "references": []
+    },
+    {
+      "id": "laguna-xs-2.1",
+      "canonicalId": "poolside/laguna-xs-2.1",
+      "apiIds": [
+        "poolside/laguna-xs-2.1"
+      ],
+      "aliases": [
+        "poolside/laguna-xs-2.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Poolside",
+      "name": "Laguna XS 2.1",
+      "family": "laguna",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-02",
+      "lastUpdated": "2026-07-02",
+      "references": []
+    },
+    {
+      "id": "laguna-xs.2",
+      "canonicalId": "poolside/laguna-xs.2",
+      "apiIds": [
+        "poolside/laguna-xs.2"
+      ],
+      "aliases": [
+        "poolside/laguna-xs.2"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Poolside",
+      "name": "Laguna XS.2",
+      "family": "laguna",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": false,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-28",
+      "lastUpdated": "2026-06-13",
+      "references": []
+    },
+    {
+      "id": "fugu",
+      "canonicalId": "sakana/fugu",
+      "apiIds": [
+        "fugu"
+      ],
+      "aliases": [
+        "sakana/fugu"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Sakana AI",
+      "name": "Fugu",
+      "family": "fugu",
+      "context_window": 1000000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-15",
+      "lastUpdated": "2026-06-15",
+      "references": []
+    },
+    {
+      "id": "fugu-ultra",
+      "canonicalId": "sakana/fugu-ultra",
+      "apiIds": [
+        "fugu-ultra",
+        "sakana/fugu-ultra"
+      ],
+      "aliases": [
+        "sakana/fugu-ultra"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Sakana AI",
+      "name": "Fugu Ultra",
+      "family": "fugu",
+      "context_window": 1000000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 10000000,
+      "output_price_micro_usd_per_million": 45000000,
+      "cache_read_price_micro_usd_per_million": 1000000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-15",
+      "lastUpdated": "2026-06-15",
+      "references": []
+    },
+    {
+      "id": "sarvam-105b",
+      "canonicalId": "sarvam/sarvam-105b",
+      "apiIds": [
+        "sarvam-105b",
+        "sarvam/sarvam-105b"
+      ],
+      "aliases": [
+        "sarvam/sarvam-105b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Sarvam AI",
+      "name": "Sarvam 105B",
+      "family": "sarvam",
+      "context_window": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09-01",
+      "lastUpdated": "2025-09-01",
+      "references": []
+    },
+    {
+      "id": "sarvam-30b",
+      "canonicalId": "sarvam/sarvam-30b",
+      "apiIds": [
+        "sarvam-30b",
+        "sarvam/sarvam-30b"
+      ],
+      "aliases": [
+        "sarvam/sarvam-30b"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Sarvam AI",
+      "name": "Sarvam 30B",
+      "family": "sarvam",
+      "context_window": 128000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-18",
+      "lastUpdated": "2026-02-18",
+      "references": []
+    },
+    {
+      "id": "step-3.5-flash",
+      "canonicalId": "stepfun/step-3.5-flash",
+      "apiIds": [
+        "step-3.5-flash",
+        "stepfun/step-3.5-flash"
+      ],
+      "aliases": [
+        "stepfun/step-3.5-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "StepFun (China)",
+      "name": "Step 3.5 Flash",
+      "family": "step-3.5-flash",
+      "context_window": 256000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 100000,
+      "output_price_micro_usd_per_million": 300000,
+      "cache_read_price_micro_usd_per_million": 20000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-01-29",
+      "lastUpdated": "2026-02-13",
+      "references": []
+    },
+    {
+      "id": "step-3.5-flash-2603",
+      "canonicalId": "stepfun/step-3.5-flash-2603",
+      "apiIds": [
+        "step-3.5-flash-2603"
+      ],
+      "aliases": [
+        "stepfun/step-3.5-flash-2603"
+      ],
+      "compatibilityAliases": [],
+      "provider": "StepFun (China)",
+      "name": "Step 3.5 Flash 2603",
+      "family": "step-3.5-flash-2603",
+      "context_window": 256000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 100000,
+      "output_price_micro_usd_per_million": 300000,
+      "cache_read_price_micro_usd_per_million": 20000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-02",
+      "lastUpdated": "2026-04-02",
+      "references": []
+    },
+    {
+      "id": "step-3.7-flash",
+      "canonicalId": "stepfun/step-3.7-flash",
+      "apiIds": [
+        "step-3.7-flash",
+        "stepfun/step-3.7-flash"
+      ],
+      "aliases": [
+        "stepfun/step-3.7-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "StepFun (China)",
+      "name": "Step 3.7 Flash",
+      "family": "step-3.7-flash",
+      "context_window": 256000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 185000,
+      "output_price_micro_usd_per_million": 1110000,
+      "cache_read_price_micro_usd_per_million": 37000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-05-29",
+      "lastUpdated": "2026-05-29",
+      "references": []
+    },
+    {
+      "id": "hy3",
+      "canonicalId": "tencent/hy3",
+      "apiIds": [
+        "tencent/hy3"
+      ],
+      "aliases": [
+        "tencent/hy3"
+      ],
+      "compatibilityAliases": [],
+      "provider": "tencent",
+      "name": "Hy3",
+      "family": "Hy",
+      "context_window": 256000,
+      "max_output_tokens": 64000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-06",
+      "lastUpdated": "2026-07-06",
+      "references": []
+    },
+    {
+      "id": "hy3-preview",
+      "canonicalId": "tencent/hy3-preview",
+      "apiIds": [
+        "tencent/hy3-preview"
+      ],
+      "aliases": [
+        "tencent/hy3-preview"
+      ],
+      "compatibilityAliases": [],
+      "provider": "tencent",
+      "name": "Hy3 preview",
+      "family": "Hy",
+      "context_window": 256000,
+      "max_output_tokens": 64000,
+      "supports_vision": false,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-20",
+      "lastUpdated": "2026-04-20",
+      "references": []
+    },
+    {
+      "id": "inkling",
+      "canonicalId": "thinkingmachines/inkling",
+      "apiIds": [
+        "thinkingmachines/inkling"
+      ],
+      "aliases": [
+        "thinkingmachines/inkling"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Thinking Machines",
+      "name": "Inkling",
+      "family": "ling",
+      "context_window": 1048576,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-15",
+      "lastUpdated": "2026-07-15",
+      "references": []
+    },
+    {
+      "id": "inkling-small",
+      "canonicalId": "thinkingmachines/inkling-small",
+      "apiIds": [
+        "thinkingmachines/inkling-small"
+      ],
+      "aliases": [
+        "thinkingmachines/inkling-small"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Thinking Machines",
+      "name": "Inkling Small",
+      "family": "ling",
+      "context_window": 1048576,
+      "supports_vision": true,
+      "supports_tools": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-30",
+      "lastUpdated": "2026-07-30",
+      "references": []
+    },
+    {
+      "id": "grok-4.20-0309-non-reasoning",
+      "canonicalId": "xai/grok-4.20-0309-non-reasoning",
+      "apiIds": [
+        "grok-4.20-0309-non-reasoning",
+        "xai/grok-4.20-0309-non-reasoning"
+      ],
+      "aliases": [
+        "xai/grok-4.20-0309-non-reasoning"
+      ],
+      "compatibilityAliases": [],
+      "provider": "xAI",
+      "name": "Grok 4.20 (Non-Reasoning)",
+      "family": "grok",
+      "context_window": 1000000,
+      "max_output_tokens": 30000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 5000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-09",
+      "lastUpdated": "2026-03-09",
+      "references": []
+    },
+    {
+      "id": "grok-4.20-0309-reasoning",
+      "canonicalId": "xai/grok-4.20-0309-reasoning",
+      "apiIds": [
+        "grok-4.20-0309-reasoning",
+        "xai/grok-4.20-0309-reasoning"
+      ],
+      "aliases": [
+        "xai/grok-4.20-0309-reasoning"
+      ],
+      "compatibilityAliases": [],
+      "provider": "xAI",
+      "name": "Grok 4.20 (Reasoning)",
+      "family": "grok",
+      "context_window": 1000000,
+      "max_output_tokens": 30000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 5000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-09",
+      "lastUpdated": "2026-03-09",
+      "references": []
+    },
+    {
+      "id": "grok-4.3",
+      "canonicalId": "xai/grok-4.3",
+      "apiIds": [
+        "grok-4.3",
+        "xai/grok-4.3"
+      ],
+      "aliases": [
+        "xai/grok-4.3"
+      ],
+      "compatibilityAliases": [],
+      "provider": "xAI",
+      "name": "Grok 4.3",
+      "family": "grok",
+      "context_window": 1000000,
+      "max_output_tokens": 30000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2500000,
+      "output_price_micro_usd_per_million": 5000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-17",
+      "lastUpdated": "2026-04-17",
+      "references": []
+    },
+    {
+      "id": "grok-4.5",
+      "canonicalId": "xai/grok-4.5",
+      "apiIds": [
+        "grok-4.5",
+        "xai/grok-4.5"
+      ],
+      "aliases": [
+        "xai/grok-4.5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "xAI",
+      "name": "Grok 4.5",
+      "family": "grok",
+      "context_window": 500000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 4000000,
+      "output_price_micro_usd_per_million": 12000000,
+      "cache_read_price_micro_usd_per_million": 600000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-07-08",
+      "lastUpdated": "2026-07-08",
+      "references": []
+    },
+    {
+      "id": "grok-build-0.1",
+      "canonicalId": "xai/grok-build-0.1",
+      "apiIds": [
+        "grok-build-0.1",
+        "xai/grok-build-0.1"
+      ],
+      "aliases": [
+        "xai/grok-build-0.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "xAI",
+      "name": "Grok Build 0.1",
+      "family": "grok-build",
+      "context_window": 256000,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 2000000,
+      "output_price_micro_usd_per_million": 4000000,
+      "cache_read_price_micro_usd_per_million": 400000,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-16",
+      "lastUpdated": "2026-04-16",
+      "references": []
+    },
+    {
+      "id": "mimo-v2-flash",
+      "canonicalId": "xiaomi/mimo-v2-flash",
+      "apiIds": [
+        "mimo-v2-flash",
+        "xiaomi/mimo-v2-flash"
+      ],
+      "aliases": [
+        "xiaomi/mimo-v2-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Xiaomi",
+      "name": "MiMo-V2-Flash",
+      "family": "mimo",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 140000,
+      "output_price_micro_usd_per_million": 280000,
+      "cache_read_price_micro_usd_per_million": 2800,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-16",
+      "lastUpdated": "2026-02-04",
+      "references": []
+    },
+    {
+      "id": "mimo-v2-omni",
+      "canonicalId": "xiaomi/mimo-v2-omni",
+      "apiIds": [
+        "mimo-v2-omni",
+        "xiaomi/mimo-v2-omni"
+      ],
+      "aliases": [
+        "xiaomi/mimo-v2-omni"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Xiaomi",
+      "name": "MiMo-V2-Omni",
+      "family": "mimo",
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 140000,
+      "output_price_micro_usd_per_million": 280000,
+      "cache_read_price_micro_usd_per_million": 2800,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-18",
+      "lastUpdated": "2026-03-18",
+      "references": []
+    },
+    {
+      "id": "mimo-v2-pro",
+      "canonicalId": "xiaomi/mimo-v2-pro",
+      "apiIds": [
+        "mimo-v2-pro",
+        "xiaomi/mimo-v2-pro"
+      ],
+      "aliases": [
+        "xiaomi/mimo-v2-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Xiaomi",
+      "name": "MiMo-V2-Pro",
+      "family": "mimo",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 435000,
+      "output_price_micro_usd_per_million": 870000,
+      "cache_read_price_micro_usd_per_million": 3600,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-18",
+      "lastUpdated": "2026-03-18",
+      "references": []
+    },
+    {
+      "id": "mimo-v2.5",
+      "canonicalId": "xiaomi/mimo-v2.5",
+      "apiIds": [
+        "mimo-v2.5",
+        "xiaomi/mimo-v2.5"
+      ],
+      "aliases": [
+        "xiaomi/mimo-v2.5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Xiaomi",
+      "name": "MiMo-V2.5",
+      "family": "mimo",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 140000,
+      "output_price_micro_usd_per_million": 280000,
+      "cache_read_price_micro_usd_per_million": 2800,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-22",
+      "lastUpdated": "2026-04-22",
+      "references": []
+    },
+    {
+      "id": "mimo-v2.5-pro",
+      "canonicalId": "xiaomi/mimo-v2.5-pro",
+      "apiIds": [
+        "mimo-v2.5-pro",
+        "xiaomi/mimo-v2.5-pro"
+      ],
+      "aliases": [
+        "xiaomi/mimo-v2.5-pro"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Xiaomi",
+      "name": "MiMo-V2.5-Pro",
+      "family": "mimo",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 435000,
+      "output_price_micro_usd_per_million": 870000,
+      "cache_read_price_micro_usd_per_million": 3600,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-22",
+      "lastUpdated": "2026-04-22",
+      "references": []
+    },
+    {
+      "id": "mimo-v2.5-pro-ultraspeed",
+      "canonicalId": "xiaomi/mimo-v2.5-pro-ultraspeed",
+      "apiIds": [
+        "mimo-v2.5-pro-ultraspeed"
+      ],
+      "aliases": [
+        "xiaomi/mimo-v2.5-pro-ultraspeed"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Xiaomi",
+      "name": "MiMo-V2.5-Pro-UltraSpeed",
+      "family": "mimo",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1305000,
+      "output_price_micro_usd_per_million": 2610000,
+      "cache_read_price_micro_usd_per_million": 10800,
+      "lifecycle": "preview",
+      "releaseDate": "2026-06-08",
+      "lastUpdated": "2026-06-09",
+      "references": []
+    },
+    {
+      "id": "glm-4.5",
+      "canonicalId": "zhipuai/glm-4.5",
+      "apiIds": [
+        "glm-4.5"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.5",
+      "family": "glm",
+      "context_window": 131072,
+      "max_output_tokens": 98304,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 2200000,
+      "cache_read_price_micro_usd_per_million": 110000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2025-07-28",
+      "lastUpdated": "2025-07-28",
+      "references": []
+    },
+    {
+      "id": "glm-4.5-air",
+      "canonicalId": "zhipuai/glm-4.5-air",
+      "apiIds": [
+        "glm-4.5-air"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.5-air"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.5-Air",
+      "family": "glm-air",
+      "context_window": 131072,
+      "max_output_tokens": 98304,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 200000,
+      "output_price_micro_usd_per_million": 1100000,
+      "cache_read_price_micro_usd_per_million": 30000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2025-07-28",
+      "lastUpdated": "2025-07-28",
+      "references": []
+    },
+    {
+      "id": "glm-4.5-flash",
+      "canonicalId": "zhipuai/glm-4.5-flash",
+      "apiIds": [
+        "glm-4.5-flash"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.5-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.5-Flash",
+      "family": "glm-flash",
+      "context_window": 131072,
+      "max_output_tokens": 98304,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 0,
+      "output_price_micro_usd_per_million": 0,
+      "cache_read_price_micro_usd_per_million": 0,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2025-07-28",
+      "lastUpdated": "2025-07-28",
+      "references": []
+    },
+    {
+      "id": "glm-4.5v",
+      "canonicalId": "zhipuai/glm-4.5v",
+      "apiIds": [
+        "glm-4.5v"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.5v"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.5V",
+      "family": "glm",
+      "context_window": 64000,
+      "max_output_tokens": 16384,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 1800000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-08-11",
+      "lastUpdated": "2025-08-11",
+      "references": []
+    },
+    {
+      "id": "glm-4.6",
+      "canonicalId": "zhipuai/glm-4.6",
+      "apiIds": [
+        "glm-4.6"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.6"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.6",
+      "family": "glm",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 2200000,
+      "cache_read_price_micro_usd_per_million": 110000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2025-09-30",
+      "lastUpdated": "2025-09-30",
+      "references": []
+    },
+    {
+      "id": "glm-4.6v",
+      "canonicalId": "zhipuai/glm-4.6v",
+      "apiIds": [
+        "glm-4.6v"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.6v"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.6V",
+      "family": "glm",
+      "context_window": 128000,
+      "max_output_tokens": 32768,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 300000,
+      "output_price_micro_usd_per_million": 900000,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-08",
+      "lastUpdated": "2025-12-08",
+      "references": []
+    },
+    {
+      "id": "glm-4.7",
+      "canonicalId": "zhipuai/glm-4.7",
+      "apiIds": [
+        "glm-4.7"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.7"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.7",
+      "family": "glm",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 600000,
+      "output_price_micro_usd_per_million": 2200000,
+      "cache_read_price_micro_usd_per_million": 110000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2025-12-22",
+      "lastUpdated": "2025-12-22",
+      "references": []
+    },
+    {
+      "id": "glm-4.7-flash",
+      "canonicalId": "zhipuai/glm-4.7-flash",
+      "apiIds": [
+        "glm-4.7-flash"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.7-flash"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.7-Flash",
+      "family": "glm-flash",
+      "context_window": 200000,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 0,
+      "output_price_micro_usd_per_million": 0,
+      "cache_read_price_micro_usd_per_million": 0,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2026-01-19",
+      "lastUpdated": "2026-01-19",
+      "references": []
+    },
+    {
+      "id": "glm-4.7-flashx",
+      "canonicalId": "zhipuai/glm-4.7-flashx",
+      "apiIds": [
+        "glm-4.7-flashx"
+      ],
+      "aliases": [
+        "zhipuai/glm-4.7-flashx"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-4.7-FlashX",
+      "family": "glm-flash",
+      "context_window": 200000,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 70000,
+      "output_price_micro_usd_per_million": 400000,
+      "cache_read_price_micro_usd_per_million": 10000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2026-01-19",
+      "lastUpdated": "2026-01-19",
+      "references": []
+    },
+    {
+      "id": "glm-5",
+      "canonicalId": "zhipuai/glm-5",
+      "apiIds": [
+        "glm-5"
+      ],
+      "aliases": [
+        "zhipuai/glm-5"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-5",
+      "family": "glm",
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 1000000,
+      "output_price_micro_usd_per_million": 3200000,
+      "cache_read_price_micro_usd_per_million": 200000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2026-02-12",
+      "lastUpdated": "2026-02-12",
+      "references": []
+    },
+    {
+      "id": "glm-5-turbo",
+      "canonicalId": "zhipuai/glm-5-turbo",
+      "apiIds": [
+        "glm-5-turbo"
+      ],
+      "aliases": [
+        "zhipuai/glm-5-turbo"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-5-Turbo",
+      "family": "glm",
+      "context_window": 200000,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "lifecycle": "stable",
+      "releaseDate": "2026-03-16",
+      "lastUpdated": "2026-03-16",
+      "references": []
+    },
+    {
+      "id": "glm-5.1",
+      "canonicalId": "zhipuai/glm-5.1",
+      "apiIds": [
+        "glm-5.1"
+      ],
+      "aliases": [
+        "zhipuai/glm-5.1"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-5.1",
+      "family": "glm",
+      "context_window": 200000,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1400000,
+      "output_price_micro_usd_per_million": 4400000,
+      "cache_read_price_micro_usd_per_million": 260000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-07",
+      "lastUpdated": "2026-04-07",
+      "references": []
+    },
+    {
+      "id": "glm-5.2",
+      "canonicalId": "zhipuai/glm-5.2",
+      "apiIds": [
+        "glm-5.2"
+      ],
+      "aliases": [
+        "zhipuai/glm-5.2"
+      ],
+      "compatibilityAliases": [
+        "claude-glm-5.2"
+      ],
+      "provider": "Zhipu AI",
+      "name": "GLM-5.2",
+      "family": "glm",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_vision": false,
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "input_price_micro_usd_per_million": 1400000,
+      "output_price_micro_usd_per_million": 4400000,
+      "cache_read_price_micro_usd_per_million": 260000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2026-06-13",
+      "lastUpdated": "2026-06-13",
+      "references": [
+        {
+          "name": "Z.AI GLM-5.2",
+          "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2"
+        }
+      ]
+    },
+    {
+      "id": "glm-5v-turbo",
+      "canonicalId": "zhipuai/glm-5v-turbo",
+      "apiIds": [
+        "glm-5v-turbo"
+      ],
+      "aliases": [
+        "zhipuai/glm-5v-turbo"
+      ],
+      "compatibilityAliases": [],
+      "provider": "Zhipu AI",
+      "name": "GLM-5V-Turbo",
+      "family": "glm",
+      "context_window": 200000,
+      "max_output_tokens": 131072,
+      "supports_vision": true,
+      "supports_tools": true,
+      "input_price_micro_usd_per_million": 5000000,
+      "output_price_micro_usd_per_million": 22000000,
+      "cache_read_price_micro_usd_per_million": 1200000,
+      "cache_write_price_micro_usd_per_million": 0,
+      "lifecycle": "stable",
+      "releaseDate": "2026-04-01",
+      "lastUpdated": "2026-04-01",
+      "references": []
+    }
+  ]
+}

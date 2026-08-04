@@ -8,6 +8,22 @@ export const PROFILE_SECTIONS = new Set([
   "agents",
 ]);
 
+export const HELP_TOPICS = new Set([
+  "overview",
+  "glossary",
+  "profiles-models",
+  "agents",
+  "vision",
+  "intelligent-routing",
+  "reliability",
+  "statistics",
+]);
+
+export const HELP_OVERVIEW_HREF = "/_admin/help/overview";
+
+export const INTELLIGENT_ROUTING_HELP_HREF =
+  "/_admin/help/intelligent-routing";
+
 export function parseAdminRoute(pathname) {
   if (pathname === "/_admin" || pathname === "/_admin/") {
     return { page: "overview" };
@@ -19,10 +35,20 @@ export function parseAdminRoute(pathname) {
     return { page: "profiles" };
   }
   if (pathname === "/_admin/stats") {
-    return { page: "stats" };
+	return { page: "stats", section: "usage" };
+	}
+	if (pathname === "/_admin/stats/routing") {
+		return { page: "stats", section: "routing" };
+	}
+	if (pathname === "/_admin/stats/models") {
+		return { page: "stats", section: "models" };
   }
   if (pathname === "/_admin/system") {
     return { page: "system" };
+  }
+  const helpMatch = String(pathname ?? "").match(/^\/_admin\/help\/([^/]+)$/);
+  if (helpMatch && HELP_TOPICS.has(helpMatch[1])) {
+    return { page: "help", topic: helpMatch[1] };
   }
 
   const match = String(pathname ?? "").match(
@@ -47,4 +73,11 @@ export function profileSectionHref(profileId, section) {
     throw new Error("Profile 页面无效。");
   }
   return `/_admin/profiles/${id}/${section}`;
+}
+
+export function helpHref(topic) {
+  if (!HELP_TOPICS.has(topic)) {
+    throw new Error("帮助主题无效。");
+  }
+  return `/_admin/help/${topic}`;
 }

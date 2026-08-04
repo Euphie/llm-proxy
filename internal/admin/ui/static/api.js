@@ -195,5 +195,19 @@ Object.assign(api, {
       `/_admin/api/routing-traces${query === "" ? "" : `?${query}`}`,
     );
   },
+	routingTrace: (id) => request(`/_admin/api/routing-traces/${Number(id)}`),
+	modelPerformance: (params = {}) => {
+		const query = new URLSearchParams(
+			Object.entries(params)
+				.map(([key, value]) => [key, String(value ?? "").trim()])
+				.filter(([, value]) => value !== ""),
+		).toString();
+		return request(`/_admin/api/model-performance${query === "" ? "" : `?${query}`}`);
+	},
   system: () => request("/_admin/api/system"),
+  modelCatalog: () => request("/_admin/api/model-catalog"),
+  refreshModelCatalog: () =>
+    request("/_admin/api/model-catalog/refresh", {
+      method: "POST",
+    }),
 });

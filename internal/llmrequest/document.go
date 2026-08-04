@@ -20,7 +20,10 @@ type Document struct {
 	nodes                []documentNode
 	images               []Image
 	texts                []string
+	latestUserTexts      []string
 	actualToolOperations []string
+	historicalTools      []string
+	forcedToolOperation  string
 }
 
 const (
@@ -77,6 +80,18 @@ func (d *Document) Texts() []string {
 
 func (d *Document) ActualToolOperations() []string {
 	return append([]string(nil), d.actualToolOperations...)
+}
+
+func (d *Document) HistoricalToolOperations() []string {
+	return append([]string(nil), d.historicalTools...)
+}
+
+func (d *Document) ForcedToolOperation() string {
+	return d.forcedToolOperation
+}
+
+func (d *Document) LatestUserTexts() []string {
+	return append([]string(nil), d.latestUserTexts...)
 }
 
 func (d *Document) CanonicalEstimationJSON() ([]byte, error) {
@@ -267,7 +282,9 @@ func parseMessageCollection(
 				return nil, fmt.Errorf("parse message %d content: %w", messageIndex, err)
 			}
 			if isUserRole(fields) {
-				document.texts = append(document.texts, nonEmptyText(text)...)
+				texts := nonEmptyText(text)
+				document.texts = append(document.texts, texts...)
+				document.setLatestUserTexts(texts)
 			}
 			document.nodes = append(document.nodes, node)
 			continue
@@ -288,7 +305,9 @@ func parseMessageCollection(
 		taskContext := ""
 		if user {
 			taskContext = collectTextBlocks(node.blocks, textType)
-			document.texts = append(document.texts, splitCollectedText(taskContext)...)
+			texts := splitCollectedText(taskContext)
+			document.texts = append(document.texts, texts...)
+			document.setLatestUserTexts(texts)
 		}
 		for blockIndex, rawBlock := range node.blocks {
 			var block map[string]json.RawMessage
@@ -354,7 +373,7 @@ func (d *Document) collectForcedToolOperation() {
 	switch d.operation {
 	case OperationAnthropicMessages:
 		if rawString(choice["type"]) == "tool" {
-			d.prependActualToolOperation(rawString(choice["name"]))
+			d.setForcedToolOperation(rawString(choice["name"]))
 		}
 	case OperationOpenAIChatCompletions:
 		if rawString(choice["type"]) != "function" {
@@ -362,13 +381,22 @@ func (d *Document) collectForcedToolOperation() {
 		}
 		var function map[string]json.RawMessage
 		if json.Unmarshal(choice["function"], &function) == nil {
-			d.prependActualToolOperation(rawString(function["name"]))
+			d.setForcedToolOperation(rawString(function["name"]))
 		}
 	case OperationOpenAIResponses:
 		if rawString(choice["type"]) == "function" {
-			d.prependActualToolOperation(rawString(choice["name"]))
+			d.setForcedToolOperation(rawString(choice["name"]))
 		}
 	}
+}
+
+func (d *Document) setForcedToolOperation(name string) {
+	name = boundedActualToolOperation(name)
+	if name == "" {
+		return
+	}
+	d.forcedToolOperation = name
+	d.prependActualToolOperation(name)
 }
 
 func (d *Document) prependActualToolOperation(name string) {
@@ -396,6 +424,11 @@ func (d *Document) addActualToolOperation(name string) {
 		return
 	}
 	d.actualToolOperations = append(d.actualToolOperations, name)
+	d.historicalTools = append(d.historicalTools, name)
+}
+
+func (d *Document) setLatestUserTexts(texts []string) {
+	d.latestUserTexts = append(d.latestUserTexts[:0], texts...)
 }
 
 func boundedActualToolOperation(name string) string {

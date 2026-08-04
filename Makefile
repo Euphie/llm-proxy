@@ -6,6 +6,7 @@ CMD     := ./cmd/llm-proxy
 IMAGE   := llm-proxy
 DOCS_SITE_INPUTS := app assets build components content data diagrams lib public scripts tests types worker eslint.config.mjs next.config.ts package-lock.json package.json playwright.config.ts postcss.config.mjs tsconfig.json vite.config.ts
 DOCS_ARCHIVE_INPUTS := Makefile docs/intelligent-routing.md $(addprefix docs-site/,$(DOCS_SITE_INPUTS))
+ADMIN_UI_TESTS := $(sort $(wildcard scripts/*.test.mjs internal/admin/ui/static/*.test.mjs))
 
 .PHONY: build run test vet test-e2e docker-build docker-up docker-down clean update-model-catalog docs-verify docs-e2e docs-preview
 
@@ -31,16 +32,7 @@ test-ui:
 	docker run --rm \
 		-v "$(CURDIR)":/src:ro -w /src \
 		node:24-alpine \
-		node --test \
-			scripts/risk-policy-defaults.test.mjs \
-			scripts/model-catalog-lib.test.mjs \
-			scripts/model-catalog-update-lib.test.mjs \
-			internal/admin/ui/static/visual.test.mjs \
-			internal/admin/ui/static/model-catalog.test.mjs \
-			internal/admin/ui/static/auth.test.mjs \
-			internal/admin/ui/static/profiles.test.mjs \
-			internal/admin/ui/static/generator.test.mjs \
-			internal/admin/ui/static/stats.test.mjs
+		node --test $(ADMIN_UI_TESTS)
 
 ## update-model-catalog: refresh the pinned Models.dev browser snapshot
 update-model-catalog:

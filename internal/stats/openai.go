@@ -135,5 +135,6 @@ func validOpenAIUsage(u Usage) (Usage, bool) {
 		return Usage{}, false
 	}
 	u.invalid = false
+	u.InputIncludesCache = true
 	return u, true
 }

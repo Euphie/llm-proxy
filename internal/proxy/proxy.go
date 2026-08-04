@@ -89,6 +89,49 @@ type handler struct {
 	callLedgerSink     func([]routing.CallLedgerEntry)
 	budgetSnapshotSink func(routing.AttemptBudgetSnapshot)
 	beforeAutoAnswer   func(context.Context)
+	cacheMetricsMu     sync.Mutex
+	cacheMetricsLoaded time.Time
+	cacheMetrics       map[string]routing.CacheMetrics
+}
+
+func (h *handler) loadRoutingCacheMetrics(
+	ctx context.Context,
+) (map[string]routing.CacheMetrics, error) {
+	if h.stats == nil || h.cfg.ID <= 0 {
+		return nil, nil
+	}
+	h.cacheMetricsMu.Lock()
+	defer h.cacheMetricsMu.Unlock()
+	if h.cacheMetrics != nil && time.Since(h.cacheMetricsLoaded) < time.Minute {
+		return cloneRoutingCacheMetrics(h.cacheMetrics), nil
+	}
+	stored, err := h.stats.QueryModelCacheMetrics(ctx, h.cfg.ID)
+	if err != nil {
+		return nil, err
+	}
+	loaded := make(map[string]routing.CacheMetrics, len(stored))
+	for model, item := range stored {
+		loaded[model] = routing.CacheMetrics{
+			Samples: item.Samples, UncachedInputTokens: item.UncachedInputTokens,
+			CacheReadTokens: item.CacheReadTokens, CacheWriteTokens: item.CacheWriteTokens,
+		}
+	}
+	h.cacheMetrics = loaded
+	h.cacheMetricsLoaded = time.Now()
+	return cloneRoutingCacheMetrics(loaded), nil
+}
+
+func cloneRoutingCacheMetrics(
+	metrics map[string]routing.CacheMetrics,
+) map[string]routing.CacheMetrics {
+	if len(metrics) == 0 {
+		return nil
+	}
+	cloned := make(map[string]routing.CacheMetrics, len(metrics))
+	for model, item := range metrics {
+		cloned[model] = item
+	}
+	return cloned
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,8 +174,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	visionCached := false
 	currentTargetIndex := 0
 	modelAttemptIndex := 0
+	sessionBindingModelIndex := 0
 	isAuto := false
 	autoStream := false
+	selfEscalationEnabled := false
+	selfEscalationCount := 0
+	selfEscalationReason := ""
+	selfEscalationModel := ""
 	var sessionKey routing.SessionKey
 	sessionKeyValid := false
 	sessionBindingUsed := false
@@ -169,18 +217,45 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if h.budgetSnapshotSink != nil {
 				h.budgetSnapshotSink(snapshot)
 			}
+			aggregate := callLedger.Aggregate()
+			for _, call := range calls {
+				logRoutingCallDebug(call)
+			}
+			slog.Debug(
+				"routing.debug.completed",
+				"request_trace_id", requestTraceID,
+				"profile", label,
+				"strategy", plan.Strategy(),
+				"route", plan.Route(),
+				"status_code", responseState.statusCode,
+				"final_model", currentAttempt.Model(),
+				"final_upstream_node", currentTargetID,
+				"answer_attempts", snapshot.AnswerAttempts,
+				"auxiliary_calls", snapshot.AuxiliaryCalls,
+				"total_outbound_calls", snapshot.TotalOutboundCalls,
+				"model_switches", snapshot.ModelSwitches,
+				"upstream_node_switches", snapshot.TargetSwitches,
+				"estimated_consumed_usd", debugUSD(aggregate.EstimatedConsumedMicroUSD),
+				"known_actual_usd", debugUSD(aggregate.KnownActualMicroUSD),
+				"all_actual_costs_known", aggregate.AllActualCostsKnown,
+				"elapsed_ms", time.Since(start).Milliseconds(),
+			)
 			if h.stats == nil {
 				return
 			}
-			aggregate := callLedger.Aggregate()
-			h.stats.RecordRoutingTraceWithCallsAsync(stats.RoutingTrace{
+			h.stats.RecordRoutingTraceWithCallsAndCandidatesAsync(stats.RoutingTrace{
 				CorrelationID: aggregate.CorrelationID,
 				ProfileID:     h.cfg.ID, ProfileSlug: label,
 				Protocol: string(h.cfg.Protocol), Path: r.URL.Path,
 				Strategy: plan.Strategy(), Route: plan.Route(),
-				TaskType: classification.TaskType, Risk: string(classification.Risk),
-				ClassificationSource: string(classification.Source),
-				InitialModel:         initialModel, FinalModel: currentAttempt.Model(),
+				TaskType: classification.TaskType, Difficulty: string(classification.Difficulty),
+				Risk: string(classification.Risk), ClassificationSource: string(classification.Source),
+				ClassificationConfidenceBPS: classification.ConfidenceBPS,
+				ClassificationReasonCodes:   append([]string(nil), classification.ReasonCodes...),
+				EstimatedInputTokens:        routeRequest.Facts.EstimatedInputTokens,
+				RequestedOutputTokens:       routeRequest.Facts.RequestedOutputTokens,
+				DecisionReason:              plan.Reason(),
+				InitialModel:                initialModel, FinalModel: currentAttempt.Model(),
 				InitialTarget: initialTargetID, FinalTarget: currentTargetID,
 				VisionMode:                    string(currentAttempt.VisionMode()),
 				StatusCode:                    responseState.statusCode,
@@ -189,6 +264,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				AuxiliaryCalls:                snapshot.AuxiliaryCalls,
 				TotalOutboundCalls:            snapshot.TotalOutboundCalls,
 				ModelSwitches:                 snapshot.ModelSwitches,
+				SelfEscalations:               selfEscalationCount,
+				SelfEscalationReason:          selfEscalationReason,
 				TargetSwitches:                snapshot.TargetSwitches,
 				PlannedWorstCaseCostMicroUSD:  plan.WorstCaseCostMicroUSD(),
 				ConsumedEstimatedCostMicroUSD: aggregate.EstimatedConsumedMicroUSD,
@@ -196,42 +273,38 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				KnownActualCostMicroUSD:       aggregate.KnownActualMicroUSD,
 				AllActualCostsKnown:           aggregate.AllActualCostsKnown,
 				ElapsedMilliseconds:           time.Since(start).Milliseconds(),
-			}, physicalCallsForStats(calls))
+			}, physicalCallsForStats(calls), candidateDecisionsForStats(plan.CandidateDecisions()))
 		}()
-		plan, classification, routeErr = h.routing.RouteWithPreference(
-			requestCtx,
-			r.Header,
-			routeRequest,
-			budget,
-			func(routeID string) routing.SessionPreference {
-				if h.sessions == nil || sessionID == "" {
-					return routing.SessionPreference{}
-				}
-				key, ok := h.sessions.Key(
-					r.Header,
-					sessionID,
-					h.cfg.ID,
-					routeID,
-					routing.SessionPurposeLLM,
-				)
-				if !ok {
-					return routing.SessionPreference{}
-				}
+		preference := routing.SessionPreference{}
+		if h.stats != nil {
+			metrics, err := h.loadRoutingCacheMetrics(requestCtx)
+			if err != nil {
+				slog.Warn("routing.cache_metrics.read_failed", "profile", label, "error", err)
+			} else {
+				preference.CacheMetrics = metrics
+			}
+		}
+		if h.sessions != nil && sessionID != "" {
+			if key, ok := h.sessions.Key(
+				r.Header, sessionID, h.cfg.ID, routing.SessionPurposeLLM,
+			); ok {
 				sessionKey = key
 				sessionKeyValid = true
 				binding, found, err := h.sessions.Get(requestCtx, key)
 				if err != nil {
-					slog.Warn("routing.session.read_failed", "profile", label, "route", routeID, "error", err)
-					return routing.SessionPreference{}
+					slog.Warn("routing.session.read_failed", "profile", label, "error", err)
+				} else if found {
+					preference.TaskType = binding.TaskType
+					preference.Difficulty = binding.Difficulty
+					preference.RouteID = binding.Route
+					preference.Model = binding.Model
+					preference.MinQualityScoreBPS = binding.QualityScoreBPS
+					preference.Strategy = binding.Strategy
 				}
-				if !found {
-					return routing.SessionPreference{}
-				}
-				sessionBindingUsed = true
-				return routing.SessionPreference{
-					Model: binding.Model, MinQualityScoreBPS: binding.QualityScoreBPS,
-				}
-			},
+			}
+		}
+		plan, classification, routeErr = h.routing.RouteWithPreference(
+			requestCtx, r.Header, routeRequest, budget, preference,
 		)
 		if routeErr != nil {
 			if requestCtx.Err() != nil {
@@ -240,6 +313,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeRoutingError(w, routeErr)
 			return
 		}
+		sessionBindingUsed = classification.Source == routing.ClassificationSourceSession
 		modelAttempts = plan.ModelAttempts()
 		visionUsageParser := stats.NewParser("anthropic")
 		if h.cfg.Vision.Transport != profile.VisionTransportAnthropicMessages {
@@ -262,6 +336,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		target = targetURL(currentTargets[0].Upstream(), requestURI)
 		initialModel = currentAttempt.Model()
 		initialTargetID = currentTargetID
+		h.logRoutingPlanDebug(
+			requestTraceID,
+			label,
+			routeRequest,
+			classification,
+			plan,
+		)
 		slog.Info("routing.plan.created",
 			"profile", label,
 			"strategy", plan.Strategy(),
@@ -303,6 +384,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		target = prepared.targetURL
 		body = prepared.body
 		currentNodeLease = prepared.nodeLease
+		selfEscalationEnabled = prepared.selfEscalationEnabled
 		visionCached = currentAttempt.VisionMode() == routing.VisionComposite
 		defer func() { currentNodeLease.release() }()
 	} else if preprocessVision {
@@ -333,6 +415,53 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	answerAttempts := 0
 	nodeAnswerRetryIndex := 0
+	switchAfterSelfEscalation := func(reason string) (bool, error) {
+		nextModelIndex, ok := routing.NextStrongerModelAttempt(modelAttempts, modelAttemptIndex)
+		if !isAuto || !ok {
+			return false, nil
+		}
+		previousModel := currentAttempt.Model()
+		currentNodeLease.release()
+		prepared, err := h.prepareAutoAttemptSequence(
+			requestCtx,
+			r.Header,
+			requestURI,
+			routeRequest,
+			modelAttempts,
+			nextModelIndex,
+			0,
+			autoExecutor,
+			visionCached,
+		)
+		if err != nil {
+			return false, err
+		}
+		modelAttemptIndex = prepared.modelIndex
+		sessionBindingModelIndex = prepared.modelIndex
+		currentAttempt = prepared.attempt
+		currentTargets = prepared.targets
+		currentTargetIndex = prepared.targetIndex
+		currentTargetID = prepared.target.ID()
+		target = prepared.targetURL
+		body = prepared.body
+		currentNodeLease = prepared.nodeLease
+		selfEscalationEnabled = prepared.selfEscalationEnabled
+		visionCached = visionCached || currentAttempt.VisionMode() == routing.VisionComposite
+		nodeAnswerRetryIndex = 0
+		selfEscalationCount++
+		selfEscalationReason = reason
+		selfEscalationModel = previousModel
+		slog.Info(
+			"routing.model.self_escalated",
+			"profile", label,
+			"strategy", plan.Strategy(),
+			"route", plan.Route(),
+			"from_model", previousModel,
+			"to_model", currentAttempt.Model(),
+			"reason_code", reason,
+		)
+		return true, nil
+	}
 	switchAfterFailure := func() (bool, error) {
 		if !isAuto {
 			return false, nil
@@ -371,6 +500,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		target = prepared.targetURL
 		body = prepared.body
 		currentNodeLease = prepared.nodeLease
+		selfEscalationEnabled = prepared.selfEscalationEnabled
 		visionCached = visionCached || currentAttempt.VisionMode() == routing.VisionComposite
 		nodeAnswerRetryIndex = 0
 		if previousModel == currentAttempt.Model() {
@@ -458,7 +588,30 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode < 400 {
 			var captured []byte
 			if isAuto {
-				result := relayAutoSuccess(w, resp, autoStream, routeRequest.Operation)
+				result := relayAutoSuccess(
+					w,
+					resp,
+					autoStream,
+					routeRequest.Operation,
+					selfEscalationEnabled,
+				)
+				if result.selfEscalation.Requested {
+					completeAnswer(resp.StatusCode, "self_escalated", result.captured)
+					switched, switchErr := switchAfterSelfEscalation(
+						result.selfEscalation.ReasonCode,
+					)
+					if switchErr != nil {
+						writeAutoPreparationError(w, requestCtx, switchErr)
+						return
+					}
+					if !switched {
+						http.Error(w, "no stronger model is available", http.StatusBadGateway)
+						return
+					}
+					rule = nil
+					retries = 0
+					continue
+				}
 				if result.err != nil {
 					completeAnswer(resp.StatusCode, "response_io", result.captured)
 					if result.committed {
@@ -511,7 +664,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			slog.Info("<-",
 				"status", resp.StatusCode, "path", r.URL.Path,
-				"attempts", answerAttempts, "elapsed", time.Since(start).Round(time.Millisecond))
+				"attempts", answerAttempts,
+				"self_escalations", selfEscalationCount,
+				"self_escalation_reason", selfEscalationReason,
+				"elapsed", time.Since(start).Round(time.Millisecond))
 			if h.stats != nil {
 				h.stats.RecordAsync(stats.RequestMeta{
 					ProfileID:   h.cfg.ID,
@@ -521,13 +677,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					Path:        r.URL.Path,
 				}, captured, h.parser)
 			}
-			if isAuto && sessionKeyValid && modelAttemptIndex == 0 {
-				h.bindRoutingSession(sessionKey, plan, currentAttempt)
+			if isAuto && sessionKeyValid && modelAttemptIndex == sessionBindingModelIndex {
+				h.bindRoutingSession(sessionKey, plan, classification, currentAttempt)
 			}
 			if isAuto {
 				h.submitEvaluation(
 					r.Header, requestURI, routeRequest, classification, plan,
 					currentAttempt, captured, time.Since(start),
+					selfEscalationEnabled, selfEscalationCount, selfEscalationModel,
 				)
 			}
 			return
@@ -583,6 +740,118 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *handler) logRoutingPlanDebug(
+	requestTraceID string,
+	profileSlug string,
+	request routing.Request,
+	classification routing.Classification,
+	plan routing.ExecutionPlan,
+) {
+	route := h.cfg.AutoRouting.Strategy.Routes[plan.Route()]
+	slog.Debug(
+		"routing.debug.classification",
+		"request_trace_id", requestTraceID,
+		"profile", profileSlug,
+		"strategy", plan.Strategy(),
+		"task_type", classification.TaskType,
+		"difficulty", classification.Difficulty,
+		"risk", classification.Risk,
+		"confidence_percent", float64(classification.ConfidenceBPS)/100,
+		"source", classification.Source,
+		"reason_codes", classification.ReasonCodes,
+		"route", plan.Route(),
+		"uses_default_route", h.routing.UsesDefaultRouteFor(classification.TaskType, classification.Difficulty),
+		"estimated_input_tokens", request.Facts.EstimatedInputTokens,
+		"requested_output_tokens", request.Facts.RequestedOutputTokens,
+		"image_count", request.Facts.ImageCount,
+		"has_tools", request.Facts.HasTools,
+		"requires_structured_output", request.Facts.RequiresStructuredOutput,
+		"stream", request.Facts.Stream,
+	)
+	for _, candidate := range plan.CandidateDecisions() {
+		slog.Debug(
+			"routing.debug.candidate",
+			"request_trace_id", requestTraceID,
+			"profile", profileSlug,
+			"strategy", plan.Strategy(),
+			"route", plan.Route(),
+			"model", candidate.Model,
+			"decision", candidate.Decision,
+			"reason_code", candidate.Reason,
+			"quality_percent", float64(candidate.QualityScoreBPS)/100,
+			"route_min_quality_percent", float64(route.MinQualityBPS)/100,
+			"severe_error_percent", float64(candidate.SevereErrorRateBPS)/100,
+			"route_max_severe_error_percent", float64(route.MaxSevereErrorRateBPS)/100,
+			"expected_cost_usd", debugUSD(candidate.ExpectedCostMicroUSD),
+			"answer_worst_cost_usd", debugUSD(candidate.AnswerCallCostMicroUSD),
+			"vision_call_cost_usd", debugUSD(candidate.VisionCallCostMicroUSD),
+			"vision_mode", candidate.VisionMode,
+			"upstream_nodes", candidate.UpstreamNodeIDs,
+		)
+	}
+	for index, attempt := range plan.ModelAttempts() {
+		nodes := attempt.Targets()
+		nodeIDs := make([]string, 0, len(nodes))
+		for _, node := range nodes {
+			nodeIDs = append(nodeIDs, node.ID())
+		}
+		slog.Debug(
+			"routing.debug.attempt_plan",
+			"request_trace_id", requestTraceID,
+			"profile", profileSlug,
+			"attempt_index", index,
+			"model", attempt.Model(),
+			"quality_percent", float64(attempt.QualityScoreBPS())/100,
+			"expected_cost_usd", debugUSD(attempt.ExpectedCostMicroUSD()),
+			"vision_mode", attempt.VisionMode(),
+			"upstream_nodes", nodeIDs,
+		)
+	}
+	graph := plan.CallGraph()
+	slog.Debug(
+		"routing.debug.budget_plan",
+		"request_trace_id", requestTraceID,
+		"profile", profileSlug,
+		"answer_calls", graph.AnswerCalls,
+		"auxiliary_calls", graph.AuxiliaryCalls,
+		"total_outbound_calls", graph.TotalOutboundCalls,
+		"model_switches", graph.ModelSwitches,
+		"upstream_node_switches", graph.TargetSwitches,
+		"reachable_nodes", len(graph.Attempts),
+		"graph_worst_case_cost_usd", debugUSD(graph.WorstCaseCostMicroUSD),
+		"request_worst_case_cost_usd", debugUSD(plan.WorstCaseCostMicroUSD()),
+		"request_deadline", graph.Deadline,
+	)
+}
+
+func debugUSD(microUSD int64) float64 {
+	return float64(microUSD) / 1_000_000
+}
+
+func logRoutingCallDebug(call routing.CallLedgerEntry) {
+	slog.Debug(
+		"routing.debug.call",
+		"request_trace_id", call.CorrelationID,
+		"sequence", call.Sequence,
+		"kind", call.Kind,
+		"model", call.Model,
+		"upstream_node", call.Target,
+		"image_index", call.ImageIndex,
+		"retry_index", call.RetryIndex,
+		"model_switch_index", call.ModelSwitchIndex,
+		"upstream_node_switch_index", call.TargetSwitchIndex,
+		"estimated_cost_usd", debugUSD(call.EstimatedMicroUSD),
+		"actual_cost_known", call.ActualCostKnown,
+		"actual_cost_usd", debugUSD(call.ActualMicroUSD),
+		"input_tokens", call.Usage.InputTokens,
+		"output_tokens", call.Usage.OutputTokens,
+		"cache_read_tokens", call.Usage.CacheReadTokens,
+		"cache_write_tokens", call.Usage.CacheCreationTokens,
+		"status_code", call.StatusCode,
+		"outcome", call.Outcome,
+	)
+}
+
 func recoverableTransportFailure(class provider.FailureClass) bool {
 	switch class {
 	case provider.FailureOperationTimeout, provider.FailureUnknownTransport:
@@ -603,6 +872,7 @@ func singleSessionID(headers http.Header) string {
 func (h *handler) bindRoutingSession(
 	key routing.SessionKey,
 	plan routing.ExecutionPlan,
+	classification routing.Classification,
 	attempt routing.ModelAttemptPlan,
 ) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -610,7 +880,9 @@ func (h *handler) bindRoutingSession(
 	if err := h.sessions.Bind(ctx, key, routing.SessionBinding{
 		ProfileID: h.cfg.ID,
 		Route:     plan.Route(), Purpose: routing.SessionPurposeLLM,
-		Model: attempt.Model(), QualityScoreBPS: attempt.QualityScoreBPS(),
+		TaskType:   classification.TaskType,
+		Difficulty: classification.Difficulty,
+		Model:      attempt.Model(), QualityScoreBPS: attempt.QualityScoreBPS(),
 		Strategy: plan.Strategy(),
 	}, h.cfg.AutoRouting.SessionTTL); err != nil {
 		slog.Warn(
@@ -663,26 +935,51 @@ func (h *handler) submitEvaluation(
 	selected routing.ModelAttemptPlan,
 	captured []byte,
 	onlineLatency time.Duration,
+	selfEscalationAvailable bool,
+	selfEscalationCount int,
+	selfEscalationModel string,
 ) {
 	config := h.cfg.AutoRouting.DynamicOptimization
 	if h.evaluation == nil || !config.Enabled || len(captured) == 0 ||
 		len(captured) > maxEvaluationContentBytes || request.Facts.HasTools {
 		return
 	}
-	pair, ok := h.routing.EvaluationPair(request, classification, selected.Model())
+	evaluationModel := selected.Model()
+	if selfEscalationCount > 0 && selfEscalationModel != "" {
+		evaluationModel = selfEscalationModel
+	}
+	pair, ok := h.routing.EvaluationPair(request, classification, evaluationModel)
 	if !ok {
 		return
 	}
+	onlineCost := evaluationAttemptCost(selected, request.Facts.ImageCount)
+	if model, found := h.cfg.Models[evaluationModel]; found {
+		if actual, known := responseActualCost(captured, h.parser, model); known &&
+			actual <= selected.AnswerCallCostMicroUSD() {
+			onlineCost = addEvaluationCost(
+				actual,
+				multiplyEvaluationCost(selected.VisionCallCostMicroUSD(), request.Facts.ImageCount),
+			)
+		}
+	}
 	online := evaluation.ParseModelOutput(
 		request.Operation, captured, request.Facts,
-		evaluationAttemptCost(selected, request.Facts.ImageCount),
+		onlineCost,
 		onlineLatency.Milliseconds(),
 	)
 	comparison := evaluation.ComparisonTask{
 		ProfileID: h.cfg.ID, Strategy: plan.Strategy(), Route: plan.Route(),
-		TaskType: classification.TaskType, CandidateModel: pair.Candidate.Model(),
+		TaskType: classification.TaskType, Difficulty: string(classification.Difficulty),
+		Risk: string(classification.Risk), VisionMode: string(plan.VisionMode()),
+		CandidateModel: pair.Candidate.Model(),
 		ReferenceModel: pair.Reference.Model(), ReviewerModel: config.ReviewerModel,
 		Question: request.EvaluationText(),
+	}
+	switch {
+	case selfEscalationCount > 0 && pair.Candidate.Model() == selfEscalationModel:
+		comparison.EscalationObservation = evaluation.EscalationRequested
+	case selfEscalationAvailable && selected.Model() == pair.Candidate.Model():
+		comparison.EscalationObservation = evaluation.EscalationNotRequested
 	}
 	switch selected.Model() {
 	case pair.Candidate.Model():
@@ -734,9 +1031,10 @@ func (h *handler) submitEvaluation(
 		}
 		attemptTarget := targetURL(targets[0].Upstream(), requestURI)
 		started := time.Now()
+		hardCostBefore := costTracker.total()
 		failedOutput := func() evaluation.ModelOutput {
 			return evaluation.ModelOutput{
-				CostMicroUSD: costTracker.total(),
+				CostMicroUSD: costTracker.total() - hardCostBefore,
 				LatencyMS:    time.Since(started).Milliseconds(),
 			}
 		}
@@ -773,9 +1071,17 @@ func (h *handler) submitEvaluation(
 			return failedOutput(), err
 		}
 		responseBody, err := readEvaluationResponse(response)
+		generatedCost := costTracker.total() - hardCostBefore
+		if modelConfig, found := h.cfg.Models[attempt.Model()]; found {
+			if actual, known := responseActualCost(responseBody, h.parser, modelConfig); known &&
+				actual <= attempt.AnswerCallCostMicroUSD() {
+				generatedCost -= attempt.AnswerCallCostMicroUSD()
+				generatedCost = addEvaluationCost(generatedCost, actual)
+			}
+		}
 		output := evaluation.ParseModelOutput(
 			request.Operation, responseBody, request.Facts,
-			costTracker.total(),
+			generatedCost,
 			time.Since(started).Milliseconds(),
 		)
 		if err != nil {
@@ -817,6 +1123,10 @@ func (h *handler) submitEvaluation(
 		}
 		verdict, err := evaluation.ParseReviewVerdict(request.Operation, responseBody)
 		verdict.ReviewerCostMicroUSD = reviewerCost
+		if actual, known := responseActualCost(responseBody, h.parser, reviewer); known &&
+			actual <= reviewerCost {
+			verdict.ReviewerCostMicroUSD = actual
+		}
 		return verdict, err
 	}
 	workflow := evaluation.NewWorkflow(nil)
@@ -829,7 +1139,7 @@ func (h *handler) submitEvaluation(
 		Run: func(ctx context.Context) (evaluation.Result, error) {
 			result, err := workflow.Evaluate(ctx, comparison)
 			spent := costTracker.total()
-			if result.SpentMicroUSD != spent || spent > estimatedCost {
+			if result.SpentMicroUSD < 0 || result.SpentMicroUSD > spent || spent > estimatedCost {
 				return evaluation.Result{SpentMicroUSD: spent}, errors.Join(err, errEvaluationCostInvariant)
 			}
 			return result, err
@@ -845,6 +1155,26 @@ func (h *handler) submitEvaluation(
 		"reference_model", pair.Reference.Model(),
 		"result", result,
 	)
+}
+
+func responseActualCost(
+	body []byte,
+	parser stats.Parser,
+	model profile.ModelCapability,
+) (int64, bool) {
+	if parser == nil {
+		return 0, false
+	}
+	usage, ok := parser.Parse(body)
+	if !ok {
+		return 0, false
+	}
+	return routing.ActualCallCost(routing.CallUsage{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		InputPresent: usage.InputPresent, OutputPresent: usage.OutputPresent,
+		CacheReadTokens: usage.CacheReadTokens, CacheCreationTokens: usage.CacheCreationTokens,
+		InputIncludesCache: usage.InputIncludesCache, Present: true,
+	}, model)
 }
 
 func (h *handler) prepareEvaluationAttempt(
@@ -1039,9 +1369,10 @@ func (w *responseStateWriter) Unwrap() http.ResponseWriter {
 }
 
 type relayResult struct {
-	captured  []byte
-	committed bool
-	err       error
+	captured       []byte
+	committed      bool
+	selfEscalation selfEscalationDecision
+	err            error
 }
 
 func relayAutoSuccess(
@@ -1049,12 +1380,21 @@ func relayAutoSuccess(
 	resp *http.Response,
 	streaming bool,
 	operation llmrequest.Operation,
+	detectSelfEscalation bool,
 ) relayResult {
 	defer resp.Body.Close()
 	if !streaming {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return relayResult{err: err}
+		}
+		if detectSelfEscalation {
+			decision, detectErr := detectSelfEscalationResponse(operation, body)
+			if detectErr != nil || decision.Requested {
+				return relayResult{
+					captured: body, selfEscalation: decision, err: detectErr,
+				}
+			}
 		}
 		copyHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
@@ -1065,6 +1405,7 @@ func relayAutoSuccess(
 	flusher, canFlush := w.(http.Flusher)
 	var captured bytes.Buffer
 	var pending bytes.Buffer
+	var streamGuard selfEscalationStreamGuard
 	committed := false
 	buffer := make([]byte, 4096)
 	for {
@@ -1073,8 +1414,18 @@ func relayAutoSuccess(
 			chunk := buffer[:n]
 			captured.Write(chunk)
 			if committed {
-				if _, err := w.Write(chunk); err != nil {
-					return relayResult{captured: captured.Bytes(), committed: true, err: err}
+				emit := chunk
+				if detectSelfEscalation {
+					var guardErr error
+					emit, guardErr = streamGuard.Filter(chunk)
+					if guardErr != nil {
+						return relayResult{captured: captured.Bytes(), committed: true, err: guardErr}
+					}
+				}
+				if len(emit) > 0 {
+					if _, err := w.Write(emit); err != nil {
+						return relayResult{captured: captured.Bytes(), committed: true, err: err}
+					}
 				}
 				if canFlush {
 					flusher.Flush()
@@ -1088,15 +1439,38 @@ func relayAutoSuccess(
 						errors.New("stream exceeded pre-commit buffer limit"),
 					)}
 				}
-				ready, err := hasCompleteSSEEvent(pending.Bytes(), operation)
+				var ready bool
+				var decision selfEscalationDecision
+				var err error
+				if detectSelfEscalation {
+					decision, ready, err = detectSelfEscalationStream(
+						operation, pending.Bytes(),
+					)
+				} else {
+					ready, err = hasCompleteSSEEvent(pending.Bytes(), operation)
+				}
 				if err != nil {
 					return relayResult{err: err}
 				}
+				if decision.Requested {
+					return relayResult{
+						captured: captured.Bytes(), selfEscalation: decision,
+					}
+				}
 				if ready {
+					emit := pending.Bytes()
+					if detectSelfEscalation {
+						emit, err = streamGuard.Filter(emit)
+						if err != nil {
+							return relayResult{captured: captured.Bytes(), err: err}
+						}
+					}
 					copyHeaders(w.Header(), resp.Header)
 					w.WriteHeader(resp.StatusCode)
-					if _, err := w.Write(pending.Bytes()); err != nil {
-						return relayResult{captured: captured.Bytes(), committed: true, err: err}
+					if len(emit) > 0 {
+						if _, err := w.Write(emit); err != nil {
+							return relayResult{captured: captured.Bytes(), committed: true, err: err}
+						}
 					}
 					pending.Reset()
 					committed = true
@@ -1109,6 +1483,16 @@ func relayAutoSuccess(
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
 				if committed {
+					if detectSelfEscalation {
+						if remaining := streamGuard.Flush(); len(remaining) > 0 {
+							if _, err := w.Write(remaining); err != nil {
+								return relayResult{captured: captured.Bytes(), committed: true, err: err}
+							}
+							if canFlush {
+								flusher.Flush()
+							}
+						}
+					}
 					return relayResult{captured: captured.Bytes(), committed: true}
 				}
 				return relayResult{err: errors.New("stream ended before a complete protocol event")}
@@ -1125,18 +1509,23 @@ func (h *handler) prepareAutoAttempt(
 	request routing.Request,
 	attempt routing.ModelAttemptPlan,
 	nodeLease *autoNodeLease,
-) ([]byte, error) {
+	selfEscalation bool,
+) ([]byte, bool, error) {
 	body, err := request.WithModel(attempt.Model())
+	injected := false
+	if selfEscalation {
+		body, injected, err = request.WithModelAndSelfEscalation(attempt.Model())
+	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if attempt.VisionMode() != routing.VisionComposite {
-		return body, nil
+		return body, injected, nil
 	}
 	if h.vision == nil {
-		return nil, routing.ErrNoCapableModel
+		return nil, false, routing.ErrNoCapableModel
 	}
-	return h.vision.ProcessOperationTargetWithTickets(
+	body, err = h.vision.ProcessOperationTargetWithTickets(
 		ctx,
 		headers,
 		request.Operation,
@@ -1144,17 +1533,19 @@ func (h *handler) prepareAutoAttempt(
 		target,
 		nodeLease.visionReservation(h.cfg.Vision.Model),
 	)
+	return body, injected, err
 }
 
 type preparedAutoAttempt struct {
-	modelIndex  int
-	targetIndex int
-	attempt     routing.ModelAttemptPlan
-	targets     []routing.TargetPlan
-	target      routing.TargetPlan
-	targetURL   string
-	body        []byte
-	nodeLease   *autoNodeLease
+	modelIndex            int
+	targetIndex           int
+	attempt               routing.ModelAttemptPlan
+	targets               []routing.TargetPlan
+	target                routing.TargetPlan
+	targetURL             string
+	body                  []byte
+	nodeLease             *autoNodeLease
+	selfEscalationEnabled bool
 }
 
 func (h *handler) prepareAutoAttemptSequence(
@@ -1195,13 +1586,24 @@ func (h *handler) prepareAutoAttemptSequence(
 			}
 			return preparedAutoAttempt{}, reserveErr
 		}
-		body, err := h.prepareAutoAttempt(ctx, headers, attemptTarget, request, attempt, nodeLease)
+		_, canEscalate := routing.NextStrongerModelAttempt(attempts, modelIndex)
+		selfEscalation := h.cfg.AutoRouting.SelfEscalation.Enabled && canEscalate
+		body, injected, err := h.prepareAutoAttempt(
+			ctx,
+			headers,
+			attemptTarget,
+			request,
+			attempt,
+			nodeLease,
+			selfEscalation,
+		)
 		if err == nil {
 			nodeLease.releaseUnusedVision()
 			return preparedAutoAttempt{
 				modelIndex: modelIndex, targetIndex: targetIndex,
 				attempt: attempt, targets: targets, target: target,
 				targetURL: attemptTarget, body: body, nodeLease: nodeLease,
+				selfEscalationEnabled: injected,
 			}, nil
 		}
 		nodeLease.release()

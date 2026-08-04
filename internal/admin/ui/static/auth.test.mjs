@@ -265,7 +265,7 @@ test("authenticated bootstrap renders Overview as the default destination", asyn
     },
   });
 
-  assert.deepEqual(navigationTexts(root), ["概览", "Profiles", "统计", "系统", "退出"]);
+  assert.deepEqual(navigationTexts(root), ["概览", "Profiles", "统计", "系统", "帮助", "退出"]);
   assert.equal(elementsByClass(root, "desktop-stage").length, 1);
   assert.equal(elementsByClass(root, "app-window").length, 1);
   assert.equal(elementsByClass(root, "window-control").length, 3);
@@ -340,7 +340,7 @@ test("password success refreshes the rotated Session before entering Overview", 
     ["change", "admin", "安全密码一二三四五六七八"],
     "session",
   ]);
-  assert.deepEqual(navigationTexts(root), ["概览", "Profiles", "统计", "系统", "退出"]);
+  assert.deepEqual(navigationTexts(root), ["概览", "Profiles", "统计", "系统", "帮助", "退出"]);
 });
 
 test("authenticated bootstrap renders a stable not-found page for an unknown path", async (t) => {

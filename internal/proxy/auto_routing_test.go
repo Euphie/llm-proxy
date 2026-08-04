@@ -57,6 +57,292 @@ func TestAutoStreamingRetriesOnlyBeforeClientCommit(t *testing.T) {
 	}
 }
 
+func TestDetectNonStreamingSelfEscalationAcrossProtocols(t *testing.T) {
+	name := routing.SelfEscalationToolName
+	tests := []struct {
+		name      string
+		operation routing.Operation
+		body      string
+	}{
+		{
+			name: "anthropic", operation: routing.OperationAnthropicMessages,
+			body: `{"content":[{"type":"tool_use","id":"tool-1","name":"` + name + `","input":{"reason_code":"insufficient_reasoning"}}],"stop_reason":"tool_use"}`,
+		},
+		{
+			name: "chat completions", operation: routing.OperationOpenAIChatCompletions,
+			body: `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"` + name + `","arguments":"{\"reason_code\":\"insufficient_reasoning\"}"}}]}}]}`,
+		},
+		{
+			name: "responses", operation: routing.OperationOpenAIResponses,
+			body: `{"output":[{"type":"function_call","call_id":"call-1","name":"` + name + `","arguments":"{\"reason_code\":\"insufficient_reasoning\"}"}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := detectSelfEscalationResponse(tt.operation, []byte(tt.body))
+			if err != nil || !decision.Requested || decision.ReasonCode != "insufficient_reasoning" {
+				t.Fatalf("decision=%+v err=%v", decision, err)
+			}
+		})
+	}
+}
+
+func TestDetectNonStreamingSelfEscalationRejectsLateHiddenTool(t *testing.T) {
+	body := []byte(`{"content":[{"type":"text","text":"partial answer"},{"type":"tool_use","id":"tool-1","name":"` + routing.SelfEscalationToolName + `","input":{"reason_code":"other"}}]}`)
+	if decision, err := detectSelfEscalationResponse(routing.OperationAnthropicMessages, body); err == nil || decision.Requested {
+		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+}
+
+func TestAutoRoutingSelfEscalationReplaysOriginalRequestOnStrongerModel(t *testing.T) {
+	var models []string
+	var strongBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		models = append(models, model)
+		if model == "fast" && bytes.Contains(root["tools"], []byte(routing.SelfEscalationToolName)) {
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"tool_use","id":"tool-1","name":"`+routing.SelfEscalationToolName+`","input":{"reason_code":"insufficient_reasoning"}}],"stop_reason":"tool_use"}`)
+			return
+		}
+		if model == "fast" {
+			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"candidate answer"}]}`)
+			return
+		}
+		if len(root["system"]) > 0 {
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"dimensions\":{\"correctness\":\"tie\",\"completeness\":\"tie\",\"instruction_following\":\"tie\",\"format_tool_safety\":\"tie\",\"task_completion\":\"tie\"},\"severe_a\":true,\"severe_b\":true}"}]}`)
+			return
+		}
+		strongBody = append([]byte(nil), body...)
+		_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"strong answer"}],"stop_reason":"end_turn"}`)
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.SelfEscalation.Enabled = true
+	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
+		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
+		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
+		TaskTimeout: time.Minute,
+	}
+	submitter := &capturingEvaluationSubmitter{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好，解释这个复杂问题"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	NewWithEvaluation(runtime, server.Client(), nil, nil, submitter).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != `{"model":"strong","content":[{"type":"text","text":"strong answer"}],"stop_reason":"end_turn"}` {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if len(models) != 2 || models[0] != "fast" || models[1] != "strong" {
+		t.Fatalf("models=%v", models)
+	}
+	if !bytes.Contains(strongBody, []byte("解释这个复杂问题")) ||
+		bytes.Contains(strongBody, []byte(routing.SelfEscalationToolName)) ||
+		bytes.Contains(strongBody, []byte("insufficient_reasoning")) {
+		t.Fatalf("strong request did not use only the original request: %s", strongBody)
+	}
+	if submitter.calls != 1 {
+		t.Fatalf("evaluation submissions=%d", submitter.calls)
+	}
+	result, err := submitter.job.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Evidence == nil || !result.Evidence.SelfEscalationEligible ||
+		!result.Evidence.SelfEscalationRequested || !result.Evidence.SelfEscalationSupported ||
+		result.Evidence.SelfEscalationUnnecessary || result.Evidence.SelfEscalationMissed ||
+		result.Evidence.CandidateModel != "fast" || result.Evidence.ReferenceModel != "strong" {
+		t.Fatalf("evaluation evidence=%+v", result.Evidence)
+	}
+}
+
+func TestOpenAISelfEscalationReplaysOriginalRequestAcrossOperations(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		request     string
+		fastReply   string
+		strongReply string
+	}{
+		{
+			name: "chat completions", path: "/v1/chat/completions",
+			request:     `{"model":"auto","max_completion_tokens":1000,"messages":[{"role":"user","content":"你好，简单回答"}]}`,
+			fastReply:   `{"model":"fast","choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"` + routing.SelfEscalationToolName + `","arguments":"{\"reason_code\":\"missing_knowledge\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			strongReply: `{"model":"strong","choices":[{"message":{"role":"assistant","content":"strong answer"},"finish_reason":"stop"}]}`,
+		},
+		{
+			name: "responses", path: "/v1/responses",
+			request:     `{"model":"auto","max_output_tokens":1000,"input":"你好，简单回答"}`,
+			fastReply:   `{"model":"fast","output":[{"type":"function_call","call_id":"call-1","name":"` + routing.SelfEscalationToolName + `","arguments":"{\"reason_code\":\"missing_knowledge\"}"}]}`,
+			strongReply: `{"model":"strong","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"strong answer"}]}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var models []string
+			var strongBody []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				var root map[string]json.RawMessage
+				_ = json.Unmarshal(body, &root)
+				var model string
+				_ = json.Unmarshal(root["model"], &model)
+				models = append(models, model)
+				if model == "fast" {
+					if !bytes.Contains(body, []byte(routing.SelfEscalationToolName)) {
+						t.Errorf("fast request has no escalation tool: %s", body)
+					}
+					_, _ = io.WriteString(w, tt.fastReply)
+					return
+				}
+				strongBody = append([]byte(nil), body...)
+				_, _ = io.WriteString(w, tt.strongReply)
+			}))
+			defer server.Close()
+			runtime := autoProxyRuntime(t, server.URL, false)
+			runtime.Protocol = profile.ProtocolOpenAI
+			runtime.AutoRouting.SelfEscalation.Enabled = true
+			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.request))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			New(runtime, server.Client(), nil).ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK || response.Body.String() != tt.strongReply ||
+				len(models) != 2 || models[0] != "fast" || models[1] != "strong" {
+				t.Fatalf("status=%d models=%v body=%q", response.Code, models, response.Body.String())
+			}
+			if !bytes.Contains(strongBody, []byte("你好，简单回答")) ||
+				bytes.Contains(strongBody, []byte(routing.SelfEscalationToolName)) ||
+				bytes.Contains(strongBody, []byte("missing_knowledge")) {
+				t.Fatalf("strong request did not replay only the original request: %s", strongBody)
+			}
+		})
+	}
+}
+
+func TestDetectStreamingSelfEscalationAcrossProtocols(t *testing.T) {
+	name := routing.SelfEscalationToolName
+	tests := []struct {
+		name      string
+		operation routing.Operation
+		stream    string
+	}{
+		{
+			name: "anthropic", operation: routing.OperationAnthropicMessages,
+			stream: "event: message_start\n" +
+				`data: {"type":"message_start","message":{}}` + "\n\n" +
+				"event: content_block_start\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"` + name + `","input":{}}}` + "\n\n",
+		},
+		{
+			name: "chat completions", operation: routing.OperationOpenAIChatCompletions,
+			stream: `data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}` + "\n\n" +
+				`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"` + name + `"}}]}}]}` + "\n\n",
+		},
+		{
+			name: "responses", operation: routing.OperationOpenAIResponses,
+			stream: "event: response.created\n" +
+				`data: {"type":"response.created","response":{}}` + "\n\n" +
+				"event: response.output_item.added\n" +
+				`data: {"type":"response.output_item.added","item":{"type":"function_call","name":"` + name + `"}}` + "\n\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, ready, err := detectSelfEscalationStream(tt.operation, []byte(tt.stream))
+			if err != nil || ready || !decision.Requested {
+				t.Fatalf("decision=%+v ready=%v err=%v", decision, ready, err)
+			}
+		})
+	}
+}
+
+func TestAutoRoutingStreamingSelfEscalationNeverLeaksHiddenTool(t *testing.T) {
+	fastStream := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"model":"fast"}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"` + routing.SelfEscalationToolName + `","input":{}}}` + "\n\n"
+	strongStream := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"model":"strong"}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"strong answer"}}` + "\n\n"
+	var models []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(body, &root)
+		var model string
+		_ = json.Unmarshal(root["model"], &model)
+		models = append(models, model)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if model == "fast" {
+			_, _ = io.WriteString(w, fastStream)
+			return
+		}
+		_, _ = io.WriteString(w, strongStream)
+	}))
+	defer server.Close()
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.SelfEscalation.Enabled = true
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"你好，继续复杂任务"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != strongStream ||
+		strings.Contains(response.Body.String(), routing.SelfEscalationToolName) ||
+		len(models) != 2 || models[0] != "fast" || models[1] != "strong" {
+		t.Fatalf("status=%d models=%v body=%q", response.Code, models, response.Body.String())
+	}
+}
+
+func TestRelayAutoStreamingNeverLeaksLateSplitEscalationTool(t *testing.T) {
+	prefix := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"model":"fast"}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer"}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"llm_proxy_re`
+	suffix := `quest_stronger_model","input":{}}}` + "\n\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       &chunkReadCloser{chunks: [][]byte{[]byte(prefix), []byte(suffix)}},
+	}
+	recorder := httptest.NewRecorder()
+
+	result := relayAutoSuccess(
+		recorder, response, true, routing.OperationAnthropicMessages, true,
+	)
+
+	if !result.committed || result.err == nil {
+		t.Fatalf("result=%+v body=%q", result, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "llm_proxy_") ||
+		strings.Contains(recorder.Body.String(), routing.SelfEscalationToolName) {
+		t.Fatalf("late hidden tool leaked: %q", recorder.Body.String())
+	}
+}
+
 func TestAutoStreamingNeverRetriesAfterClientCommit(t *testing.T) {
 	validEvent := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"first\"}}\n\n"
 	transport := &sequenceTransport{responses: []transportResponse{
@@ -465,7 +751,7 @@ func TestAutoRoutingAnalyzesUncertainRequestAndRewritesModel(t *testing.T) {
 		_ = json.Unmarshal(root["model"], &model)
 		if _, analyzer := root["system"]; analyzer {
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9100}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9100}"}]}`)
 			return
 		}
 		answerCalls.Add(1)
@@ -538,11 +824,11 @@ func TestSuccessfulAutoRequestOnlyEnqueuesAsyncBlindComparison(t *testing.T) {
 		_ = json.Unmarshal(body, &root)
 		calls.Add(1)
 		switch {
-		case len(root.System) > 0:
+		case root.Model == "strong" && len(root.System) > 0:
 			if bytes.Contains(body, []byte("fast")) {
 				t.Errorf("blind review leaked candidate model: %s", body)
 			}
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"winner\":\"tie\",\"severe_a\":false,\"severe_b\":false}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"dimensions\":{\"correctness\":\"tie\",\"completeness\":\"tie\",\"instruction_following\":\"tie\",\"format_tool_safety\":\"tie\",\"task_completion\":\"tie\"},\"severe_a\":false,\"severe_b\":false}"}]}`)
 		case root.Model == "fast":
 			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`)
 		case root.Model == "strong":
@@ -557,6 +843,7 @@ func TestSuccessfulAutoRequestOnlyEnqueuesAsyncBlindComparison(t *testing.T) {
 	defer server.Close()
 
 	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.SelfEscalation.Enabled = true
 	runtime.AutoRouting.DynamicOptimization = profile.DynamicOptimizationRuntime{
 		Enabled: true, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100_000,
 		ReviewerModel: "strong", MaxConcurrency: 1, QueueCapacity: 4,
@@ -585,6 +872,8 @@ func TestSuccessfulAutoRequestOnlyEnqueuesAsyncBlindComparison(t *testing.T) {
 	}
 	if calls.Load() != 3 || result.Evidence == nil || result.Evidence.Outcome != evaluation.OutcomeTie ||
 		result.Evidence.CandidateModel != "fast" || result.Evidence.ReferenceModel != "strong" ||
+		!result.Evidence.SelfEscalationEligible || result.Evidence.SelfEscalationRequested ||
+		result.Evidence.SelfEscalationMissed ||
 		result.Evidence.ReviewerModel != "strong" || result.SpentMicroUSD <= 0 ||
 		result.SpentMicroUSD > submitter.job.EstimatedCostMicroUSD {
 		t.Fatalf("upstream_calls=%d job=%+v result=%+v evidence=%+v",
@@ -625,10 +914,10 @@ func TestAsyncEvaluationReservesAndChargesEveryPhysicalVisionRetry(t *testing.T)
 			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"visual evidence"}]}`)
 		case model == "fast" && root["system"] != nil:
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 		case model == "strong" && root["system"] != nil:
 			reviewerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"winner\":\"tie\",\"severe_a\":false,\"severe_b\":false}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"dimensions\":{\"correctness\":\"tie\",\"completeness\":\"tie\",\"instruction_following\":\"tie\",\"format_tool_safety\":\"tie\",\"task_completion\":\"tie\"},\"severe_a\":false,\"severe_b\":false}"}]}`)
 		case model == "strong":
 			onlineCalls.Add(1)
 			_, _ = io.WriteString(w, `{"model":"strong","content":[{"type":"text","text":"online answer"}]}`)
@@ -780,7 +1069,7 @@ func TestAsyncEvaluationFailureChargesVisionCallsWithoutUnsentAnswer(t *testing.
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = io.WriteString(w, `{"error":"vision overloaded"}`)
 		case model == "fast" && root["system"] != nil:
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 		case model == "strong" && root["system"] != nil:
 			reviewerCalls.Add(1)
 			http.Error(w, "reviewer must not run", http.StatusInternalServerError)
@@ -841,7 +1130,7 @@ func TestAsyncEvaluationPreCanceledAnswerDoesNotChargeOrEnterTransport(t *testin
 		_ = json.Unmarshal(root["model"], &model)
 		switch {
 		case model == "fast" && root["system"] != nil:
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 		case model == "fast":
 			_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`)
 		default:
@@ -892,12 +1181,12 @@ func TestAsyncEvaluationCanceledBeforeReviewerChargesOnlyAnswerTransport(t *test
 		responseBody := ""
 		switch {
 		case model == "fast" && root["system"] != nil:
-			responseBody = `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`
+			responseBody = `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`
 		case model == "fast":
 			responseBody = `{"model":"fast","content":[{"type":"text","text":"online answer"}]}`
 		case model == "strong" && root["system"] != nil:
 			reviewerCalls.Add(1)
-			responseBody = `{"content":[{"type":"text","text":"{\"winner\":\"tie\",\"severe_a\":false,\"severe_b\":false}"}]}`
+			responseBody = `{"content":[{"type":"text","text":"{\"dimensions\":{\"correctness\":\"tie\",\"completeness\":\"tie\",\"instruction_following\":\"tie\",\"format_tool_safety\":\"tie\",\"task_completion\":\"tie\"},\"severe_a\":false,\"severe_b\":false}"}]}`
 		case model == "strong":
 			answerCalls.Add(1)
 			if cancelEvaluation != nil {
@@ -1164,6 +1453,7 @@ func (s *capturingEvaluationSubmitter) Submit(job evaluation.Job) evaluation.Sub
 
 func TestAutoRoutingSessionStaysOnItsModelAndOnlyUpgrades(t *testing.T) {
 	models := make([]string, 0, 3)
+	var analyzerCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(routing.SessionIDHeader) != "" {
 			t.Error("internal Session header reached upstream")
@@ -1174,7 +1464,8 @@ func TestAutoRoutingSessionStaysOnItsModelAndOnlyUpgrades(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&request)
 		if len(request.System) > 0 {
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9000}"}]}`)
+			analyzerCalls.Add(1)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9000}"}]}`)
 			return
 		}
 		models = append(models, request.Model)
@@ -1216,12 +1507,13 @@ func TestAutoRoutingSessionStaysOnItsModelAndOnlyUpgrades(t *testing.T) {
 		return response
 	}
 
-	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`)
+	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"比较两种分布式架构并给出迁移方案"}]}`)
 	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"text","text":"比较这个布局"}]}]}`)
-	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"你好"}]}`)
+	send(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"继续说明迁移步骤"}]}`)
 
-	if len(models) != 3 || models[0] != "fast" || models[1] != "strong" || models[2] != "strong" {
-		t.Fatalf("models=%v", models)
+	if len(models) != 3 || models[0] != "fast" || models[1] != "strong" ||
+		models[2] != "strong" || analyzerCalls.Load() != 1 {
+		t.Fatalf("models=%v analyzer_calls=%d", models, analyzerCalls.Load())
 	}
 	var model string
 	var quality int
@@ -1271,13 +1563,14 @@ func TestAutoRoutingTransientModelSwitchDoesNotChangeSessionBinding(t *testing.T
 		"Content-Type": {"application/json"},
 		"X-Api-Key":    {"caller-secret"},
 	}
-	key, ok := sessions.Key(headers, "agent-session-42", 8, "balanced", routing.SessionPurposeLLM)
+	key, ok := sessions.Key(headers, "agent-session-42", 8, routing.SessionPurposeLLM)
 	if !ok {
 		t.Fatal("valid Session identity was rejected")
 	}
 	if err := sessions.Bind(context.Background(), key, routing.SessionBinding{
 		ProfileID: 8, Route: "balanced", Purpose: routing.SessionPurposeLLM,
-		Model: "fast", QualityScoreBPS: 9200, Strategy: "20260802-001",
+		TaskType: "simple",
+		Model:    "fast", QualityScoreBPS: 9200, Strategy: "20260802-001",
 	}, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -1540,7 +1833,7 @@ func TestAutoRoutingHighRiskUsesBaselineWithoutAnalyzer(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/messages",
-		strings.NewReader(`{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":"edit the file"}]}`),
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"tools":[{"name":"deploy_production"}],"messages":[{"role":"user","content":"deploy to production"}]}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -1704,7 +1997,7 @@ func TestAutoRoutingReplansCompositeVisionForSwitchedModel(t *testing.T) {
 		_ = json.Unmarshal(root["model"], &model)
 		if _, analyzer := root["system"]; analyzer {
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 			return
 		}
 		switch model {
@@ -1768,7 +2061,7 @@ func TestAutoRoutingFallsBackTargetAfterTransientVisionFailureBeforeAnswer(t *te
 		_ = json.Unmarshal(root["model"], &model)
 		if _, analyzer := root["system"]; analyzer {
 			primaryAnalyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 			return
 		}
 		if model == "vision" {
@@ -1878,7 +2171,7 @@ func TestAutoRoutingParallelVisionHardFailurePreventsFallback(t *testing.T) {
 		_ = json.Unmarshal(root["model"], &model)
 		if _, analyzer := root["system"]; analyzer {
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 			return
 		}
 		if model != "vision" {
@@ -1960,7 +2253,7 @@ func TestAutoRoutingFallsBackTargetWhilePreparingSwitchedModel(t *testing.T) {
 		_ = json.Unmarshal(root["model"], &model)
 		if _, analyzer := root["system"]; analyzer {
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 			return
 		}
 		switch model {
@@ -2050,7 +2343,7 @@ func TestAutoRoutingRejectsCompositeNodeBeforeVisionWhenAnswerCannotFit(t *testi
 		_ = json.Unmarshal(root["model"], &model)
 		if _, analyzer := root["system"]; analyzer {
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 			return
 		}
 		if model == "vision" {
@@ -2098,7 +2391,7 @@ func TestAutoRoutingDoesNotEnterBackupAfterFinalAnswerSlotWasConsumed(t *testing
 		_ = json.Unmarshal(root["model"], &model)
 		if _, analyzer := root["system"]; analyzer {
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 			return
 		}
 		switch model {
@@ -2229,7 +2522,7 @@ func TestAutoRoutingPersistsStructuredRouteTrace(t *testing.T) {
 
 func TestAutoRoutingPersistsAnalyzerWhenPlanIsRejected(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":5}}`)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":5}}`)
 	}))
 	defer server.Close()
 	db, err := database.Open(t.TempDir())
@@ -2278,7 +2571,7 @@ func TestAutoRoutingPersistsEveryRetriedPhysicalCallAndRouteAggregate(t *testing
 		_ = json.Unmarshal(root["model"], &model)
 		switch {
 		case root["system"] != nil:
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":5}}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":5}}`)
 		case model == "vision":
 			if visionCalls.Add(1) == 1 {
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -2383,7 +2676,7 @@ func TestOpenAIChatAutoRoutingUsesCompositeVisionAfterModelSelection(t *testing.
 			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"按钮与输入框重叠"}}],"usage":{"prompt_tokens":8,"completion_tokens":4}}`)
 		case len(root.Messages) > 0 && root.Messages[0].Role == "system":
 			analyzerCalls.Add(1)
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9000}"}}],"usage":{"prompt_tokens":12,"completion_tokens":6}}`)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9000}"}}],"usage":{"prompt_tokens":12,"completion_tokens":6}}`)
 		default:
 			answerCalls.Add(1)
 			if root.Model != "fast" || bytes.Contains(body, []byte(`"type":"image_url"`)) ||
@@ -2461,7 +2754,7 @@ func TestAutoRoutingCallLedgerMatchesPhysicalCallSequenceWithoutContent(t *testi
 		_ = json.Unmarshal(root["model"], &model)
 		switch {
 		case root["system"] != nil:
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":6}}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}],"usage":{"input_tokens":12,"output_tokens":6}}`)
 		case model == "vision":
 			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"private visual description"}],"usage":{"input_tokens":8,"output_tokens":4}}`)
 		default:
@@ -2516,7 +2809,7 @@ func TestAutoVisionUsesLedgerCorrelationAsRequestTrace(t *testing.T) {
 		_ = json.Unmarshal(root["model"], &model)
 		switch {
 		case root["system"] != nil:
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 		case model == "vision":
 			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"visual evidence"}]}`)
 		default:
@@ -2827,6 +3120,7 @@ func visionCacheLogRecords(t *testing.T, logs string) []map[string]any {
 
 func autoCompositeSharingRuntime(t *testing.T, upstream string) profile.Runtime {
 	runtime := autoProxyRuntime(t, upstream, true)
+	runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns = []string{"edit the file"}
 	strong := runtime.Models["strong"]
 	strong.SupportsVision = false
 	runtime.Models["strong"] = strong
@@ -2839,6 +3133,26 @@ func autoCompositeSharingBody() string {
 	return `{"model":"auto","max_tokens":1000,"tools":[{"name":"edit"}],"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/shared.png"}},{"type":"text","text":"edit the file"}]}]}`
 }
 
+type chunkReadCloser struct {
+	chunks [][]byte
+}
+
+func (r *chunkReadCloser) Read(buffer []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[0]
+	n := copy(buffer, chunk)
+	if n == len(chunk) {
+		r.chunks = r.chunks[1:]
+	} else {
+		r.chunks[0] = chunk[n:]
+	}
+	return n, nil
+}
+
+func (*chunkReadCloser) Close() error { return nil }
+
 func TestAutoRoutingVisionCacheHitConsumesOnlyAnalyzerAndAnswer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -2848,7 +3162,7 @@ func TestAutoRoutingVisionCacheHitConsumesOnlyAnalyzerAndAnswer(t *testing.T) {
 		_ = json.Unmarshal(root["model"], &model)
 		switch {
 		case root["system"] != nil:
-			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"task_type\":\"simple\",\"difficulty\":\"medium\",\"risk\":\"normal\",\"confidence_bps\":9200}"}]}`)
 		case model == "vision":
 			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"cached visual evidence"}]}`)
 		default:
@@ -2936,6 +3250,69 @@ func TestAutoRoutingDeadlineAfterNodeLeasePreventsAnswerNetworkCall(t *testing.T
 	if snapshot.TotalOutboundCalls != 0 || snapshot.HeldOutboundCalls != 0 ||
 		snapshot.HeldAnswerAttempts != 0 || snapshot.HeldCostMicroUSD != 0 {
 		t.Fatalf("deadline snapshot=%+v", snapshot)
+	}
+}
+
+func TestAutoRoutingEmitsSafeDecisionDebugLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !bytes.Contains(body, []byte(`"model":"fast"`)) {
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"fast","content":[{"type":"text","text":"done"}]}`)
+	}))
+	defer server.Close()
+
+	runtime := autoProxyRuntime(t, server.URL, false)
+	runtime.AutoRouting.Strategy.TaskRoutes = map[profile.TaskRouteKey]string{}
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages",
+		strings.NewReader(`{"model":"auto","max_tokens":1000,"messages":[{"role":"user","content":"hello private text"}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, server.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if strings.Contains(logs.String(), "hello private text") {
+		t.Fatal("debug logs exposed request text")
+	}
+	records := make(map[string][]map[string]any)
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		message, _ := record["msg"].(string)
+		records[message] = append(records[message], record)
+	}
+	classification := records["routing.debug.classification"]
+	if len(classification) != 1 || classification[0]["uses_default_route"] != true ||
+		classification[0]["route"] != "balanced" || classification[0]["request_trace_id"] == "" {
+		t.Fatalf("classification logs=%v", classification)
+	}
+	candidates := records["routing.debug.candidate"]
+	if len(candidates) != 2 || candidates[0]["model"] != "fast" ||
+		candidates[0]["decision"] != "selected" || candidates[0]["expected_cost_usd"].(float64) <= 0 ||
+		candidates[1]["model"] != "strong" || candidates[1]["decision"] != "eligible" {
+		t.Fatalf("candidate logs=%v", candidates)
+	}
+	if len(records["routing.debug.attempt_plan"]) < 1 ||
+		len(records["routing.debug.budget_plan"]) != 1 ||
+		len(records["routing.debug.call"]) != 1 ||
+		len(records["routing.debug.completed"]) != 1 {
+		t.Fatalf("debug event counts=%v", records)
 	}
 }
 

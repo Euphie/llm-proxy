@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const schemaVersion = 7
+const schemaVersion = 15
 
 var schemaV1 = []string{
 	`CREATE TABLE admin_account (
@@ -229,6 +229,167 @@ var schemaV7 = []string{
 	`CREATE INDEX routing_calls_correlation_idx ON routing_calls(correlation_id, sequence)`,
 }
 
+var schemaV8 = []string{
+	`ALTER TABLE routing_session_bindings ADD COLUMN task_type TEXT NOT NULL DEFAULT ''`,
+}
+
+var schemaV9 = []string{
+	`ALTER TABLE routing_traces ADD COLUMN self_escalations INTEGER NOT NULL DEFAULT 0 CHECK (self_escalations >= 0)`,
+	`ALTER TABLE routing_traces ADD COLUMN self_escalation_reason TEXT NOT NULL DEFAULT ''`,
+}
+
+var schemaV10 = []string{
+	`ALTER TABLE routing_quality_evidence ADD COLUMN self_escalation_eligible_samples INTEGER NOT NULL DEFAULT 0 CHECK (self_escalation_eligible_samples >= 0)`,
+	`ALTER TABLE routing_quality_evidence ADD COLUMN self_escalations INTEGER NOT NULL DEFAULT 0 CHECK (self_escalations >= 0)`,
+	`ALTER TABLE routing_quality_evidence ADD COLUMN supported_self_escalations INTEGER NOT NULL DEFAULT 0 CHECK (supported_self_escalations >= 0)`,
+	`ALTER TABLE routing_quality_evidence ADD COLUMN unnecessary_self_escalations INTEGER NOT NULL DEFAULT 0 CHECK (unnecessary_self_escalations >= 0)`,
+	`ALTER TABLE routing_quality_evidence ADD COLUMN missed_self_escalations INTEGER NOT NULL DEFAULT 0 CHECK (missed_self_escalations >= 0)`,
+}
+
+var schemaV11 = []string{
+	`ALTER TABLE routing_calls ADD COLUMN usage_present INTEGER NOT NULL DEFAULT 0 CHECK (usage_present IN (0, 1))`,
+	`ALTER TABLE routing_calls ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0)`,
+	`ALTER TABLE routing_calls ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0)`,
+	`ALTER TABLE routing_calls ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0 CHECK (cache_read_tokens >= 0)`,
+	`ALTER TABLE routing_calls ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0 CHECK (cache_write_tokens >= 0)`,
+	`ALTER TABLE routing_calls ADD COLUMN input_includes_cache INTEGER NOT NULL DEFAULT 0 CHECK (input_includes_cache IN (0, 1))`,
+	`CREATE INDEX routing_calls_model_usage_idx ON routing_calls(kind, usage_present, status_code, created_at, logical_model)`,
+}
+
+var schemaV12 = []string{
+	`ALTER TABLE routing_session_bindings ADD COLUMN difficulty TEXT NOT NULL DEFAULT 'unknown'`,
+}
+
+var schemaV13 = []string{
+	`ALTER TABLE routing_traces ADD COLUMN difficulty TEXT NOT NULL DEFAULT 'unknown'`,
+	`ALTER TABLE routing_traces ADD COLUMN classification_confidence_bps INTEGER NOT NULL DEFAULT 0 CHECK (classification_confidence_bps BETWEEN 0 AND 10000)`,
+	`ALTER TABLE routing_traces ADD COLUMN classification_reason_codes TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE routing_traces ADD COLUMN estimated_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (estimated_input_tokens >= 0)`,
+	`ALTER TABLE routing_traces ADD COLUMN requested_output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (requested_output_tokens >= 0)`,
+	`ALTER TABLE routing_traces ADD COLUMN decision_reason TEXT NOT NULL DEFAULT ''`,
+	`CREATE TABLE routing_candidate_decisions (
+        trace_id                    INTEGER NOT NULL REFERENCES routing_traces(id) ON DELETE CASCADE,
+        ordinal                     INTEGER NOT NULL CHECK (ordinal > 0),
+        model                       TEXT NOT NULL,
+        decision                    TEXT NOT NULL CHECK (decision IN ('selected', 'eligible', 'rejected')),
+        reason_code                 TEXT NOT NULL,
+        quality_score_bps           INTEGER NOT NULL CHECK (quality_score_bps BETWEEN 0 AND 10000),
+        severe_error_rate_bps       INTEGER NOT NULL CHECK (severe_error_rate_bps BETWEEN 0 AND 10000),
+        expected_cost_micro_usd     INTEGER NOT NULL CHECK (expected_cost_micro_usd >= 0),
+        answer_worst_cost_micro_usd INTEGER NOT NULL CHECK (answer_worst_cost_micro_usd >= 0),
+        vision_call_cost_micro_usd  INTEGER NOT NULL CHECK (vision_call_cost_micro_usd >= 0),
+        vision_mode                 TEXT NOT NULL,
+        upstream_nodes              TEXT NOT NULL DEFAULT '[]',
+        PRIMARY KEY(trace_id, ordinal)
+    )`,
+	`CREATE INDEX routing_candidate_decisions_model_idx ON routing_candidate_decisions(model, decision)`,
+}
+
+var schemaV14 = []string{
+	`CREATE TABLE routing_quality_evidence_v2 (
+        profile_id                    INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        evidence_day                  TEXT NOT NULL,
+        strategy_name                 TEXT NOT NULL,
+        route_id                      TEXT NOT NULL,
+        task_type                     TEXT NOT NULL,
+        difficulty                    TEXT NOT NULL,
+        risk                          TEXT NOT NULL,
+        vision_mode                   TEXT NOT NULL,
+        candidate_model               TEXT NOT NULL,
+        reference_model               TEXT NOT NULL,
+        reviewer_model                TEXT NOT NULL,
+        samples                       INTEGER NOT NULL DEFAULT 0 CHECK (samples >= 0),
+        candidate_wins                INTEGER NOT NULL DEFAULT 0 CHECK (candidate_wins >= 0),
+        ties                          INTEGER NOT NULL DEFAULT 0 CHECK (ties >= 0),
+        reference_wins                INTEGER NOT NULL DEFAULT 0 CHECK (reference_wins >= 0),
+        severe_errors                 INTEGER NOT NULL DEFAULT 0 CHECK (severe_errors >= 0),
+        deterministic_failures        INTEGER NOT NULL DEFAULT 0 CHECK (deterministic_failures >= 0),
+        self_escalation_eligible_samples INTEGER NOT NULL DEFAULT 0 CHECK (self_escalation_eligible_samples >= 0),
+        self_escalations              INTEGER NOT NULL DEFAULT 0 CHECK (self_escalations >= 0),
+        supported_self_escalations    INTEGER NOT NULL DEFAULT 0 CHECK (supported_self_escalations >= 0),
+        unnecessary_self_escalations  INTEGER NOT NULL DEFAULT 0 CHECK (unnecessary_self_escalations >= 0),
+        missed_self_escalations       INTEGER NOT NULL DEFAULT 0 CHECK (missed_self_escalations >= 0),
+        candidate_cost_micro_usd      INTEGER NOT NULL DEFAULT 0 CHECK (candidate_cost_micro_usd >= 0),
+        reference_cost_micro_usd      INTEGER NOT NULL DEFAULT 0 CHECK (reference_cost_micro_usd >= 0),
+        reviewer_cost_micro_usd       INTEGER NOT NULL DEFAULT 0 CHECK (reviewer_cost_micro_usd >= 0),
+        candidate_latency_ms          INTEGER NOT NULL DEFAULT 0 CHECK (candidate_latency_ms >= 0),
+        reference_latency_ms          INTEGER NOT NULL DEFAULT 0 CHECK (reference_latency_ms >= 0),
+        updated_at                    TEXT NOT NULL,
+        PRIMARY KEY (
+            profile_id, evidence_day, strategy_name, route_id, task_type,
+            difficulty, risk, vision_mode,
+            candidate_model, reference_model, reviewer_model
+        )
+    )`,
+	`CREATE INDEX routing_quality_evidence_v2_profile_idx
+        ON routing_quality_evidence_v2(profile_id, evidence_day)`,
+	`CREATE INDEX routing_quality_evidence_v2_model_idx
+        ON routing_quality_evidence_v2(profile_id, candidate_model, evidence_day)`,
+	`CREATE TABLE routing_quality_dimension_evidence (
+        profile_id       INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        evidence_day     TEXT NOT NULL,
+        strategy_name    TEXT NOT NULL,
+        route_id         TEXT NOT NULL,
+        task_type        TEXT NOT NULL,
+        difficulty       TEXT NOT NULL,
+        risk             TEXT NOT NULL,
+        vision_mode      TEXT NOT NULL,
+        candidate_model  TEXT NOT NULL,
+        reference_model  TEXT NOT NULL,
+        reviewer_model   TEXT NOT NULL,
+        dimension        TEXT NOT NULL,
+        samples          INTEGER NOT NULL DEFAULT 0 CHECK (samples >= 0),
+        candidate_wins   INTEGER NOT NULL DEFAULT 0 CHECK (candidate_wins >= 0),
+        ties             INTEGER NOT NULL DEFAULT 0 CHECK (ties >= 0),
+        reference_wins   INTEGER NOT NULL DEFAULT 0 CHECK (reference_wins >= 0),
+        updated_at       TEXT NOT NULL,
+        PRIMARY KEY (
+            profile_id, evidence_day, strategy_name, route_id, task_type,
+            difficulty, risk, vision_mode,
+            candidate_model, reference_model, reviewer_model, dimension
+        )
+    )`,
+	`CREATE INDEX routing_quality_dimension_profile_idx
+        ON routing_quality_dimension_evidence(profile_id, evidence_day, dimension)`,
+	`INSERT INTO routing_quality_evidence_v2 (
+        profile_id, evidence_day, strategy_name, route_id, task_type,
+        difficulty, risk, vision_mode, candidate_model, reference_model, reviewer_model,
+        samples, candidate_wins, ties, reference_wins, severe_errors, deterministic_failures,
+        self_escalation_eligible_samples, self_escalations, supported_self_escalations,
+        unnecessary_self_escalations, missed_self_escalations,
+        candidate_cost_micro_usd, reference_cost_micro_usd, reviewer_cost_micro_usd,
+        candidate_latency_ms, reference_latency_ms, updated_at
+    ) SELECT
+        profile_id, evidence_day, strategy_name, route_id, task_type,
+        'unknown', 'normal', 'none', candidate_model, reference_model, reviewer_model,
+        samples, candidate_wins, ties, reference_wins, severe_errors, deterministic_failures,
+        self_escalation_eligible_samples, self_escalations, supported_self_escalations,
+        unnecessary_self_escalations, missed_self_escalations,
+        candidate_cost_micro_usd, reference_cost_micro_usd, reviewer_cost_micro_usd,
+        candidate_latency_ms, reference_latency_ms, updated_at
+    FROM routing_quality_evidence`,
+	`INSERT INTO routing_quality_dimension_evidence (
+        profile_id, evidence_day, strategy_name, route_id, task_type,
+        difficulty, risk, vision_mode, candidate_model, reference_model, reviewer_model,
+        dimension, samples, candidate_wins, ties, reference_wins, updated_at
+    ) SELECT
+        profile_id, evidence_day, strategy_name, route_id, task_type,
+        'unknown', 'normal', 'none', candidate_model, reference_model, reviewer_model,
+        'overall', samples, candidate_wins, ties, reference_wins, updated_at
+    FROM routing_quality_evidence`,
+}
+
+var schemaV15 = []string{
+	`UPDATE routing_traces
+	 SET risk = 'unknown',
+	     decision_reason = CASE
+	         WHEN decision_reason = '' OR decision_reason = 'high risk'
+	         THEN 'task analyzer fallback'
+	         ELSE decision_reason
+	     END
+	 WHERE classification_source = 'fallback'`,
+}
+
 func Migrate(db *sql.DB) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -308,6 +469,62 @@ func Migrate(db *sql.DB) (err error) {
 		for _, statement := range schemaV7 {
 			if _, err := tx.Exec(statement); err != nil {
 				return fmt.Errorf("apply schema v7: %w", err)
+			}
+		}
+	}
+	if version < 8 {
+		for _, statement := range schemaV8 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v8: %w", err)
+			}
+		}
+	}
+	if version < 9 {
+		for _, statement := range schemaV9 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v9: %w", err)
+			}
+		}
+	}
+	if version < 10 {
+		for _, statement := range schemaV10 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v10: %w", err)
+			}
+		}
+	}
+	if version < 11 {
+		for _, statement := range schemaV11 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v11: %w", err)
+			}
+		}
+	}
+	if version < 12 {
+		for _, statement := range schemaV12 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v12: %w", err)
+			}
+		}
+	}
+	if version < 13 {
+		for _, statement := range schemaV13 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v13: %w", err)
+			}
+		}
+	}
+	if version < 14 {
+		for _, statement := range schemaV14 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v14: %w", err)
+			}
+		}
+	}
+	if version < 15 {
+		for _, statement := range schemaV15 {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("apply schema v15: %w", err)
 			}
 		}
 	}

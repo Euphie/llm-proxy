@@ -21,6 +21,7 @@ type CallLedgerEntry struct {
 	EstimatedMicroUSD int64
 	ActualCostKnown   bool
 	ActualMicroUSD    int64
+	Usage             CallUsage
 	StatusCode        int
 	Outcome           string
 }
@@ -38,6 +39,7 @@ type CallUsage struct {
 	OutputPresent       bool
 	CacheReadTokens     int
 	CacheCreationTokens int
+	InputIncludesCache  bool
 	Present             bool
 }
 
@@ -97,7 +99,22 @@ func (l *CallLedger) CompleteWithUsage(
 	model profile.ModelCapability,
 ) {
 	actual, known := actualCallCost(usage, model)
-	l.CompleteWithActual(sequence, statusCode, outcome, known, actual)
+	if l == nil || sequence <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if sequence > len(l.entries) {
+		return
+	}
+	entry := &l.entries[sequence-1]
+	entry.StatusCode = statusCode
+	entry.Outcome = outcome
+	entry.Usage = usage
+	entry.ActualCostKnown = known
+	if known {
+		entry.ActualMicroUSD = actual
+	}
 }
 
 func (l *CallLedger) CompleteWithActual(
@@ -169,37 +186,47 @@ func actualCallCost(usage CallUsage, model profile.ModelCapability) (int64, bool
 		!model.HasInputPrice || !model.HasOutputPrice ||
 		usage.InputTokens < 0 || usage.OutputTokens < 0 ||
 		usage.CacheReadTokens < 0 || usage.CacheCreationTokens < 0 ||
-		usage.CacheReadTokens > 0 || usage.CacheCreationTokens > 0 {
+		(usage.CacheReadTokens > 0 && !model.HasCacheReadPrice) ||
+		(usage.CacheCreationTokens > 0 && !model.HasCacheWritePrice) {
 		return 0, false
 	}
-	input, ok := checkedTokenCost(usage.InputTokens, model.InputPriceMicroUSDPerMillion)
-	if !ok {
-		return 0, false
-	}
-	output, ok := checkedTokenCost(usage.OutputTokens, model.OutputPriceMicroUSDPerMillion)
-	if !ok || input > math.MaxInt64-output {
-		return 0, false
-	}
-	return input + output, true
-}
-
-func checkedTokenCost(tokens int, price int64) (int64, bool) {
-	if tokens < 0 || price < 0 {
-		return 0, false
-	}
-	if tokens == 0 || price == 0 {
-		return 0, true
-	}
-	if int64(tokens) > math.MaxInt64/price {
-		return 0, false
-	}
-	product := int64(tokens) * price
-	result := product / 1_000_000
-	if product%1_000_000 != 0 {
-		if result == math.MaxInt64 {
+	uncachedInput := usage.InputTokens
+	if usage.InputIncludesCache {
+		cachedInput := usage.CacheReadTokens + usage.CacheCreationTokens
+		if cachedInput < 0 || cachedInput > usage.InputTokens {
 			return 0, false
 		}
+		uncachedInput -= cachedInput
+	}
+	components := []struct {
+		tokens int
+		price  int64
+	}{
+		{uncachedInput, model.InputPriceMicroUSDPerMillion},
+		{usage.CacheReadTokens, model.CacheReadPriceMicroUSDPerMillion},
+		{usage.CacheCreationTokens, model.CacheWritePriceMicroUSDPerMillion},
+		{usage.OutputTokens, model.OutputPriceMicroUSDPerMillion},
+	}
+	totalNumerator := int64(0)
+	for _, component := range components {
+		if component.tokens < 0 || component.price < 0 ||
+			(component.tokens > 0 && component.price > 0 &&
+				int64(component.tokens) > math.MaxInt64/component.price) {
+			return 0, false
+		}
+		numerator := int64(component.tokens) * component.price
+		if totalNumerator > math.MaxInt64-numerator {
+			return 0, false
+		}
+		totalNumerator += numerator
+	}
+	result := totalNumerator / 1_000_000
+	if totalNumerator%1_000_000 != 0 {
 		result++
 	}
 	return result, true
+}
+
+func ActualCallCost(usage CallUsage, model profile.ModelCapability) (int64, bool) {
+	return actualCallCost(usage, model)
 }

@@ -18,7 +18,7 @@ const legacyHeadings = {
   models: new Set(["模型能力"]),
   routing: new Set(["智能路由"]),
   vision: new Set(["视觉增强"]),
-  reliability: new Set(["Target 容错", "容错规则"]),
+  reliability: new Set(["上游节点容错", "容错规则"]),
   agents: new Set(["配置生成"]),
 };
 
@@ -127,7 +127,7 @@ function renderLegacySection(
       child.children[0];
     if (
       !selectedHeadings.has(heading?.textContent) ||
-      (hideTargets && heading?.textContent === "Target 容错")
+      (hideTargets && heading?.textContent === "上游节点容错")
     ) {
       child.remove();
     }
@@ -199,7 +199,7 @@ function reliabilityTargetDependency(draft) {
   if ((draft.config.models || []).length === 0) {
     return {
       state: "blocked",
-      reasons: ["备用 Target 只服务于智能路由；请先录入可参与路由的模型。普通重试仍可使用。"],
+      reasons: ["备用上游节点只服务于智能路由；请先录入可参与路由的模型。普通重试仍可使用。"],
       action: {
         label: "录入模型",
         href: profileSectionHref(draft.id, "models"),
@@ -209,7 +209,7 @@ function reliabilityTargetDependency(draft) {
   if (!draft.config.auto_routing?.enabled) {
     return {
       state: "blocked",
-      reasons: ["备用 Target 只在智能路由发生可重试故障时使用。普通重试仍可使用。"],
+      reasons: ["备用上游节点只在智能路由发生可重试故障时使用。普通重试仍可使用。"],
       action: {
         label: "配置智能路由",
         href: profileSectionHref(draft.id, "routing"),
@@ -253,7 +253,7 @@ function sectionDescription(section, state) {
     models: "补充能力、上下文和价格信息。",
     routing: "按任务复杂度选择合适的模型。",
     vision: "为不支持视觉的主模型补充图片理解。",
-    reliability: "管理普通重试和 Auto Target 切换。",
+    reliability: "管理普通重试和 Auto 上游节点切换。",
     agents: "生成 Claude Code、Codex 或 OpenCode 配置。",
   }[section];
 }

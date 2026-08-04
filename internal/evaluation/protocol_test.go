@@ -103,21 +103,24 @@ func TestBuildReviewRequestUsesBlindJSONDataAndStrictSchema(t *testing.T) {
 	}
 }
 
-func TestParseReviewVerdictRequiresExactMachineReadableDecision(t *testing.T) {
+func TestReviewVerdictRequiresAllDimensions(t *testing.T) {
 	verdict, err := ParseReviewVerdict(
 		routing.OperationAnthropicMessages,
-		[]byte(`{"content":[{"type":"text","text":"{\"winner\":\"b\",\"severe_a\":false,\"severe_b\":true}"}]}`),
+		[]byte(`{"content":[{"type":"text","text":"{\"dimensions\":{\"correctness\":\"b\",\"completeness\":\"tie\",\"instruction_following\":\"a\",\"format_tool_safety\":\"b\",\"task_completion\":\"b\"},\"severe_a\":false,\"severe_b\":true}"}]}`),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verdict.Winner != WinnerB || verdict.SevereA || !verdict.SevereB {
+	if verdict.Dimensions[DimensionCorrectness] != WinnerB ||
+		verdict.Dimensions[DimensionCompleteness] != WinnerTie ||
+		verdict.Dimensions[DimensionInstructionFollowing] != WinnerA ||
+		verdict.SevereA || !verdict.SevereB {
 		t.Fatalf("verdict=%+v", verdict)
 	}
 	if _, err := ParseReviewVerdict(
 		routing.OperationAnthropicMessages,
-		[]byte(`{"content":[{"type":"text","text":"winner: a"}]}`),
+		[]byte(`{"content":[{"type":"text","text":"{\"dimensions\":{\"correctness\":\"a\"},\"severe_a\":false,\"severe_b\":false}"}]}`),
 	); err == nil {
-		t.Fatal("accepted a non-JSON review verdict")
+		t.Fatal("accepted an incomplete dimension verdict")
 	}
 }

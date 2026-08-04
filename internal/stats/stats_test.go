@@ -118,6 +118,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		InitialTarget: "primary", FinalTarget: "region_b", VisionMode: "native",
 		StatusCode: 200, ClientCommitted: true, AnswerAttempts: 2,
 		AuxiliaryCalls: 1, TotalOutboundCalls: 3, ModelSwitches: 1,
+		SelfEscalations: 1, SelfEscalationReason: "insufficient_reasoning",
 		TargetSwitches: 0, PlannedWorstCaseCostMicroUSD: 30126,
 		ConsumedEstimatedCostMicroUSD: 15500, ElapsedMilliseconds: 42,
 	})
@@ -131,6 +132,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		       initial_target, final_target,
 		       vision_mode, status_code, client_committed, answer_attempts,
 		       auxiliary_calls, total_outbound_calls, model_switches,
+		       self_escalations, self_escalation_reason,
 		       target_switches, planned_worst_case_cost_micro_usd,
 		       consumed_estimated_cost_micro_usd, elapsed_ms
 		FROM routing_traces
@@ -141,6 +143,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		&got.InitialTarget, &got.FinalTarget,
 		&got.VisionMode, &got.StatusCode, &committed, &got.AnswerAttempts,
 		&got.AuxiliaryCalls, &got.TotalOutboundCalls, &got.ModelSwitches,
+		&got.SelfEscalations, &got.SelfEscalationReason,
 		&got.TargetSwitches, &got.PlannedWorstCaseCostMicroUSD,
 		&got.ConsumedEstimatedCostMicroUSD, &got.ElapsedMilliseconds,
 	)
@@ -153,6 +156,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 		got.InitialTarget != "primary" || got.FinalTarget != "region_b" ||
 		!got.ClientCommitted || got.TotalOutboundCalls != 3 ||
 		got.PlannedWorstCaseCostMicroUSD != 30126 ||
+		got.SelfEscalations != 1 || got.SelfEscalationReason != "insufficient_reasoning" ||
 		got.ConsumedEstimatedCostMicroUSD != 15500 || got.ElapsedMilliseconds != 42 {
 		t.Fatalf("trace=%+v", got)
 	}
@@ -167,6 +171,7 @@ func TestRecordRoutingTraceAsyncStoresOnlyStructuredMetadata(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID <= 0 || rows[0].ProfileSlug != "coding" ||
 		rows[0].Strategy != "20260802-001" || rows[0].FinalModel != "strong" ||
 		rows[0].InitialTarget != "primary" || rows[0].FinalTarget != "region_b" ||
+		rows[0].SelfEscalations != 1 || rows[0].SelfEscalationReason != "insufficient_reasoning" ||
 		rows[0].ConsumedEstimatedCostMicroUSD != 15500 {
 		t.Fatalf("queried traces=%+v", rows)
 	}
@@ -198,7 +203,14 @@ func TestRecordRoutingTraceWithCallsAsyncPersistsExactPhysicalSequenceAndPrivacy
 		{Sequence: 2, Kind: "vision", Model: "vision", Target: "primary", ImageIndex: 0, RetryIndex: 0, EstimatedMicroUSD: 17, StatusCode: 503, Outcome: "overload"},
 		{Sequence: 3, Kind: "vision", Model: "vision", Target: "primary", ImageIndex: 0, RetryIndex: 1, EstimatedMicroUSD: 17, ActualCostKnown: true, ActualMicroUSD: 4, StatusCode: 200, Outcome: "success"},
 		{Sequence: 4, Kind: "answer", Model: "fast", Target: "primary", ImageIndex: -1, RetryIndex: 0, EstimatedMicroUSD: 17, StatusCode: 503, Outcome: "upstream"},
-		{Sequence: 5, Kind: "answer", Model: "fast", Target: "primary", ImageIndex: -1, RetryIndex: 1, EstimatedMicroUSD: 17, ActualCostKnown: true, ActualMicroUSD: 5, StatusCode: 200, Outcome: "success"},
+		{
+			Sequence: 5, Kind: "answer", Model: "fast", Target: "primary",
+			ImageIndex: -1, RetryIndex: 1, EstimatedMicroUSD: 17,
+			ActualCostKnown: true, ActualMicroUSD: 5,
+			UsagePresent: true, InputTokens: 1000, OutputTokens: 50,
+			CacheReadTokens: 600, CacheWriteTokens: 100, InputIncludesCache: true,
+			StatusCode: 200, Outcome: "success",
+		},
 	}
 	store.RecordRoutingTraceWithCallsAsync(trace, calls)
 	waitForUsageWrite(t, done)
@@ -225,6 +237,19 @@ func TestRecordRoutingTraceWithCallsAsyncPersistsExactPhysicalSequenceAndPrivacy
 		!rows[2].ActualCostKnown || rows[2].ActualMicroUSD != 4 {
 		t.Fatalf("vision rows=%+v", rows[1:3])
 	}
+	if !rows[4].UsagePresent || rows[4].InputTokens != 1000 ||
+		rows[4].CacheReadTokens != 600 || rows[4].CacheWriteTokens != 100 ||
+		!rows[4].InputIncludesCache {
+		t.Fatalf("answer usage=%+v", rows[4])
+	}
+	metrics, err := store.QueryModelCacheMetrics(context.Background(), 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metrics["fast"]; got.Samples != 1 || got.UncachedInputTokens != 300 ||
+		got.CacheReadTokens != 600 || got.CacheWriteTokens != 100 {
+		t.Fatalf("cache metrics=%+v", metrics)
+	}
 	var serialized string
 	if err := db.QueryRow(`SELECT group_concat(quote(value), '|') FROM (
 		SELECT correlation_id AS value FROM routing_calls
@@ -238,6 +263,119 @@ func TestRecordRoutingTraceWithCallsAsyncPersistsExactPhysicalSequenceAndPrivacy
 		if strings.Contains(serialized, secret) {
 			t.Fatalf("physical accounting leaked %q: %s", secret, serialized)
 		}
+	}
+}
+
+func TestRecordRoutingTraceWithCallsAndCandidatesIsAtomic(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := New(db)
+	done := make(chan struct{}, 2)
+	store.afterWrite = func() { done <- struct{}{} }
+	trace := RoutingTrace{
+		CorrelationID: "decision-1", TaskType: "coding", Difficulty: "hard", Risk: "normal",
+		ClassificationSource: "analyzer", ClassificationConfidenceBPS: 9100,
+		ClassificationReasonCodes: []string{"task_analyzer"}, EstimatedInputTokens: 1200,
+		RequestedOutputTokens: 800, DecisionReason: "lowest expected cost",
+	}
+	calls := []PhysicalCall{{Sequence: 1, Kind: "answer", Model: "fast", Target: "primary", ImageIndex: -1}}
+	candidates := []CandidateDecision{{
+		Model: "fast", Decision: "selected", ReasonCode: "lowest_expected_cost",
+		QualityScoreBPS: 9200, SevereErrorRateBPS: 50, ExpectedCostMicroUSD: 400,
+		AnswerWorstCostMicroUSD: 400, VisionMode: "none", UpstreamNodes: []string{"primary"},
+	}}
+	store.RecordRoutingTraceWithCallsAndCandidatesAsync(trace, calls, candidates)
+	waitForUsageWrite(t, done)
+	var traces, physicalCalls, decisions int
+	for table, target := range map[string]*int{
+		"routing_traces": &traces, "routing_calls": &physicalCalls,
+		"routing_candidate_decisions": &decisions,
+	} {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if traces != 1 || physicalCalls != 1 || decisions != 1 {
+		t.Fatalf("traces=%d calls=%d decisions=%d", traces, physicalCalls, decisions)
+	}
+	store.RecordRoutingTraceWithCallsAndCandidatesAsync(
+		RoutingTrace{CorrelationID: "invalid-candidate"}, calls,
+		[]CandidateDecision{{Decision: "selected", ReasonCode: "missing_model"}},
+	)
+	waitForUsageWrite(t, done)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM routing_traces`).Scan(&traces); err != nil {
+		t.Fatal(err)
+	}
+	if traces != 1 {
+		t.Fatalf("invalid candidate partially persisted trace count=%d", traces)
+	}
+	detail, err := store.QueryRoutingTraceDetail(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Trace.Difficulty != "hard" || detail.Trace.ClassificationConfidenceBPS != 9100 ||
+		len(detail.Trace.ClassificationReasonCodes) != 1 || len(detail.Candidates) != 1 ||
+		detail.Candidates[0].Model != "fast" || len(detail.Calls) != 1 {
+		t.Fatalf("detail=%+v", detail)
+	}
+}
+
+func TestRoutingTracePaginationAndCategories(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := New(db)
+	done := make(chan struct{}, 6)
+	store.afterWrite = func() { done <- struct{}{} }
+	now := time.Date(2026, 8, 4, 8, 0, 0, 0, time.UTC)
+	traces := []RoutingTrace{
+		{CorrelationID: "normal", CreatedAt: now, Risk: "normal", StatusCode: 200, ClientCommitted: true, InitialModel: "fast", FinalModel: "fast"},
+		{CorrelationID: "high-1", CreatedAt: now.Add(time.Second), Risk: "high", StatusCode: 200, ClientCommitted: true, InitialModel: "strong", FinalModel: "strong"},
+		{CorrelationID: "high-2", CreatedAt: now.Add(2 * time.Second), Risk: "high", StatusCode: 200, ClientCommitted: true, InitialModel: "fast", FinalModel: "strong", ModelSwitches: 1},
+		{CorrelationID: "changed", CreatedAt: now.Add(3 * time.Second), Risk: "normal", StatusCode: 200, ClientCommitted: true, InitialModel: "fast", FinalModel: "strong", SelfEscalations: 1},
+		{CorrelationID: "failed", CreatedAt: now.Add(4 * time.Second), Risk: "normal", StatusCode: 500, InitialModel: "fast", FinalModel: "fast"},
+		{CorrelationID: "cost", CreatedAt: now.Add(5 * time.Second), Risk: "normal", StatusCode: 200, ClientCommitted: true, InitialModel: "fast", FinalModel: "fast", PlannedWorstCaseCostMicroUSD: 10, KnownActualCostMicroUSD: 11},
+		{CorrelationID: "fallback", CreatedAt: now.Add(6 * time.Second), Risk: "unknown", ClassificationSource: "fallback", StatusCode: 200, ClientCommitted: true, InitialModel: "strong", FinalModel: "strong"},
+	}
+	for _, trace := range traces {
+		store.RecordRoutingTraceAsync(trace)
+	}
+	for range traces {
+		waitForUsageWrite(t, done)
+	}
+	page, err := store.QueryRoutingTracePage(context.Background(), RoutingTraceFilter{Page: 2, PageSize: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 7 || page.TotalPages != 4 || len(page.Items) != 2 ||
+		page.CategoryCounts.HighRisk != 2 || page.CategoryCounts.Failed != 1 ||
+		page.CategoryCounts.Fallback != 1 || page.CategoryCounts.Changed != 2 ||
+		page.CategoryCounts.CostAnomaly != 1 {
+		t.Fatalf("page=%+v", page)
+	}
+	fallback, err := store.QueryRoutingTracePage(context.Background(), RoutingTraceFilter{
+		Page: 1, PageSize: 25, Category: "fallback",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Total != 1 || len(fallback.Items) != 1 || fallback.Items[0].Risk != "unknown" {
+		t.Fatalf("fallback=%+v", fallback)
+	}
+	failed, err := store.QueryRoutingTracePage(context.Background(), RoutingTraceFilter{
+		Page: 1, PageSize: 25, Category: "failed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Total != 1 || len(failed.Items) != 1 || failed.Items[0].CorrelationID != "failed" ||
+		failed.CategoryCounts.All != 7 {
+		t.Fatalf("failed page=%+v", failed)
 	}
 }
 
@@ -278,6 +416,33 @@ func TestRecordRoutingTraceWithCallsRejectsNonContiguousSequenceAtomically(t *te
 	}
 	if traces != 0 || calls != 0 {
 		t.Fatalf("traces=%d calls=%d", traces, calls)
+	}
+}
+
+func TestRoutingTraceOrderUsesCapturedCompletionTimeInsteadOfAsyncCommitOrder(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := New(db)
+	workers := make(chan func(), 2)
+	store.launchWorker = func(worker func()) { workers <- worker }
+	firstAt := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
+	secondAt := firstAt.Add(time.Second)
+	store.RecordRoutingTraceAsync(RoutingTrace{CorrelationID: "first", CreatedAt: firstAt})
+	store.RecordRoutingTraceAsync(RoutingTrace{CorrelationID: "second", CreatedAt: secondAt})
+	firstWorker := <-workers
+	secondWorker := <-workers
+	secondWorker()
+	firstWorker()
+
+	rows, err := store.QueryRoutingTraces(context.Background(), RoutingTraceFilter{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].CorrelationID != "second" || rows[1].CorrelationID != "first" {
+		t.Fatalf("rows=%+v", rows)
 	}
 }
 

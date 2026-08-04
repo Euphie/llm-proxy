@@ -6,6 +6,8 @@ data/
 !docs-site/data/
 docs-site/data/*
 !docs-site/data/*.json
+!internal/modelcatalog/data/
+!internal/modelcatalog/data/catalog.json
 
 # 本地配置
 .env

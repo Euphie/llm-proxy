@@ -10,11 +10,12 @@
 Token 上限可填正整数，或十进制 `K`/`M` 简写：`128K` = 128,000、`1M` = 1,000,000、
 `1.5M` = 1,500,000，上限为 `9,007,199,254,740,991`。
 
-浏览器内置 236 条 [Models.dev](https://github.com/anomalyco/models.dev) 离线快照，
+页面内置 239 条 [Models.dev](https://github.com/anomalyco/models.dev) 离线快照，
 内容 revision 为
-`702364835161f28245a28fc91b89d91b700fc83f55229d6a0f9003c346f8afb3`，
-获取日期为 2026-07-30。浏览器只读取随程序发布的静态文件；运行时不会为目录发起网络
-请求，目录不直接参与运行时路由、视觉判定或生成器的事实推断，也不会改写用户输入的模型 ID。
+`5b701eb1b0c50ba722f44aae382dea0cd312b87de5eb37193944ff5cef3376f0`，
+获取日期为 2026-08-03。管理员可在“系统”页手动更新；激活的远程版本保存到
+`DATA_DIR/model-catalog.json`，失败时继续使用上一有效版本或内置快照。目录只用于录入建议，
+不会改写用户输入的模型 ID，也不会自动改动 Profile 或路由策略。
 来源、原始 feed 摘要与许可证见[第三方声明](../THIRD_PARTY_NOTICES.md)。
 
 目录仅收录同时支持 text input、text output 和 tool call，且至少一个已知 provider
@@ -23,6 +24,10 @@ deprecated。stable 与 preview 均可收录。上游未知的上下文、输出
 不作猜测；当 output 等于 context 时省略 output。
 
 ### 匹配与应用
+
+“批量录入模型”支持每行一个 ID，单次最多 100 个。点击“批量导入”后，同批重复项和
+Profile 已有 ID 自动跳过；唯一可靠匹配自动带入推荐参数，多候选或未知 ID 只保留 ID、
+参数留空。导入只加入当前 Profile 草稿，仍需检查并保存。
 
 唯一匹配时，以下类型可自动应用：目录 ID 精确匹配、API ID、官方 alias、显式
 compatibility alias，以及在 ID 前增加一层合法 wrapper 命名空间。例如
@@ -35,12 +40,19 @@ family 以及 `preview`、`latest`、日期或已登记 snapshot 规则产生的
 
 推荐只填写空字段，或替换仍由上一条推荐自动填写的值。用户手工编辑容量、能力或价格后，
 该字段不再由推荐覆盖。推荐器从不替换模型 ID，保存时保留用户输入的原始 ID。
+完全没有匹配结果时，后台会显示可搜索的模型参数模板列表。管理员明确选择并应用模板后，
+它会替换当前容量、能力和价格，但仍保留实际模型 ID。
 
 ### 能力与价格
 
-智能路由还读取 `supports_tools`、`supports_structured_output`、
-`input_price_micro_usd_per_million` 和 `output_price_micro_usd_per_million`。价格单位是“每百万
-Token 的微美元”：`1 USD / 1M Token` 应填写 `1,000,000`。零价格有效；留空表示未知。
+智能路由还读取 `supports_tools`、`supports_structured_output`、输入/输出价格，以及可选的
+缓存读取和默认缓存写入价格。价格单位是“每百万
+Token 的微美元”。后台页面直接填写美元小数，例如 `0.10 USD / 1M Token` 填 `0.10`；保存时
+会精确转换为 API 中的整数 `100000` 微美元。零价格有效；留空表示未知，最多填写 6 位小数。
+
+缓存价格不区分 5 分钟和 1 小时写入档位，统一填写当前 Upstream 的默认写入价。未配置缓存价格
+不会阻止模型参与路由；但响应实际报告了对应缓存 Token 时，该次实际费用无法完整核算。Models.dev
+存在 `cache_read` 或 `cache_write` 时，推荐目录会一并带入。
 
 内置目录只采用模型厂商的直接 provider 价格；存在上下文或速度分档时使用较保守的最高公开
 档位。它是录入参考，不代表代理实际 Upstream 的合同价、折扣价或中转价。启用 Auto 前应按
@@ -53,7 +65,11 @@ Token 的微美元”：`1 USD / 1M Token` 应填写 `1,000,000`。零价格有�
 明确提供的字段拥有最高优先级，也可增加 compatibility alias 与官方参考链接；当前
 override 位于 `scripts/model-catalog-overrides.mjs`。
 
-维护者使用以下命令更新：
+日常运维在“系统”页点击“从 Models.dev 更新”。服务端只访问固定来源，校验成功后原子
+替换运行时目录。更新后的潜在影响报告会列出容量、能力或价格变化涉及的 Profile 和策略，
+但不自动覆盖已保存参数。
+
+发版维护者要同步内置快照时使用：
 
 ```sh
 make update-model-catalog
@@ -62,7 +78,7 @@ make update-model-catalog
 该命令只在维护时联网，在一次性 `node:24-alpine` Docker 容器中运行
 `scripts/update-model-catalog.mjs`。脚本使用 `scripts/model-catalog-lib.mjs` 构建并
 完整验证目录，再通过 `scripts/model-catalog-update-lib.mjs` 在目标文件同目录原子替换
-`internal/admin/ui/static/model-catalog-data.js`；任何步骤失败都会保留旧快照。revision
+`internal/admin/ui/static/model-catalog-data.js` 和 `internal/modelcatalog/data/catalog.json`；两个目标文件都使用原子替换，某个目标写入失败时该文件保留旧快照。revision
 由两份原始 feed 的 SHA-256 组合生成，不依赖 GitHub API。
 
 ### 行为变化

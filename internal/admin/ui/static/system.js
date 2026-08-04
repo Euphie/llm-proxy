@@ -1,4 +1,6 @@
 import { renderPasswordChangePanel } from "./auth.js";
+import { installModelCatalog } from "./model-catalog.js";
+import { analyzeCatalogImpact } from "./model-catalog-impact.js";
 
 export function buildProfileExport(data = {}) {
   const defaultProfileID = Number(data.default_profile_id ?? 0);
@@ -19,6 +21,9 @@ export async function renderSystemPage(
   {
     loadSystem,
     loadProfiles,
+    loadModelCatalog,
+    refreshModelCatalog,
+    loadStrategies = async () => ({ strategies: [] }),
     changePassword,
     download = downloadJSON,
     onUnauthorized = () => {},
@@ -27,8 +32,14 @@ export async function renderSystemPage(
   root.replaceChildren(statusMessage("正在加载系统信息…"));
 
   let system;
+  let catalog = null;
   try {
-    system = await loadSystem();
+    [system, catalog] = await Promise.all([
+      loadSystem(),
+      typeof loadModelCatalog === "function"
+        ? loadModelCatalog().catch(() => null)
+        : Promise.resolve(null),
+    ]);
   } catch (error) {
     if (error?.status === 401) {
       onUnauthorized();
@@ -57,6 +68,96 @@ export async function renderSystemPage(
     );
   }
   information.append(values);
+
+  const catalogSection = element("section", "card stack model-catalog-system");
+  catalogSection.append(
+    textElement("h2", "模型信息库"),
+    textElement(
+      "p",
+      "只更新后台推荐信息，不会修改任何 Profile 或线上策略。",
+      "muted",
+    ),
+  );
+  const catalogDetails = element("div", "model-catalog-summary");
+  const catalogAlert = element("div", "model-catalog-refresh-message");
+  catalogAlert.setAttribute("role", "status");
+  catalogAlert.setAttribute("aria-live", "polite");
+  catalogAlert.hidden = true;
+  const impactOutput = element("div", "catalog-impact-output stack");
+  const refreshCatalog = textElement("button", "从 Models.dev 更新");
+  refreshCatalog.type = "button";
+  refreshCatalog.className = "button";
+  refreshCatalog.disabled = !catalog || typeof refreshModelCatalog !== "function";
+
+  const renderCatalogDetails = () => {
+    if (!catalog) {
+      catalogDetails.replaceChildren(
+        textElement("p", "当前无法读取模型信息库。", "muted"),
+      );
+      return;
+    }
+    catalogDetails.replaceChildren(
+      textElement("p", `来源：${catalog.source?.name || "未知"}`),
+      textElement("p", `${catalog.models?.length || 0} 个模型`),
+      textElement("p", `Revision：${String(catalog.source?.revision || "").slice(0, 12)}`),
+      textElement("p", `获取日期：${catalog.source?.retrieved || "未知"}`),
+    );
+  };
+  renderCatalogDetails();
+
+  refreshCatalog.addEventListener("click", async () => {
+    const previous = catalog;
+    catalogAlert.hidden = false;
+    catalogAlert.className = "model-catalog-refresh-message muted";
+    catalogAlert.textContent = "正在下载并校验远程模型信息库…";
+    refreshCatalog.disabled = true;
+    impactOutput.replaceChildren();
+    let result;
+    try {
+      result = await refreshModelCatalog();
+      catalog = result.catalog;
+      installModelCatalog(catalog);
+      renderCatalogDetails();
+      if (!result.changed) {
+        catalogAlert.textContent = "当前已经是最新版本。";
+        return;
+      }
+
+      catalogAlert.textContent = "模型信息库已更新；已保存的 Profile 参数没有变化。";
+      try {
+      const profileData = await loadProfiles();
+      const strategiesByProfile = {};
+      await Promise.all((profileData.profiles || []).map(async (profile) => {
+        strategiesByProfile[profile.id] = await loadStrategies(profile.id);
+      }));
+      const impact = analyzeCatalogImpact({
+        previous,
+        current: catalog,
+        profiles: profileData.profiles || [],
+        strategiesByProfile,
+      });
+      renderImpactReport(impactOutput, impact);
+      } catch (error) {
+        catalogAlert.className = "warning-banner model-catalog-refresh-message";
+        catalogAlert.textContent = `模型信息库已更新，但影响分析失败：${
+          error?.message || "请稍后重试。"
+        }`;
+      }
+    } catch (error) {
+      catalog = previous;
+      renderCatalogDetails();
+      catalogAlert.className = "error-banner model-catalog-refresh-message";
+      catalogAlert.textContent = error?.message || "模型信息库更新失败。";
+    } finally {
+      refreshCatalog.disabled = false;
+    }
+  });
+  catalogSection.append(
+    catalogDetails,
+    catalogAlert,
+    refreshCatalog,
+    impactOutput,
+  );
 
   const backup = element("section", "card stack");
   backup.append(
@@ -110,7 +211,7 @@ export async function renderSystemPage(
     },
   });
 
-  page.append(information, backup, password);
+  page.append(information, catalogSection, backup, password);
   root.replaceChildren(page);
 }
 
@@ -145,8 +246,51 @@ function element(tagName, className = "") {
   return result;
 }
 
-function textElement(tagName, text) {
-  const result = element(tagName);
+function textElement(tagName, text, className = "") {
+  const result = element(tagName, className);
   result.textContent = String(text);
   return result;
+}
+
+function renderImpactReport(root, rows) {
+  root.append(textElement("h3", "潜在影响报告"));
+  if (rows.length === 0) {
+    root.append(textElement("p", "没有已保存配置引用本次变化的模型。", "muted"));
+    return;
+  }
+  for (const row of rows) {
+    const item = element("article", `catalog-impact-row impact-${row.risk}`);
+    const header = element("div", "cluster");
+    header.append(
+      textElement("span", riskLabel(row.risk), `badge impact-badge-${row.risk}`),
+      textElement("strong", row.profileName),
+      textElement("code", row.modelId),
+    );
+    const scope = row.strategy
+      ? `${row.label} · ${row.strategy.name}（${strategyStateLabel(row.strategy.state)}）`
+      : row.label;
+    const link = textElement("a", "打开相关设置");
+    link.setAttribute("href", row.href);
+    item.append(
+      header,
+      textElement("p", scope),
+      textElement("p", row.changes.map((change) => change.label).join("、"), "muted"),
+      link,
+    );
+    root.append(item);
+  }
+}
+
+function riskLabel(risk) {
+  return { high: "高风险", medium: "中风险", low: "低风险" }[risk] || "提示";
+}
+
+function strategyStateLabel(state) {
+  return {
+    active: "正式",
+    canary: "灰度",
+    evaluating: "评估中",
+    ready: "待灰度",
+    draft: "草稿",
+  }[state] || state;
 }

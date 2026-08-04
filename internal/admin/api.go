@@ -30,6 +30,7 @@ type Dependencies struct {
 	Logger           *slog.Logger
 	ActivateProfiles func(context.Context) error
 	RuntimeReady     func() bool
+	ModelCatalog     ModelCatalogService
 }
 
 type API struct {
@@ -43,6 +44,7 @@ type API struct {
 	logger           *slog.Logger
 	activateProfiles func(context.Context) error
 	runtimeReady     func() bool
+	modelCatalog     ModelCatalogService
 	now              func() time.Time
 	routePaths       *http.ServeMux
 	allowedMethods   map[string][]string
@@ -79,6 +81,7 @@ func NewAPI(deps Dependencies) http.Handler {
 		logger:           logger,
 		activateProfiles: activateProfiles,
 		runtimeReady:     runtimeReady,
+		modelCatalog:     deps.ModelCatalog,
 		now:              time.Now,
 	}
 
@@ -129,8 +132,12 @@ func (a *API) routes() []apiRoute {
 		{method: http.MethodPut, pattern: "/_admin/api/default-profile", handler: a.setDefaultProfile},
 		{method: http.MethodGet, pattern: "/_admin/api/stats", handler: a.getStats},
 		{method: http.MethodGet, pattern: "/_admin/api/routing-traces", handler: a.getRoutingTraces},
+		{method: http.MethodGet, pattern: "/_admin/api/routing-traces/{id}", handler: a.getRoutingTraceDetail},
 		{method: http.MethodGet, pattern: "/_admin/api/routing-calls", handler: a.getRoutingCalls},
+		{method: http.MethodGet, pattern: "/_admin/api/model-performance", handler: a.getModelPerformance},
 		{method: http.MethodGet, pattern: "/_admin/api/system", handler: a.getSystem},
+		{method: http.MethodGet, pattern: "/_admin/api/model-catalog", handler: a.getModelCatalog},
+		{method: http.MethodPost, pattern: "/_admin/api/model-catalog/refresh", handler: a.refreshModelCatalog},
 	}
 }
 

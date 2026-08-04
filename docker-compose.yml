@@ -13,3 +13,4 @@ services:
     environment:
       LISTEN: :8080
       DATA_DIR: /app/data
+      LOG_LEVEL: ${LOG_LEVEL:-info}

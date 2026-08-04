@@ -173,14 +173,44 @@ export function createModelCatalogMatcher(models) {
   });
 }
 
-const BUILT_IN_MATCHER = createModelCatalogMatcher(BUILT_IN_MODELS);
+let activeCatalog = deepFreeze({
+  source: { ...MODELS_DEV_SOURCE },
+  models: BUILT_IN_MODELS.map((entry) => ({ ...entry })),
+});
+let activeMatcher = createModelCatalogMatcher(activeCatalog.models);
+
+export function installModelCatalog(catalog) {
+  if (!catalog || typeof catalog !== "object" || !Array.isArray(catalog.models)) {
+    throw new TypeError("model catalog must contain models");
+  }
+  if (!catalog.source || typeof catalog.source !== "object") {
+    throw new TypeError("model catalog source is required");
+  }
+  const source = { ...catalog.source };
+  const models = catalog.models.map((entry) => ({
+    ...entry,
+    apiIds: [...(entry.apiIds || [])],
+    aliases: [...(entry.aliases || [])],
+    compatibilityAliases: [...(entry.compatibilityAliases || [])],
+    references: (entry.references || []).map((reference) => ({ ...reference })),
+    source: { ...(entry.source || source) },
+  }));
+  const matcher = createModelCatalogMatcher(models);
+  activeCatalog = deepFreeze({ source, models });
+  activeMatcher = matcher;
+  return activeCatalog;
+}
+
+export function currentModelCatalog() {
+  return activeCatalog;
+}
 
 export function matchModelSuggestions(id, { limit = 5 } = {}) {
-  return BUILT_IN_MATCHER.matchModelSuggestions(id, { limit });
+  return activeMatcher.matchModelSuggestions(id, { limit });
 }
 
 export function matchModelSuggestion(id) {
-  return BUILT_IN_MATCHER.matchModelSuggestion(id);
+  return activeMatcher.matchModelSuggestion(id);
 }
 
 export function applyModelSuggestion(model, match) {
@@ -197,6 +227,8 @@ export function applyModelSuggestion(model, match) {
     "supports_structured_output",
     "input_price_micro_usd_per_million",
     "output_price_micro_usd_per_million",
+    "cache_read_price_micro_usd_per_million",
+    "cache_write_price_micro_usd_per_million",
   ]) {
     if (isEmpty(applied[field]) && Object.hasOwn(match.entry, field)) {
       applied[field] = match.entry[field];
@@ -367,4 +399,14 @@ function entrySortKey(entry) {
 
 function isEmpty(value) {
   return value === "" || value === null || value === undefined;
+}
+
+function deepFreeze(value) {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) {
+      deepFreeze(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
 }

@@ -122,6 +122,40 @@ test("built-in catalog is a broad immutable Models.dev snapshot", () => {
   assert.equal(audioOnly.supports_vision, false);
 });
 
+test("installModelCatalog hot-swaps recommendations without mutating the supplied catalog", () => {
+  const original = modelCatalog.currentModelCatalog();
+  const remote = {
+    source: {
+      name: "Models.dev",
+      revision: "d".repeat(64),
+      modelsSha256: "e".repeat(64),
+      providersSha256: "f".repeat(64),
+      retrieved: "2026-08-02",
+    },
+    models: [{
+      id: "remote-alpha",
+      canonicalId: "acme/remote-alpha",
+      apiIds: [],
+      aliases: ["acme/remote-alpha"],
+      compatibilityAliases: [],
+      provider: "Acme",
+      name: "Remote Alpha",
+      family: "remote-alpha",
+      supports_tools: true,
+      lifecycle: "stable",
+      references: [],
+    }],
+  };
+
+  modelCatalog.installModelCatalog(remote);
+  assert.equal(modelCatalog.matchModelSuggestion("remote-alpha").entry.name, "Remote Alpha");
+  assert.equal(modelCatalog.currentModelCatalog().source.revision, "d".repeat(64));
+  assert.equal(Object.isFrozen(modelCatalog.currentModelCatalog()), true);
+  assert.equal(Object.isFrozen(remote), false);
+
+  modelCatalog.installModelCatalog(original);
+});
+
 test("matcher exports the plural suggestion API", () => {
   assert.equal(typeof modelCatalog.matchModelSuggestions, "function");
   assert.equal(typeof modelCatalog.createModelCatalogMatcher, "function");
@@ -182,8 +216,17 @@ test("matcher is case-insensitive without altering dots, numeric versions, or in
       supports_structured_output: undefined,
       input_price_micro_usd_per_million: "",
       output_price_micro_usd_per_million: "",
+      cache_read_price_micro_usd_per_million: "",
+      cache_write_price_micro_usd_per_million: "",
     },
-    kimi,
+    {
+      ...kimi,
+      entry: {
+        ...kimi.entry,
+        cache_read_price_micro_usd_per_million: 60000,
+        cache_write_price_micro_usd_per_million: 750000,
+      },
+    },
   );
   assert.equal(applied.id, "Kimi-K2.5");
   assert.equal(applied.context_window, 262144);
@@ -192,6 +235,14 @@ test("matcher is case-insensitive without altering dots, numeric versions, or in
   assert.equal(applied.supports_tools, true);
   assert.equal(applied.input_price_micro_usd_per_million, 600000);
   assert.equal(applied.output_price_micro_usd_per_million, 3000000);
+  assert.equal(
+    applied.cache_read_price_micro_usd_per_million,
+    60000,
+  );
+  assert.equal(
+    applied.cache_write_price_micro_usd_per_million,
+    750000,
+  );
 });
 
 test("matcher prioritizes registered Haiku IDs before the snapshot rule", () => {
@@ -460,6 +511,8 @@ test("applyModelSuggestion fills only empty capability fields", () => {
       supports_tools: true,
       input_price_micro_usd_per_million: 1000000,
       output_price_micro_usd_per_million: 3200000,
+      cache_read_price_micro_usd_per_million: 200000,
+      cache_write_price_micro_usd_per_million: 0,
     },
   );
 });

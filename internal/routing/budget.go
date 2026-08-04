@@ -251,11 +251,17 @@ func (b *AttemptBudget) canReserveCallLocked(kind CallKind, cost int64) error {
 	}
 	usedAndHeld := addCost(b.used.WorstCaseCostMicroUSD, b.held.costMicroUSD)
 	nextCost := addCost(usedAndHeld, cost)
-	if usedAndHeld == maxCost || nextCost == maxCost ||
-		nextCost > b.limits.MaxWorstCaseCostMicroUSD {
+	if usedAndHeld == maxCost || exceedsCostLimit(
+		nextCost,
+		b.limits.MaxWorstCaseCostMicroUSD,
+	) {
 		return fmt.Errorf("%w: worst-case cost", ErrAttemptBudgetExceeded)
 	}
 	return nil
+}
+
+func exceedsCostLimit(cost, limit int64) bool {
+	return cost == maxCost || limit > 0 && cost > limit
 }
 
 func (b *AttemptBudget) canReserveModelSwitchCallLocked(cost int64) error {

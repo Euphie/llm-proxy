@@ -296,7 +296,10 @@ func (b *AttemptBudget) canHoldLocked(requested budgetCapacity) error {
 	}
 	usedAndHeld := addCost(b.used.WorstCaseCostMicroUSD, b.held.costMicroUSD)
 	if usedAndHeld == maxCost || requested.costMicroUSD == maxCost ||
-		addCost(usedAndHeld, requested.costMicroUSD) > b.limits.MaxWorstCaseCostMicroUSD {
+		exceedsCostLimit(
+			addCost(usedAndHeld, requested.costMicroUSD),
+			b.limits.MaxWorstCaseCostMicroUSD,
+		) {
 		return fmt.Errorf("%w: worst-case cost", ErrAttemptBudgetExceeded)
 	}
 	return nil
