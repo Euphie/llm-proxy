@@ -1,4 +1,5 @@
 import { openConfigurationGenerator } from "./generator.js";
+import { evaluationCatalogCoverage } from "./evaluation-catalog.js";
 import {
   currentModelCatalog,
   matchModelSuggestions,
@@ -63,26 +64,89 @@ const defaultRule = {
   jitter: "0s",
 };
 
-const defaultRiskPolicy = {
-	version: 2,
-  sensitive_text_patterns: [
-    "delete production", "drop table", "deploy to production", "rotate credential",
-    "删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
-  ],
-  sensitive_tool_patterns: [
-	"delete_production", "deploy_production", "rotate_credential", "rotate_secret", "payment", "transfer",
-    "database_mutation", "database_write", "database_delete", "db_write", "db_delete",
-  ],
-  structured_output_high_risk: false,
-  long_context_threshold_bps: 7500,
+const routingTaskLabels = {
+	simple: "简单请求",
+	general: "通用",
+	reasoning: "推理",
+	math: "数学",
+	coding: "编程",
+	tool_use: "工具调用",
+	vision: "视觉",
 };
 
-function newDefaultRiskPolicy() {
-  return {
-    ...defaultRiskPolicy,
-    sensitive_text_patterns: [...defaultRiskPolicy.sensitive_text_patterns],
-    sensitive_tool_patterns: [...defaultRiskPolicy.sensitive_tool_patterns],
-  };
+const routingDifficultyLabels = {
+	easy: "简单",
+	medium: "中等",
+	hard: "困难",
+};
+
+function routingGroupLabel(route) {
+	switch (String(route || "")) {
+	case "general":
+		return "常规模型组（general）";
+	case "strong":
+		return "高能力模型组（strong）";
+	default:
+		return String(route || "未设置");
+	}
+}
+
+function strategyModelIDs(config) {
+	const roleModels = (config?.roles?.participants || []).map(String).filter(Boolean);
+	if (roleModels.length > 0) {
+		return [...new Set(roleModels)];
+	}
+	return [...new Set((config?.routes || []).flatMap((route) =>
+		(route.candidates || []).map((candidate) => String(candidate?.model || ""))
+	).filter(Boolean))];
+}
+
+function strategyTaskSummary(config) {
+	const groups = strategyTaskRouteGroups(config?.task_routes || []);
+	if (groups.length === 0) {
+		return `所有任务 → ${routingGroupLabel(config?.default_route)}`;
+	}
+	return groups.map((group) => {
+		const count = group.taskTypes.filter(Boolean).length;
+		const difficulty = group.difficulties
+			.filter(Boolean)
+			.map((value) => routingDifficultyLabels[value] || value)
+			.join("、");
+		const scope = `${count || "所有"} 类任务${difficulty ? `（${difficulty}）` : ""}`;
+		return `${scope} → ${routingGroupLabel(group.route)}`;
+	}).join("；");
+}
+
+function strategyTaskRouteGroups(taskRoutes) {
+	const routesByDifficulty = new Map();
+	for (const item of taskRoutes) {
+		const route = String(item?.route || "未设置");
+		const difficulty = String(item?.difficulty || "");
+		const taskType = String(item?.task_type || "");
+		const key = `${difficulty}\u0000${route}`;
+		if (!routesByDifficulty.has(key)) {
+			routesByDifficulty.set(key, { difficulty, route, taskTypes: new Set() });
+		}
+		routesByDifficulty.get(key).taskTypes.add(taskType);
+	}
+
+	const merged = new Map();
+	for (const group of routesByDifficulty.values()) {
+		const taskTypes = [...group.taskTypes].sort();
+		const key = `${group.route}\u0000${taskTypes.join("\u0000")}`;
+		if (!merged.has(key)) {
+			merged.set(key, { route: group.route, difficulties: [], taskTypes });
+		}
+		merged.get(key).difficulties.push(group.difficulty);
+	}
+
+	const difficultyOrder = new Map([["easy", 0], ["medium", 1], ["hard", 2], ["", 3]]);
+	return [...merged.values()].map((group) => ({
+		...group,
+		difficulties: group.difficulties.sort((left, right) =>
+			(difficultyOrder.get(left) ?? 4) - (difficultyOrder.get(right) ?? 4)
+		),
+	}));
 }
 
 function newDefaultAutoRouting() {
@@ -91,13 +155,14 @@ function newDefaultAutoRouting() {
     participants: [],
     strong_baseline_model: "",
     task_analyzer_model: "",
-    analyzer_timeout: "5s",
+    analyzer_timeout: "15s",
     analyzer_min_confidence_bps: 7000,
     session_ttl: "24h",
+    session_lock_token_threshold: 100000,
     self_escalation: { enabled: true },
-    risk_policy: newDefaultRiskPolicy(),
     dynamic_optimization: {
       enabled: false,
+			auto_update_policy: false,
 			sample_rate_bps: 1000,
 			daily_budget_micro_usd: 250000,
 			reviewer_model: "",
@@ -109,6 +174,8 @@ function newDefaultAutoRouting() {
       name: defaultStrategyName(),
       alias: "",
       default_route: "default",
+		min_net_savings_bps: 0,
+		latency_target_ms: 0,
       task_routes: [],
       routes: [newDefaultRoute()],
       budget: {
@@ -116,7 +183,6 @@ function newDefaultAutoRouting() {
         max_auxiliary_calls: 2,
         max_total_outbound_calls: 5,
         max_retries_per_target: 1,
-        max_target_switches: 0,
         max_model_switches: 1,
         deadline: "2m",
         max_worst_case_cost_micro_usd: 500000,
@@ -129,7 +195,14 @@ function newDefaultRoute() {
   return {
     id: "default",
     min_quality_bps: 9000,
+		min_stability_bps: 8000,
     max_severe_error_rate_bps: 100,
+		weights: {
+			quality_bps: 4000,
+			stability_bps: 2500,
+			cost_bps: 2500,
+			performance_bps: 1000,
+		},
     candidates: [],
   };
 }
@@ -150,12 +223,9 @@ export function defaultProfileDraft(protocol = "anthropic") {
     enabled: true,
     make_default: false,
     config: {
-      version: 1,
+      version: 2,
       protocol,
       upstream: "",
-      provider_id: "",
-      credential_scope: "",
-      targets: [],
       models: [],
       auto_routing: newDefaultAutoRouting(),
       vision: {
@@ -172,11 +242,6 @@ export function profilePayload(draft) {
   const protocol = String(draft.protocol ?? config.protocol ?? "anthropic");
   const vision = draft.vision || config.vision || {};
   const models = draft.models || config.models || [];
-  const targets = draft.targets || config.targets || [];
-  const providerID = String(draft.provider_id ?? config.provider_id ?? "");
-  const credentialScope = String(
-    draft.credential_scope ?? config.credential_scope ?? "",
-  );
   const autoRouting = draft.auto_routing || config.auto_routing ||
     newDefaultAutoRouting();
   const rules = draft.overload_rules || config.overload_rules || [];
@@ -200,11 +265,6 @@ export function profilePayload(draft) {
       version: Number(draft.version ?? config.version ?? 1),
       protocol,
       upstream: String(draft.upstream ?? config.upstream ?? ""),
-      ...(providerID !== "" ? { provider_id: providerID } : {}),
-      ...(credentialScope !== "" ? { credential_scope: credentialScope } : {}),
-      ...(targets.length > 0 ? {
-        targets: targetsPayload(targets, providerID, credentialScope),
-      } : {}),
       models: modelPayload,
       auto_routing: autoPayload,
       vision: {
@@ -250,6 +310,7 @@ export function addModelCapability(models) {
       max_output_tokens: "",
       supports_vision: "",
       supports_tools: "",
+      supports_agent_workflow: "",
       supports_structured_output: "",
       input_price_micro_usd_per_million: "",
       output_price_micro_usd_per_million: "",
@@ -261,31 +322,6 @@ export function addModelCapability(models) {
 
 export function removeModelCapability(models, index) {
   return models.filter((_, current) => current !== index);
-}
-
-export function addTarget(targets) {
-  return [...targets, {
-    id: "", upstream: "", provider_id: "", credential_scope: "", models: [],
-  }];
-}
-
-export function removeTarget(targets, index) {
-  return targets.filter((_, current) => current !== index);
-}
-
-export function moveTarget(targets, index, offset) {
-  const destination = index + offset;
-  if (
-    index < 0 ||
-    index >= targets.length ||
-    destination < 0 ||
-    destination >= targets.length
-  ) {
-    return [...targets];
-  }
-  const moved = [...targets];
-  [moved[index], moved[destination]] = [moved[destination], moved[index]];
-  return moved;
 }
 
 export function addRetryRule(rules) {
@@ -329,18 +365,12 @@ export function profileDraft(profile, defaultProfileID = 0) {
         profile?.config?.protocol ?? draft.config.protocol,
       ),
       upstream: String(profile?.config?.upstream ?? ""),
-      provider_id: String(profile?.config?.provider_id ?? ""),
-      credential_scope: String(profile?.config?.credential_scope ?? ""),
-      targets: (profile?.config?.targets || []).map((target) => ({
-        id: String(target?.id ?? ""),
-        upstream: String(target?.upstream ?? ""),
-        provider_id: String(target?.provider_id ?? ""),
-        credential_scope: String(target?.credential_scope ?? ""),
-        models: (target?.models || []).map((model) => String(model)),
-      })),
       models: (profile?.config?.models || []).map((model) => ({
         ...model,
         id: String(model?.id ?? ""),
+        ...(model?.canonical_model_id
+          ? { canonical_model_id: String(model.canonical_model_id) }
+          : {}),
         supports_vision:
           typeof model?.supports_vision === "boolean"
             ? model.supports_vision
@@ -526,6 +556,29 @@ export function renderProfileList(root, data, actions = {}) {
 export function renderProfileEditor(root, source, actions = {}) {
 	const strategyOverview = source?.strategy_overview || null;
 	const editingStrategyID = Number(source?.strategy_editing_id || 0);
+	const currentActiveStrategy = strategyOverview?.snapshot?.active || null;
+	const strategyVersions = strategyOverview?.strategies || [];
+	const strategyGenerations = strategyOverview?.generations || [];
+	const editingStrategyVersion = strategyVersions.find(
+		(version) => Number(version.id) === editingStrategyID && version.state === "draft",
+	);
+	const generatedStrategyIDs = new Set(
+		strategyGenerations.map((generation) => Number(generation.strategy_id)),
+	);
+	const openGeneratedDraft = strategyVersions.find(
+		(version) => version.state === "draft" && !version.archived_at &&
+			generatedStrategyIDs.has(Number(version.id)),
+	) || null;
+	const refreshableVersion = editingStrategyVersion && !editingStrategyVersion.archived_at &&
+		generatedStrategyIDs.has(editingStrategyID)
+		? editingStrategyVersion
+		: openGeneratedDraft;
+	const refreshableGeneration = refreshableVersion
+		? strategyGenerations.find(
+			(generation) => Number(generation.strategy_id) === Number(refreshableVersion.id),
+		) || null
+		: null;
+	const refreshIntent = refreshableGeneration?.intent || {};
   const working = profileDraft(
     {
       ...source,
@@ -576,24 +629,6 @@ export function renderProfileEditor(root, source, actions = {}) {
       required: true,
       type: "url",
       description: "请求转发的基础地址；不要填写调用方密钥或具体接口路径。",
-    },
-  );
-  const providerID = fieldInput(
-    basicGrid,
-    "供应商 ID",
-    "provider_id",
-    working.config.provider_id,
-    {
-      description: "主上游节点的逻辑供应商标识；配置备用上游节点时必填，不是密钥。",
-    },
-  );
-  const credentialScope = fieldInput(
-    basicGrid,
-    "凭据范围",
-    "credential_scope",
-    working.config.credential_scope,
-    {
-      description: "主上游节点可原样复用的逻辑凭据范围；配置备用上游节点时必填，不填写凭据值。",
     },
   );
   const version = fieldInput(
@@ -655,124 +690,6 @@ export function renderProfileEditor(root, source, actions = {}) {
   });
   basic.append(basicGrid, slugWarning);
 
-  const targets = editorSection("上游节点容错");
-  const targetHelp = textElement(
-    "p",
-    "Upstream 是主上游节点。备用上游节点仅供 model=auto 在可重试故障时按顺序切换；只填写同一供应商、可复用当前请求凭据的服务地址。",
-  );
-  targetHelp.className = "muted";
-  const targetList = element("div", "stack target-list");
-  let targetRows = [];
-
-  function syncTargets() {
-    working.config.targets = targetRows.map((row) => ({
-      id: row.id.value,
-      upstream: row.upstream.value,
-      provider_id: row.providerID.value,
-      credential_scope: row.credentialScope.value,
-      models: row.models.value
-        .split(",")
-        .map((model) => model.trim())
-        .filter(Boolean),
-    }));
-  }
-
-  function renderTargets() {
-    targetRows = [];
-    const rows = working.config.targets.map((target, index) => {
-      const row = element("fieldset", "card target-row");
-      const legend = textElement("legend", `备用上游节点 ${index + 1}`);
-      const fields = element("div", "form-grid");
-      const id = fieldInput(fields, "节点 ID", `target-${index}-id`, target.id, {
-        required: true,
-        description: "小写安全标识，例如 region_b；primary 保留给主 Upstream。",
-      });
-      const targetUpstream = fieldInput(
-        fields,
-        "节点地址",
-        `target-${index}-upstream`,
-        target.upstream,
-        {
-          required: true,
-          type: "url",
-          description: "备用基础地址，不含密钥和具体接口路径。",
-        },
-      );
-      const targetModels = fieldInput(
-        fields,
-        "可用模型",
-        `target-${index}-models`,
-        (target.models || []).join(", "),
-        {
-          required: true,
-          description: "填写模型能力中已录入的精确 ID，多个模型用英文逗号分隔。",
-        },
-      );
-      const targetProviderID = fieldInput(
-        fields,
-        "供应商 ID",
-        `target-${index}-provider-id`,
-        target.provider_id,
-        {
-          required: true,
-          description: "必须与主上游节点的供应商 ID 精确一致。",
-        },
-      );
-      const targetCredentialScope = fieldInput(
-        fields,
-        "凭据范围",
-        `target-${index}-credential-scope`,
-        target.credential_scope,
-        {
-          required: true,
-          description: "必须与主上游节点的凭据范围精确一致；不要填写密钥。",
-        },
-      );
-      targetRows.push({
-        id,
-        upstream: targetUpstream,
-        providerID: targetProviderID,
-        credentialScope: targetCredentialScope,
-        models: targetModels,
-      });
-
-      const controls = element("div", "cluster target-actions");
-      const up = actionButton("上移节点", "button-secondary");
-      const down = actionButton("下移节点", "button-secondary");
-      const remove = actionButton("删除节点", "button-danger");
-      up.disabled = index === 0;
-      down.disabled = index === working.config.targets.length - 1;
-      up.addEventListener("click", () => {
-        syncTargets();
-        working.config.targets = moveTarget(working.config.targets, index, -1);
-        renderTargets();
-      });
-      down.addEventListener("click", () => {
-        syncTargets();
-        working.config.targets = moveTarget(working.config.targets, index, 1);
-        renderTargets();
-      });
-      remove.addEventListener("click", () => {
-        syncTargets();
-        working.config.targets = removeTarget(working.config.targets, index);
-        renderTargets();
-      });
-      controls.append(up, down, remove);
-      row.append(legend, fields, controls);
-      return row;
-    });
-    targetList.replaceChildren(...rows);
-  }
-
-  renderTargets();
-  const addTargetButton = actionButton("添加备用上游节点", "button-secondary");
-  addTargetButton.addEventListener("click", () => {
-    syncTargets();
-    working.config.targets = addTarget(working.config.targets);
-    renderTargets();
-  });
-  targets.append(targetHelp, targetList, addTargetButton);
-
   const models = editorSection("模型能力");
   const modelHelp = textElement(
     "p",
@@ -807,14 +724,21 @@ export function renderProfileEditor(root, source, actions = {}) {
     autoValues: {},
   }));
   let refreshAutoModelOptions = () => {};
+  let refreshVisionModelOptions = () => {};
 
   function syncModelCapabilities() {
     working.config.models = modelRows.map((row) => ({
       id: row.id.value,
+      ...(row.canonicalModelID()
+        ? { canonical_model_id: row.canonicalModelID() }
+        : {}),
       context_window: row.contextWindow.value,
       max_output_tokens: row.maxOutputTokens.value,
       supports_vision: selectBooleanValue(row.supportsVision.value),
       supports_tools: selectBooleanValue(row.supportsTools.value),
+      supports_agent_workflow: selectBooleanValue(
+		row.supportsAgentWorkflow.value,
+	  ),
       supports_structured_output: selectBooleanValue(
         row.supportsStructuredOutput.value,
       ),
@@ -908,6 +832,39 @@ export function renderProfileEditor(root, source, actions = {}) {
         },
       );
       id.setAttribute("data-model-field", "id");
+      let canonicalModelID = String(model.canonical_model_id || "");
+      let canonicalOwnerID = canonicalModelID ? String(model.id || "") : "";
+      let previousCanonicalIdentity = null;
+
+      function applyCanonicalIdentity(entry) {
+        canonicalModelID = String(entry?.canonicalId || entry?.id || "");
+        canonicalOwnerID = canonicalModelID ? String(id.value) : "";
+        if (canonicalModelID) {
+          model.canonical_model_id = canonicalModelID;
+        } else {
+          delete model.canonical_model_id;
+        }
+        previousCanonicalIdentity = null;
+      }
+
+      function trackModelIDChange() {
+        if (previousCanonicalIdentity && id.value === previousCanonicalIdentity.owner) {
+          canonicalModelID = previousCanonicalIdentity.id;
+          canonicalOwnerID = previousCanonicalIdentity.owner;
+          model.canonical_model_id = canonicalModelID;
+          previousCanonicalIdentity = null;
+          return;
+        }
+        if (canonicalModelID && id.value !== canonicalOwnerID) {
+          previousCanonicalIdentity = {
+            id: canonicalModelID,
+            owner: canonicalOwnerID,
+          };
+          canonicalModelID = "";
+          canonicalOwnerID = "";
+          delete model.canonical_model_id;
+        }
+      }
 
       const presetWrapper = element(
         "div",
@@ -1004,6 +961,25 @@ export function renderProfileEditor(root, source, actions = {}) {
         },
       );
       supportsTools.setAttribute("data-model-field", "supports_tools");
+      const supportsAgentWorkflow = fieldSelect(
+        fields,
+        "支持 Agent 工作流",
+        `model-${index}-supports-agent-workflow`,
+        booleanSelectValue(model.supports_agent_workflow),
+        [
+          ["", "未验证"],
+          ["true", "已验证"],
+          ["false", "不支持"],
+        ],
+		{
+		  description:
+			"表示可完成 Claude Code/Codex 长上下文与多轮工具工作流；提示词是否外泄不再作为自动切换条件。未验证模型不会接收 Agent 的 Auto 请求。",
+		},
+      );
+      supportsAgentWorkflow.setAttribute(
+        "data-model-field",
+        "supports_agent_workflow",
+      );
       const supportsStructuredOutput = fieldSelect(
         fields,
         "支持结构化输出",
@@ -1099,6 +1075,7 @@ export function renderProfileEditor(root, source, actions = {}) {
         max_output_tokens: maxOutputTokens,
         supports_vision: supportsVision,
         supports_tools: supportsTools,
+        supports_agent_workflow: supportsAgentWorkflow,
         supports_structured_output: supportsStructuredOutput,
         input_price_micro_usd_per_million: inputPrice,
         output_price_micro_usd_per_million: outputPrice,
@@ -1108,6 +1085,7 @@ export function renderProfileEditor(root, source, actions = {}) {
       const booleanCapabilityFields = new Set([
         "supports_vision",
         "supports_tools",
+        "supports_agent_workflow",
         "supports_structured_output",
       ]);
       const priceCapabilityFields = new Set([
@@ -1153,12 +1131,14 @@ export function renderProfileEditor(root, source, actions = {}) {
           control.value = value;
           recommendationState.autoValues[field] = value;
         }
+        applyCanonicalIdentity(match.entry);
       }
 
       let selectedPresetEntry = null;
       let presetAutoSelected = false;
       let promptedTemplateID = "";
       let templateDialogOpen = false;
+      let recommendationActionPending = false;
       const selectPreset = ({ manual = true } = {}) => {
         const query = String(preset.value).trim().toLowerCase();
         selectedPresetEntry = catalogModels.find((entry) =>
@@ -1279,7 +1259,16 @@ export function renderProfileEditor(root, source, actions = {}) {
             `应用 ${reliableValue(match.entry.name)} 推荐值`,
             "button-secondary",
           );
-          apply.addEventListener("click", () => applyRecommendation(match));
+          apply.addEventListener("pointerdown", () => {
+            recommendationActionPending = true;
+          });
+          apply.addEventListener("pointercancel", () => {
+            recommendationActionPending = false;
+          });
+          apply.addEventListener("click", () => {
+            applyRecommendation(match);
+            recommendationActionPending = false;
+          });
           card.append(apply);
         }
         return card;
@@ -1391,7 +1380,9 @@ export function renderProfileEditor(root, source, actions = {}) {
           return;
         }
         commitRecommendations();
-        promptTemplateIfNeeded();
+        if (!recommendationActionPending) {
+          promptTemplateIfNeeded();
+        }
       }
 
       for (const [field, control] of Object.entries(capabilityControls)) {
@@ -1402,6 +1393,8 @@ export function renderProfileEditor(root, source, actions = {}) {
         control.addEventListener("change", releaseOwnership);
       }
       id.addEventListener("input", (event) => {
+        recommendationActionPending = false;
+        trackModelIDChange();
         refreshRecommendations({ applyAuto: true });
         refreshAutoModelOptions();
         updateAutoDependencyState();
@@ -1436,10 +1429,12 @@ export function renderProfileEditor(root, source, actions = {}) {
       row.append(legend, fields, recommendation, controls);
       modelRows.push({
         id,
+        canonicalModelID: () => canonicalModelID,
         contextWindow,
         maxOutputTokens,
         supportsVision,
         supportsTools,
+        supportsAgentWorkflow,
         supportsStructuredOutput,
         inputPrice,
         outputPrice,
@@ -1469,17 +1464,16 @@ export function renderProfileEditor(root, source, actions = {}) {
   const autoRouting = editorSection("智能路由");
   const autoHelp = textElement(
     "p",
-    "仅处理 model=auto。系统先判断任务，再在当前 Profile 的参与模型中选择满足能力和质量要求且预计总费用最低的模型。",
+		"智能路由仅处理 model=auto。系统结合公开评测和本地证据，为参与模型生成角色、Route 门槛、权重、任务映射和预算。推荐结果始终是可编辑草稿，不会自动发布；客户端指定具体模型时仍原样转发。",
   );
-  autoHelp.className = "muted";
+  const strategyGuide = element("div", "routing-strategy-guide stack");
+  const strategyGuideLink = textElement("a", "查看完整字段说明和选模示例 ↗");
+  strategyGuideLink.href = INTELLIGENT_ROUTING_HELP_HREF;
+  strategyGuide.append(autoHelp, strategyGuideLink);
   const autoEnabled = checkboxField(
     autoRouting,
     "启用智能路由",
     "auto_routing_enabled",
-    {
-      description:
-        "关闭时不发起任务分析，也不会改写 model；客户端指定具体模型始终原样转发。",
-    },
   );
   autoEnabled.checked = Boolean(working.config.auto_routing.enabled);
   const autoDependency = textElement(
@@ -1500,7 +1494,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   const participantList = element("div", "model-participant-list stack");
   const participantHelp = textElement(
     "p",
-    "至少选择两个不同模型。只有勾选的模型会参与主回答选型；新增模型不会自动加入。",
+    "至少选择两个不同模型。只有勾选的模型会参与主回答选型；变更参与模型时，系统会要求先生成兼容的新策略草稿。",
   );
   participantHelp.className = "field-help";
   autoRoles.append(participantHelp, participantList);
@@ -1513,7 +1507,7 @@ export function renderProfileEditor(root, source, actions = {}) {
     [],
     {
       description:
-        "高风险、分析失败或没有普通候选达标时使用；必须属于参与模型。",
+        "高风险、首次分析失败且无会话模型，或没有普通候选达标时使用；必须属于参与模型。",
     },
   );
   const taskAnalyzer = fieldSelect(
@@ -1524,7 +1518,7 @@ export function renderProfileEditor(root, source, actions = {}) {
     [],
     {
       description:
-        "仅在本地规则无法确定任务时调用；必须明确支持工具调用，建议选择快速、低价的模型。",
+		"每个 model=auto 请求都会调用；必须明确支持普通工具调用，建议选择快速、低价的模型。",
     },
   );
   const analyzerTimeout = fieldInput(
@@ -1533,12 +1527,12 @@ export function renderProfileEditor(root, source, actions = {}) {
     "auto_analyzer_timeout",
     working.config.auto_routing.analyzer_timeout,
     {
-      description: "单次任务分析的上限，例如 5s；超时后保守回到强模型基线。",
+      description: "单次任务分析的上限，建议 15s；超时后保守回到强模型基线。",
     },
   );
   const analyzerConfidence = fieldInput(
     roleGrid,
-    "最低分析置信度（%）",
+		"各维度最低置信度（%）",
     "auto_analyzer_confidence",
     basisPointsToPercent(
       working.config.auto_routing.analyzer_min_confidence_bps,
@@ -1548,7 +1542,7 @@ export function renderProfileEditor(root, source, actions = {}) {
       min: "0",
       max: "100",
       step: "0.01",
-      description: "低于该值的分析结果不参与选型，直接使用强模型基线。",
+		description: "分别约束任务类型、复杂度和风险：低置信任务类型走默认 Route，复杂度按中等保护，风险不确定时使用强模型兜底。",
     },
   );
   const sessionTTL = fieldInput(
@@ -1557,8 +1551,18 @@ export function renderProfileEditor(root, source, actions = {}) {
     "auto_session_ttl",
     working.config.auto_routing.session_ttl,
     {
-      description:
-        "默认 24h。客户端发送 X-LLM-Proxy-Session-ID 且带鉴权头时，后续请求复用首轮任务类型和质量下限；只升级、不自动降级。",
+	  description:
+		"默认 24h。Claude Code 和 Codex 原生会话会自动识别；其他客户端发送 X-LLM-Proxy-Session-ID。同一任务的工具回合直接复用；新任务会重新分析风险。",
+    },
+  );
+  const sessionLockTokenThreshold = fieldInput(
+    roleGrid,
+    "Session 锁定 Token 阈值",
+    "auto_session_lock_token_threshold",
+    working.config.auto_routing.session_lock_token_threshold,
+    {
+      type: "number", min: "1", step: "1000",
+      description: "默认 100K。连续 3 个任务稳定、最低置信度 85%，且会话输入或缓存读取达到阈值后锁定模型；修改阈值会撤销普通锁，但保留最高模型锁。",
     },
   );
   const selfEscalationEnabled = checkboxField(
@@ -1576,34 +1580,12 @@ export function renderProfileEditor(root, source, actions = {}) {
   autoRoles.append(roleGrid);
 
   const riskSection = editorSubsection("高风险判定");
-  const riskPolicy = working.config.auto_routing.risk_policy;
 	const riskV2Help = textElement(
 	  "p",
-	  "风险策略 v2 只处理可能造成实际损失的操作。普通 Shell、代码编辑、结构化输出和长上下文不会单独触发高风险。",
+	  "高风险完全由任务分析模型按语义判断，支持多语言、标点和同义表达，并区分执行意图与引用、否定、审计和沙箱场景。普通 Shell、代码编辑、结构化输出和长上下文不会单独触发高风险。",
 	);
 	riskV2Help.className = "field-help";
-  const riskGrid = element("div", "form-grid");
-  const sensitiveTextPatterns = fieldTextarea(
-    riskGrid,
-    "敏感文本片段",
-    "auto_sensitive_text_patterns",
-    riskPolicy.sensitive_text_patterns.join("\n"),
-    {
-      description:
-		"仅检查当前轮用户文本，每行一个不区分大小写的子串。命中后强制使用强模型基线。",
-    },
-  );
-  const sensitiveToolPatterns = fieldTextarea(
-    riskGrid,
-    "敏感工具名片段",
-    "auto_sensitive_tool_patterns",
-    riskPolicy.sensitive_tool_patterns.join("\n"),
-    {
-      description:
-		"仅检查当前请求强制指定的工具名。历史调用和仅暴露的工具定义只用于任务分析，不会单独升级。",
-    },
-  );
-	riskSection.append(riskV2Help, riskGrid);
+	riskSection.append(riskV2Help);
 
 	const dynamicOptimizationSection = editorSubsection("对比学习");
 	const dynamicConfig = working.config.auto_routing.dynamic_optimization;
@@ -1685,21 +1667,7 @@ export function renderProfileEditor(root, source, actions = {}) {
 	});
 	dynamicOptimizationSection.append(dynamicDetails);
 
-  const strategySection = editorSubsection("策略");
-  const strategyGuide = element("div", "routing-strategy-guide stack");
-  strategyGuide.append(
-    textElement(
-      "p",
-      "Route 是一组采用相同质量要求的任务。任务先映射到 Route，再排除不达标的候选，最后从合格候选中选择预计完整成本最低的模型。",
-    ),
-    textElement(
-      "p",
-      "配置顺序：添加 Route → 设置质量与严重错误门槛 → 添加候选模型 → 设置任务映射和默认 Route。",
-    ),
-  );
-  const strategyGuideLink = textElement("a", "查看完整字段说明和选模示例 ↗");
-  strategyGuideLink.href = INTELLIGENT_ROUTING_HELP_HREF;
-  strategyGuide.append(strategyGuideLink);
+  const strategySection = editorSubsection("手动设置策略");
   const strategyGrid = element("div", "form-grid");
   const strategyName = fieldInput(
     strategyGrid,
@@ -1732,7 +1700,27 @@ export function renderProfileEditor(root, source, actions = {}) {
       description: "任务分析结果没有匹配下方“任务映射”时使用的兜底 Route；启用智能路由后必填。",
     },
   );
-  strategySection.append(strategyGuide, strategyGrid);
+	const minimumNetSavings = fieldInput(
+		strategyGrid,
+		"最低净节省（%）",
+		"auto_min_net_savings",
+		basisPointsToPercent(working.config.auto_routing.strategy.min_net_savings_bps || 0),
+		{
+			type: "number", min: "0", max: "100", step: "0.01",
+			description: "计入任务分析和当前请求已产生的费用后，候选至少需要节省的比例；智能生成默认 10%。",
+		},
+	);
+	const strategyLatencyTarget = fieldInput(
+		strategyGrid,
+		"候选延迟上限（ms）",
+		"auto_strategy_latency_target",
+		working.config.auto_routing.strategy.latency_target_ms || 0,
+		{
+			type: "number", min: "0", step: "1",
+			description: "0 表示不限制；启用后，延迟未知或超过上限的非基线候选会回退强基线。",
+		},
+	);
+  strategySection.append(strategyGrid);
 
   const routeList = element("div", "stack auto-route-list");
   let autoRouteRows = [];
@@ -1760,20 +1748,39 @@ export function renderProfileEditor(root, source, actions = {}) {
         row.minQuality.value,
         `Route ${row.id.value || "未命名"}：最低质量`,
       ),
+			min_stability_bps: percentToBasisPoints(
+				row.minStability.value,
+				`Route ${row.id.value || "未命名"}：最低稳定性`,
+			),
       max_severe_error_rate_bps: percentToBasisPoints(
         row.maxSevereError.value,
         `Route ${row.id.value || "未命名"}：严重错误率`,
       ),
+			weights: {
+				quality_bps: percentToBasisPoints(row.qualityWeight.value, "质量权重"),
+				stability_bps: percentToBasisPoints(row.stabilityWeight.value, "稳定性权重"),
+				cost_bps: percentToBasisPoints(row.costWeight.value, "成本权重"),
+				performance_bps: percentToBasisPoints(row.performanceWeight.value, "性能权重"),
+			},
       candidates: row.candidates.map((candidate) => ({
         model: candidate.model.value,
+        production_eligible: candidate.productionEligible.checked,
         quality_score_bps: percentToBasisPoints(
           candidate.quality.value,
           `候选模型 ${candidate.model.value || "未选择"}：质量`,
         ),
+				stability_score_bps: percentToBasisPoints(
+					candidate.stability.value,
+					`候选模型 ${candidate.model.value || "未选择"}：稳定性`,
+				),
         severe_error_rate_bps: percentToBasisPoints(
           candidate.severeError.value,
           `候选模型 ${candidate.model.value || "未选择"}：严重错误率`,
         ),
+				expected_latency_ms: requiredNonnegativeSafeInteger(
+					candidate.expectedLatency.value,
+					`候选模型 ${candidate.model.value || "未选择"}：预期延迟`,
+				),
       })),
     }));
   }
@@ -1818,6 +1825,16 @@ export function renderProfileEditor(root, source, actions = {}) {
             description: "本 Route 可接受的最低质量。例如设为 90，质量估计 89 的候选会被排除，92 的候选可继续参与选型。",
           },
         );
+				const minStability = fieldInput(
+					fields,
+					"最低稳定性（%）",
+					`auto-route-${routeIndex}-min-stability`,
+					basisPointsToPercent(route.min_stability_bps),
+					{
+						type: "number", min: "0", max: "100", step: "0.01",
+						description: "真实请求成功率、无严重错误、输出有效性与干净完成率的综合下限。低于该值的候选不会进入加权排序。",
+					},
+				);
         const maxSevereError = fieldInput(
           fields,
           "最大严重错误率（%）",
@@ -1828,6 +1845,27 @@ export function renderProfileEditor(root, source, actions = {}) {
             description: "本 Route 可接受的严重错误率上限。例如设为 1%，候选为 1.2% 时即使更便宜也会被排除。",
           },
         );
+				const weights = route.weights || {};
+				const qualityWeight = fieldInput(
+					fields, "质量权重（%）", `auto-route-${routeIndex}-weight-quality`,
+					basisPointsToPercent(weights.quality_bps),
+					{ type: "number", min: "0", max: "100", step: "0.01", description: "质量下界在最终路由分数中的占比。四项权重之和必须为 100%。" },
+				);
+				const stabilityWeight = fieldInput(
+					fields, "稳定性权重（%）", `auto-route-${routeIndex}-weight-stability`,
+					basisPointsToPercent(weights.stability_bps),
+					{ type: "number", min: "0", max: "100", step: "0.01", description: "稳定性下界在最终路由分数中的占比。" },
+				);
+				const costWeight = fieldInput(
+					fields, "成本权重（%）", `auto-route-${routeIndex}-weight-cost`,
+					basisPointsToPercent(weights.cost_bps),
+					{ type: "number", min: "0", max: "100", step: "0.01", description: "相对最低预期完整成本的效率得分占比。" },
+				);
+				const performanceWeight = fieldInput(
+					fields, "性能权重（%）", `auto-route-${routeIndex}-weight-performance`,
+					basisPointsToPercent(weights.performance_bps),
+					{ type: "number", min: "0", max: "100", step: "0.01", description: "相对最低预期延迟的性能得分占比；未知延迟保守按 0 分处理。" },
+				);
         const candidatesList = element("div", "stack auto-candidate-list");
         const candidateControls = [];
         const renderCandidates = () => {
@@ -1843,6 +1881,15 @@ export function renderProfileEditor(root, source, actions = {}) {
               [["", "请选择"], ...participantModelIDs().map((modelID) => [modelID, modelID])],
               { description: "该模型只参与当前 Route；必须先在上方勾选为参与模型。通过全部门槛后才会比较预计完整成本。" },
             );
+            const productionEligible = checkboxField(
+              candidateFields,
+              "允许生产流量",
+              `auto-route-${routeIndex}-candidate-${candidateIndex}-production-eligible`,
+              {
+                description: "关闭时仍可参加 Shadow 评测。手动开启会直接授权生产流量；自动晋升只使用可靠本地证据。",
+              },
+            );
+            productionEligible.checked = Boolean(candidate.production_eligible);
             const quality = fieldInput(
               candidateFields,
               "当前质量估计（%）",
@@ -1863,13 +1910,33 @@ export function renderProfileEditor(root, source, actions = {}) {
                 description: "该模型在当前 Route 下的初始严重错误率，用于和上限直接比较。它是硬门槛，不会被低价格或高平均质量抵消。",
               },
             );
+						const stability = fieldInput(
+							candidateFields,
+							"当前稳定性估计（%）",
+							`auto-route-${routeIndex}-candidate-${candidateIndex}-stability`,
+							basisPointsToPercent(candidate.stability_score_bps),
+							{
+								type: "number", min: "0", max: "100", step: "0.01",
+								description: "当前 Route 下的稳定性先验；积累足够真实请求与评审证据后，学习草稿会更新为保守下界。",
+							},
+						);
+						const expectedLatency = fieldInput(
+							candidateFields,
+							"预期延迟（ms）",
+							`auto-route-${routeIndex}-candidate-${candidateIndex}-latency`,
+							candidate.expected_latency_ms,
+							{
+								type: "number", min: "0", step: "1",
+								description: "端到端回答延迟的初始估计；0 表示未知。在线学习会用真实请求平均延迟更新。",
+							},
+						);
             const removeCandidate = actionButton("删除候选", "button-danger");
             removeCandidate.addEventListener("click", () => {
               syncAutoRoutes();
               working.config.auto_routing.strategy.routes[routeIndex].candidates.splice(candidateIndex, 1);
               renderAutoRoutes();
             });
-            candidateControls.push({ model, quality, severeError });
+						candidateControls.push({ model, productionEligible, quality, stability, severeError, expectedLatency });
             candidateRow.append(candidateFields, removeCandidate);
             return candidateRow;
           });
@@ -1881,8 +1948,11 @@ export function renderProfileEditor(root, source, actions = {}) {
           syncAutoRoutes();
           working.config.auto_routing.strategy.routes[routeIndex].candidates.push({
             model: participantModelIDs()[0] || "",
+            production_eligible: false,
             quality_score_bps: 9000,
+						stability_score_bps: 9000,
             severe_error_rate_bps: 0,
+						expected_latency_ms: 0,
           });
           renderAutoRoutes();
         });
@@ -1894,7 +1964,11 @@ export function renderProfileEditor(root, source, actions = {}) {
         });
         id.addEventListener("input", refreshRouteChoices);
         row.append(legend, fields, candidatesList, addCandidate, removeRoute);
-        autoRouteRows.push({ id, minQuality, maxSevereError, candidates: candidateControls });
+				autoRouteRows.push({
+					id, minQuality, minStability, maxSevereError,
+					qualityWeight, stabilityWeight, costWeight, performanceWeight,
+					candidates: candidateControls,
+				});
         return row;
       },
     );
@@ -1910,7 +1984,12 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.auto_routing.strategy.routes.push({
       id: `route_${index}`,
       min_quality_bps: 9000,
+			min_stability_bps: 8000,
       max_severe_error_rate_bps: 100,
+			weights: {
+				quality_bps: 4000, stability_bps: 2500,
+				cost_bps: 2500, performance_bps: 1000,
+			},
       candidates: [],
     });
     renderAutoRoutes();
@@ -1936,9 +2015,14 @@ export function renderProfileEditor(root, source, actions = {}) {
     const rows = working.config.auto_routing.strategy.task_routes.map((mapping, index) => {
       const row = element("div", "card auto-task-route-row");
       const fields = element("div", "form-grid");
-      const taskType = fieldInput(fields, "任务类型", `auto-task-${index}-type`, mapping.task_type, {
-		description: "可留空。填写时必须与任务分析模型返回的类型完全一致，例如 simple、coding 或 analysis。",
-      });
+	  const taskType = fieldSelect(
+		fields,
+		"任务类型",
+		`auto-task-${index}-type`,
+		mapping.task_type || "",
+		[["", "不限"], ...Object.entries(routingTaskLabels)],
+		{ description: "固定七类之一；可留空，仅按难度匹配。" },
+	  );
 	  const difficulty = fieldSelect(
 		fields,
 		"难度",
@@ -1993,9 +2077,6 @@ export function renderProfileEditor(root, source, actions = {}) {
     max_retries_per_target: fieldInput(budgetGrid, "单节点重试上限", "auto-budget-retries", budget.max_retries_per_target, {
       type: "number", min: "0", description: "同一部署发生可重试错误时允许追加的次数。",
     }),
-    max_target_switches: fieldInput(budgetGrid, "上游节点切换上限", "auto-budget-target-switches", budget.max_target_switches, {
-      type: "number", min: "0", description: "同一模型在备用上游节点间最多切换几次；0 表示不切换。",
-    }),
     max_model_switches: fieldInput(budgetGrid, "模型切换上限", "auto-budget-model-switches", budget.max_model_switches, {
       type: "number", min: "0", description: "回答尚未提交给客户端前，最多允许切换多少次主模型。",
     }),
@@ -2015,7 +2096,558 @@ export function renderProfileEditor(root, source, actions = {}) {
   };
   budgetSection.append(budgetGrid);
 
+	const invokeStrategyAction = (action) => {
+		void runEditorAction(alert, action).catch(() => {});
+	};
+	const generationPanel = element("div", "card stack strategy-generator-panel");
+	const generationDescription = currentActiveStrategy
+		? "根据当前模型配置、最新公开评测和本地证据生成一个新草稿，不会改写已有版本或影响正式策略。"
+		: "选择侧重点，系统会结合公开评测和本地证据生成一份可编辑策略。";
+	generationPanel.append(
+		textElement("h4", "智能生成策略"),
+		textElement("p", generationDescription),
+		textElement(
+			"p",
+			"公开评测只用于冷启动排序和 Shadow 候选；只有可靠本地证据通过质量与稳定性门槛后，候选才可获得生产流量。",
+			"muted",
+		),
+	);
+	let evaluationCatalog = source?.evaluation_catalog || null;
+	const catalogOverview = textElement("p", "", "strategy-catalog-overview");
+	const catalogStatus = element("div", "stack strategy-catalog-status");
+	const catalogMetadata = element("div", "stack strategy-catalog-metadata");
+	const catalogProgress = element("div", "stack strategy-catalog-progress");
+	const renderCatalogOverview = () => {
+		catalogOverview.className = "strategy-catalog-overview";
+		if (!evaluationCatalog) {
+			catalogOverview.textContent = working.id
+				? "公开评测状态暂不可用 · 仍可手动配置"
+				: "保存 Profile 后可使用智能生成";
+			catalogOverview.className += " is-warning";
+			return;
+		}
+		const resultCount = (evaluationCatalog.results || []).length;
+		const coverage = evaluationCatalogCoverage(
+			evaluationCatalog,
+			working.config.models,
+		);
+		const covered = coverage.summary.full + coverage.summary.partial;
+		if (coverage.summary.total === 0) {
+			catalogOverview.textContent = "请先录入模型，再生成智能路由策略";
+			catalogOverview.className += " is-warning";
+			return;
+		}
+		if (resultCount === 0) {
+			catalogOverview.textContent = "公开评测尚未下载 · 仍可生成基础策略";
+			catalogOverview.className += " is-warning";
+			return;
+		}
+		catalogOverview.textContent = `公开评测可用 · 已覆盖 ${covered}/${coverage.summary.total} 个模型`;
+		catalogOverview.className += covered > 0 ? " is-ready" : " is-warning";
+	};
+	const renderCatalogMetadata = () => {
+		renderCatalogOverview();
+		catalogMetadata.replaceChildren();
+		if (evaluationCatalog) {
+			const sources = evaluationCatalog.sources || [];
+			const resultCount = (evaluationCatalog.results || []).length;
+			const coverage = evaluationCatalogCoverage(
+				evaluationCatalog,
+				working.config.models,
+			);
+			const covered = coverage.summary.full + coverage.summary.partial;
+			const loadedSummary = resultCount > 0
+				? `已载入 ${sources.length} 个公开评测来源，共 ${resultCount} 条结果。`
+				: `已载入 ${sources.length} 个公开评测来源定义，尚未下载结果。`;
+			let coverageSummary = `${covered} / ${coverage.summary.total} 个模型有公开评测覆盖` +
+				`（完整 ${coverage.summary.full}、部分 ${coverage.summary.partial}、` +
+				`缺失 ${coverage.summary.missing}、未确认身份 ${coverage.summary.unmapped}）。`;
+			if (coverage.summary.total === 0) {
+				coverageSummary = "当前 Profile 尚未录入模型。";
+			} else if (coverage.summary.unmapped === coverage.summary.total) {
+				coverageSummary = `${coverage.summary.unmapped} 个模型尚未确认标准身份，暂时无法匹配公开评测。`;
+			}
+			const sourceDetails = element("details", "strategy-catalog-sources");
+			sourceDetails.append(textElement("summary", "查看数据来源与版本"));
+			const sourceList = element("div", "stack strategy-catalog-source-list");
+			for (const source of sources) {
+				const rawVersion = source.version || "";
+				let displayVersion = rawVersion || "未知版本";
+				if (rawVersion === "not-imported") {
+					displayVersion = "尚未下载";
+				} else if (rawVersion.length > 16) {
+					const [revision, ...suffix] = rawVersion.split(":");
+					displayVersion = `${revision.slice(0, 8)}${suffix.length ? ` · ${suffix.join(":")}` : ""}`;
+				}
+				const sourceVersion = textElement(
+					"p",
+					`${source.name || source.id} · ${displayVersion}`,
+				);
+				if (rawVersion) sourceVersion.setAttribute("title", rawVersion);
+				sourceList.append(sourceVersion);
+			}
+			sourceDetails.append(sourceList);
+			catalogMetadata.append(
+				textElement("p", loadedSummary),
+				textElement("p", coverageSummary),
+				textElement(
+					"p",
+					resultCount > 0
+						? "需要先在模型设置中确认 canonical ID，系统才会应用对应评测；不会按模型家族猜测。"
+						: "可以先生成可编辑草稿；缺失评测时使用系统临时值并优先安排本地验证。",
+				),
+				sourceDetails,
+			);
+			catalogMetadata.children[1].className = "muted";
+			catalogMetadata.children[2].className = "muted";
+		} else {
+			const unavailable = textElement(
+				"p",
+				working.id
+					? "暂时无法读取公开评测目录状态，请重新载入后再试。"
+					: "保存 Profile 后即可读取公开评测目录并智能生成策略。",
+			);
+			unavailable.className = "warning-banner";
+			catalogMetadata.append(unavailable);
+		}
+	};
+	renderCatalogMetadata();
+	const advancedSettings = element("details", "strategy-generator-advanced");
+	const sourceNamesByID = new Map(
+		(evaluationCatalog?.sources || []).map((item) => [item.id, item.name || item.id]),
+	);
+	const progressLabels = {
+		idle: "等待", running: "下载并解析", succeeded: "完成",
+		failed: "失败", cancelled: "已取消",
+	};
+	const renderCatalogProgress = (job) => {
+		const sources = job?.sources || [];
+		const completed = sources.filter((source) =>
+			["succeeded", "failed", "cancelled"].includes(source.state)
+		).length;
+		const percent = sources.length > 0 ? Math.round((completed / sources.length) * 100) : 0;
+		const progressStateLabels = {
+			succeeded: "公开评测更新完成",
+			failed: "公开评测更新失败",
+			cancelled: "公开评测更新已取消",
+		};
+		const progressLabel = progressStateLabels[job?.state]
+			? `${progressStateLabels[job.state]} · ${completed} / ${sources.length} 个来源`
+			: `正在更新公开评测 · 已处理 ${completed} / ${sources.length} 个来源`;
+		const header = textElement("p", progressLabel);
+		header.className = "strategy-catalog-progress-label";
+		const track = element("div", "strategy-catalog-progress-track");
+		track.setAttribute("role", "progressbar");
+		track.setAttribute("aria-label", "公开评测更新进度");
+		track.setAttribute("aria-valuemin", "0");
+		track.setAttribute("aria-valuemax", "100");
+		track.setAttribute("aria-valuenow", String(percent));
+		const fill = element("span", "strategy-catalog-progress-fill");
+		fill.setAttribute("style", `width: ${percent}%`);
+		track.append(fill);
+		catalogProgress.replaceChildren(
+			header,
+			track,
+			...sources.map((sourceProgress) => {
+				const sourceLine = textElement(
+					"p",
+					`${sourceNamesByID.get(sourceProgress.id) || sourceProgress.id} · ` +
+						`${progressLabels[sourceProgress.state] || sourceProgress.stage || "等待"} · ` +
+						`导入 ${Number(sourceProgress.imported || 0)} · ` +
+						`未映射 ${Number(sourceProgress.skipped_unmapped || 0)}`,
+				);
+				sourceLine.className = `muted strategy-catalog-source-progress is-${sourceProgress.state || "idle"}`;
+				return sourceLine;
+			}),
+		);
+	};
+	const reloadCatalog = actionButton("下载并更新公开评测", "button-secondary");
+	reloadCatalog.className += " evaluation-catalog-update";
+	reloadCatalog.disabled = !working.id || typeof actions.updateEvaluationCatalog !== "function";
+	reloadCatalog.addEventListener("click", () => {
+		if (reloadCatalog.disabled) return;
+		advancedSettings.open = true;
+		reloadCatalog.disabled = true;
+		reloadCatalog.className = "button button-secondary evaluation-catalog-update is-loading";
+		reloadCatalog.textContent = "正在更新公开评测…";
+		reloadCatalog.setAttribute("aria-busy", "true");
+		renderCatalogProgress({
+			state: "running",
+			sources: (evaluationCatalog?.sources || []).map((source) => ({
+				id: source.id, state: "idle", stage: "queued",
+			})),
+		});
+		return runEditorAction(alert, async () => {
+			const job = await actions.updateEvaluationCatalog?.(renderCatalogProgress);
+			if (job?.catalog) {
+				evaluationCatalog = job.catalog;
+				renderCatalogMetadata();
+			}
+			return job;
+		}).catch(() => {}).finally(() => {
+			reloadCatalog.disabled = false;
+			reloadCatalog.className = "button button-secondary evaluation-catalog-update";
+			reloadCatalog.textContent = "下载并更新公开评测";
+			reloadCatalog.setAttribute("aria-busy", "false");
+		});
+	});
+	catalogStatus.append(catalogMetadata, catalogProgress, reloadCatalog);
+	const generationPrimaryGrid = element("div", "form-grid strategy-generation-primary");
+	const generationObjective = fieldSelect(
+		generationPrimaryGrid,
+		"优化目标",
+		"strategy_generation_objective",
+		refreshIntent.objective || "balanced",
+		[
+			["balanced", "均衡"],
+			["quality", "质量优先"],
+			["cost", "成本优先"],
+			["latency", "延迟优先"],
+		],
+		{ description: "决定质量、稳定性、成本和延迟的初始权重。" },
+	);
+	const generationAdvancedGrid = element("div", "form-grid strategy-generation-grid");
+	const generationMaxCost = fieldInput(
+		generationAdvancedGrid,
+		"单请求费用上限（美元）",
+		"strategy_generation_max_cost_usd",
+		Number.isSafeInteger(refreshIntent.max_cost_per_request_micro_usd)
+			? microUSDToUSDInput(refreshIntent.max_cost_per_request_micro_usd)
+			: "",
+		{ type: "number", min: "0", step: "0.000001", description: "选填，最多 6 位小数。" },
+	);
+	const generationLatency = fieldInput(
+		generationAdvancedGrid,
+		"目标延迟（ms）",
+		"strategy_generation_latency_ms",
+		Number.isSafeInteger(refreshIntent.latency_target_ms)
+			? String(refreshIntent.latency_target_ms)
+			: "",
+		{ type: "number", min: "1", step: "1", description: "选填，作为延迟优先的生成约束。" },
+	);
+	const generationDailyEval = fieldInput(
+		generationAdvancedGrid,
+		"每日验证预算（美元）",
+		"strategy_generation_daily_eval_usd",
+		Number.isSafeInteger(refreshIntent.daily_eval_budget_micro_usd)
+			? microUSDToUSDInput(refreshIntent.daily_eval_budget_micro_usd)
+			: microUSDToUSDInput(
+				working.config.auto_routing.dynamic_optimization.daily_budget_micro_usd,
+			),
+		{ type: "number", min: "0", step: "0.000001", description: "选填，生成后仍可手动调整。" },
+	);
+	const generationActionLabel = currentActiveStrategy
+		? "重新生成新草稿"
+		: "生成可编辑策略";
+	const generateIntelligent = actionButton(
+		generationActionLabel,
+		currentActiveStrategy ? "button-secondary" : "button",
+	);
+	generateIntelligent.disabled = !working.id || typeof actions.generateStrategy !== "function";
+	const generationIntent = () => {
+			const latency = optionalNonnegativeSafeInteger(
+				generationLatency.value,
+				"目标延迟",
+			);
+			if (latency === 0) {
+				throw new Error("目标延迟必须大于 0。");
+			}
+			const maxCost = parseUSDToMicroUSD(
+				generationMaxCost.value,
+				"单请求费用上限",
+				{ optional: true },
+			);
+			const dailyEval = parseUSDToMicroUSD(
+				generationDailyEval.value,
+				"每日验证预算",
+				{ optional: true },
+			);
+			return {
+				objective: generationObjective.value,
+				participants: participantModelIDs().length > 0
+					? participantModelIDs()
+					: currentModelIDs(),
+				...(maxCost === null ? {} : { max_cost_per_request_micro_usd: maxCost }),
+				...(latency === null ? {} : { latency_target_ms: latency }),
+				...(dailyEval === null ? {} : { daily_eval_budget_micro_usd: dailyEval }),
+			};
+	};
+	const generateStrategyDraft = async () => {
+		const intent = generationIntent();
+		await runEditorAction(alert, () => actions.generateStrategy?.(intent));
+		showConfigurationMode(
+			"manual",
+			"推荐草稿已生成，可以直接调整后保存。",
+		);
+	};
+	generateIntelligent.addEventListener("click", async () => {
+		if (generateIntelligent.disabled) {
+			return;
+		}
+		try {
+			await generateStrategyDraft();
+		} catch (error) {
+			if (alert.hidden) {
+				alert.textContent = error?.message || "请求失败，请重试。";
+				alert.hidden = false;
+			}
+		}
+	});
+	const chooseManual = actionButton("直接手动配置", "button-secondary");
+	const generationActions = element("div", "cluster strategy-generation-actions");
+	generationActions.append(generateIntelligent, chooseManual);
+	const advancedContent = element("div", "stack details-content strategy-generator-advanced-content");
+	advancedContent.append(
+		generationAdvancedGrid,
+		textElement("h5", "公开评测数据管理"),
+		catalogStatus,
+	);
+	advancedSettings.append(
+		textElement("summary", "高级设置（可选）"),
+		advancedContent,
+	);
+	generationPanel.append(
+		catalogOverview,
+		generationPrimaryGrid,
+		generationActions,
+		advancedSettings,
+	);
+
+	const configurationSection = editorSubsection("新策略配置");
+	let configurationMode = source?.strategy_configuration_mode === "manual" || editingStrategyID
+		? "manual"
+		: "intelligent";
+	const configuredRoutes = Array.isArray(working.config.auto_routing.strategy.routes)
+		? working.config.auto_routing.strategy.routes
+		: [];
+	const configuredTaskRoutes = Array.isArray(working.config.auto_routing.strategy.task_routes)
+		? working.config.auto_routing.strategy.task_routes
+		: [];
+	const configuredTaskTypes = [...new Set(
+		configuredTaskRoutes.map((item) => String(item?.task_type || "")).filter(Boolean),
+	)];
+	const configuredCandidates = [...new Set(
+		configuredRoutes.flatMap((route) =>
+			(route.candidates || []).map((candidate) => String(candidate?.model || ""))
+		).filter(Boolean),
+	)];
+	const activeCandidates = [...new Set(
+		(currentActiveStrategy?.config?.routes || []).flatMap((route) =>
+			(route.candidates || []).map((candidate) => String(candidate?.model || ""))
+		).filter(Boolean),
+	)];
+	const configuredTaskRouteGroups = strategyTaskRouteGroups(configuredTaskRoutes);
+	const strategySummary = element("div", "card stack strategy-recommendation-summary");
+	const summaryList = element("ul", "strategy-recommendation-list");
+	summaryList.append(
+		textElement(
+			"li",
+			`未匹配到特定任务时使用：${routingGroupLabel(working.config.auto_routing.strategy.default_route)}`,
+		),
+		textElement(
+			"li",
+			`新策略只会在这些模型中选择：${configuredCandidates.length > 0 ? configuredCandidates.join("、") : "未设置"}`,
+		),
+		textElement(
+			"li",
+			`困难、高风险或其他模型不可用时使用：${working.config.auto_routing.strong_baseline_model || "未设置"}`,
+		),
+	);
+	const taskRouteSummary = element("div", "strategy-task-route-summary");
+	taskRouteSummary.append(textElement("h5", "任务路由"));
+	if (configuredTaskRouteGroups.length === 0) {
+		taskRouteSummary.append(textElement(
+			"p",
+			"未单独设置任务路由，全部使用默认 Route。",
+			"muted",
+		));
+	} else {
+		const taskRouteRows = element("div", "strategy-task-route-rows");
+		for (const group of configuredTaskRouteGroups) {
+			const difficultyText = group.difficulties.map((difficulty) =>
+				routingDifficultyLabels[difficulty] || difficulty || "所有难度"
+			).join("、");
+			const taskLabels = group.taskTypes.map((taskType) =>
+				(routingTaskLabels[taskType] || taskType || "所有任务").replace(/任务$/, "")
+			);
+			const row = element("div", "strategy-task-route-row");
+			row.append(
+				textElement("strong", `${difficultyText} → ${routingGroupLabel(group.route)}`),
+				textElement(
+					"span",
+					`${taskLabels.length} 类任务：${taskLabels.join("、")}`,
+					"muted",
+				),
+			);
+			taskRouteRows.append(row);
+		}
+		taskRouteSummary.append(taskRouteRows);
+	}
+	const generationNotice = textElement(
+		"p",
+		String(source?.strategy_generation_notice || "下面是待发布的新策略，当前线上请求不受影响。"),
+	);
+	generationNotice.className = source?.strategy_generation_notice
+		? "success-banner strategy-generation-notice"
+		: "muted strategy-generation-notice";
+	const editingCanary = Number(strategyOverview?.snapshot?.canary?.id || 0) === editingStrategyID;
+	const activeStrategyName = currentActiveStrategy?.config?.alias ||
+		currentActiveStrategy?.config?.name || "当前 Active 策略";
+	const draftState = element("div", "strategy-state-comparison");
+	if (editingStrategyID) {
+		const onlineState = element("div", "strategy-state-item is-active");
+		onlineState.append(
+			textElement("span", "① 当前线上 · 正在使用", "strategy-state-label"),
+			textElement("strong", activeCandidates.length > 0 ? activeCandidates.join("、") : "未设置模型"),
+			textElement(
+				"span",
+				`策略：${activeStrategyName}`,
+				"muted",
+			),
+		);
+		const candidateState = element("div", "strategy-state-item is-draft");
+		candidateState.append(
+			textElement(
+				"span",
+				editingCanary ? "② 新策略 · 正在灰度" : "② 新策略草稿 · 尚未生效",
+				"strategy-state-label",
+			),
+			textElement("strong", configuredCandidates.length > 0 ? configuredCandidates.join("、") : "未设置模型"),
+			textElement(
+				"span",
+				editingCanary
+					? `${basisPointsToPercent(strategyOverview?.snapshot?.canary_bps || 0)}% 请求使用新策略，其余仍使用线上策略。`
+					: "当前没有请求使用这份策略。",
+				"muted",
+			),
+		);
+		const nextState = element("div", "strategy-state-item is-next");
+		nextState.append(
+			textElement("span", "③ 下一步", "strategy-state-label"),
+			textElement("strong", editingCanary ? "验证正常后发布" : "保存修改并开始灰度"),
+			textElement(
+				"span",
+				"只有发布为正式策略后，所有请求才会切换到新模型。",
+				"muted",
+			),
+		);
+		draftState.append(onlineState, candidateState, nextState);
+	} else {
+		draftState.append(textElement(
+			"p",
+			strategyOverview
+				? "当前修改尚未保存；保存后会创建新规则草稿，不会直接替换线上 Active 策略。"
+				: "首次保存后会创建当前 Profile 的正式策略。",
+		));
+	}
+	const returnToGenerator = actionButton("重新生成草稿", "button-secondary");
+	const hasStrategyLifecycle = Boolean(working.id && strategyOverview);
+	const saveStrategy = actionButton(
+		editingStrategyID
+			? "保存草稿修改"
+			: hasStrategyLifecycle ? "保存为新草稿" : "保存并启用策略",
+		"button",
+	);
+	saveStrategy.type = hasStrategyLifecycle ? "button" : "submit";
+	saveStrategy.hidden = actions.editorSection !== "routing";
+	const persistStrategyDraft = async () => {
+		saveStrategy.disabled = true;
+		try {
+			await runEditorAction(alert, async () => {
+				syncForm();
+				const config = autoRoutingPayload(
+					working.config.auto_routing,
+				).strategy;
+				if (editingStrategyID) {
+					await actions.updateStrategy?.(editingStrategyID, config);
+					return;
+				}
+				await actions.createStrategy?.({ ...config, name: "" });
+			});
+		} catch {
+		} finally {
+			saveStrategy.disabled = false;
+		}
+	};
+	if (hasStrategyLifecycle) {
+		saveStrategy.addEventListener("click", persistStrategyDraft);
+	}
+	const summaryActions = element("div", "cluster strategy-manual-actions");
+	summaryActions.append(saveStrategy, returnToGenerator);
+	strategySummary.append(
+		textElement("h4", "待发布的新策略"),
+		generationNotice,
+		draftState,
+		textElement(
+			"p",
+			`包含 ${configuredRoutes.length} 个模型组，覆盖 ${configuredTaskTypes.length} 类任务。`,
+			"strategy-recommendation-lead",
+		),
+		summaryList,
+		taskRouteSummary,
+		summaryActions,
+	);
+	const configurationDetails = element("details", "strategy-configuration-details");
+	const configurationDetailsContent = element("div", "stack details-content");
+	configurationDetailsContent.append(strategySection, mappingSection, budgetSection);
+	configurationDetails.append(
+		textElement("summary", "调整详细配置"),
+		configurationDetailsContent,
+	);
+	const manualPanel = element("div", "stack strategy-manual-panel");
+	manualPanel.append(strategySummary, configurationDetails);
+	function showConfigurationMode(mode, notice = "") {
+		configurationMode = mode;
+		if (notice) {
+			generationNotice.textContent = notice;
+			generationNotice.className = "success-banner strategy-generation-notice";
+		}
+		generationNotice.hidden = mode !== "manual";
+		const intelligent = configurationMode === "intelligent";
+		generationPanel.hidden = !intelligent;
+		manualPanel.hidden = intelligent;
+	}
+	chooseManual.addEventListener("click", () => showConfigurationMode("manual"));
+	returnToGenerator.addEventListener("click", () => showConfigurationMode("intelligent"));
+	showConfigurationMode(configurationMode);
+	configurationSection.append(generationPanel, manualPanel);
+
 	const lifecycleSection = editorSubsection("策略版本");
+	const lifecycleSnapshot = strategyOverview?.snapshot || {};
+	const activeStrategy = lifecycleSnapshot.active;
+	const strategyUsage = element("div", "card stack strategy-usage-panel");
+	const strategyUsageHeader = element("div", "cluster strategy-usage-header");
+	strategyUsageHeader.append(
+		textElement("h4", "当前使用状态"),
+		badge(
+			working.config.auto_routing.enabled && activeStrategy ? "已生效" : "未生效",
+			working.config.auto_routing.enabled && activeStrategy ? "badge-success" : "badge-warning",
+		),
+	);
+	strategyUsage.append(strategyUsageHeader);
+	if (working.config.auto_routing.enabled && activeStrategy) {
+		strategyUsage.append(
+			textElement(
+				"p",
+				`当前正式策略：${activeStrategy.config?.alias || activeStrategy.config?.name || "未命名策略"}`,
+			),
+			textElement(
+				"p",
+				"请求中的 model 设置为 auto 时使用当前正式策略；指定具体模型时会直接转发。",
+				"muted",
+			),
+			textElement("code", '"model": "auto"', "strategy-usage-code"),
+		);
+	} else {
+		strategyUsage.append(textElement(
+			"p",
+			working.config.auto_routing.enabled
+				? "保存当前 Profile 后，首个策略才会正式生效。"
+				: "先启用并保存智能路由，客户端才能使用 model=auto。",
+			"muted",
+		));
+	}
+	lifecycleSection.append(strategyUsage);
 	if (!working.id) {
 		const initialHelp = textElement(
 			"p",
@@ -2031,12 +2663,21 @@ export function renderProfileEditor(root, source, actions = {}) {
 		disabledHelp.className = "field-help";
 		lifecycleSection.append(disabledHelp);
 	} else {
-		const snapshot = strategyOverview.snapshot || {};
+		const snapshot = lifecycleSnapshot;
 		const lifecycleHelp = textElement(
 			"p",
-			"Profile 保存只更新模型角色等公共配置，不会直接覆盖线上策略。先在上方调整 Route 与预算，再保存为草稿；草稿进入评估后不可修改。",
+			"新策略不会自动替换当前正式策略。确认草稿后先灰度验证，正常后再发布为正式策略。",
 		);
 		lifecycleHelp.className = "field-help";
+		const lifecycleStepsTitle = textElement("h4", "新策略生效步骤");
+		const lifecycleSteps = element("ol", "strategy-lifecycle-steps");
+		for (const step of [
+			"1. 编辑并保存草稿",
+			"2. 灰度验证",
+			"3. 发布为正式策略",
+		]) {
+			lifecycleSteps.append(textElement("li", step));
+		}
 		const summary = element("div", "cluster strategy-lifecycle-summary");
 		summary.append(
 			badge(`revision ${snapshot.revision || 0}`, ""),
@@ -2053,9 +2694,6 @@ export function renderProfileEditor(root, source, actions = {}) {
 				),
 			);
 		}
-		const invokeStrategyAction = (action) => {
-			void runEditorAction(alert, action).catch(() => {});
-		};
 		const learningPanel = element("div", "stack strategy-learning-panel");
 		if (working.config.auto_routing.dynamic_optimization.enabled) {
 			const learningHelp = textElement(
@@ -2081,10 +2719,16 @@ export function renderProfileEditor(root, source, actions = {}) {
 				reservedSummary.className = "muted";
 			}
 			const evidenceRows = strategyOverview.quality_estimates || [];
-			const reliableCount = evidenceRows.filter((estimate) => estimate.reliable).length;
+			const stabilityRows = strategyOverview.stability_estimates || [];
+			const stabilityKeys = new Set(stabilityRows
+				.filter((estimate) => estimate.reliable)
+				.map((estimate) => `${estimate.strategy}\u0000${estimate.route}\u0000${estimate.candidate_model}\u0000${estimate.reference_model}`));
+			const reliableCount = evidenceRows.filter((estimate) => estimate.reliable && stabilityKeys.has(
+				`${estimate.strategy}\u0000${estimate.route}\u0000${estimate.candidate_model}\u0000${estimate.reference_model}`,
+			)).length;
 			const evidenceSummary = textElement(
 				"p",
-				`模型表现：${evidenceRows.length} 个分组，其中 ${reliableCount} 个证据可靠。`,
+				`模型表现：${evidenceRows.length} 个质量分组、${stabilityRows.length} 个稳定性分组，其中 ${reliableCount} 个可生成学习草稿。`,
 			);
 			evidenceSummary.className = "muted";
 			const performanceLink = textElement("a", "查看模型表现");
@@ -2093,8 +2737,7 @@ export function renderProfileEditor(root, source, actions = {}) {
 				`/_admin/stats/models?profile_id=${Number(working.id)}`,
 			);
 			const generateCandidate = actionButton("生成学习候选", "button-secondary");
-			generateCandidate.disabled = !evidenceRows
-				.some((estimate) => estimate.reliable);
+			generateCandidate.disabled = reliableCount === 0;
 			generateCandidate.addEventListener("click", () => {
 				if (!generateCandidate.disabled) {
 					invokeStrategyAction(() => actions.generateStrategyCandidate?.());
@@ -2110,26 +2753,32 @@ export function renderProfileEditor(root, source, actions = {}) {
 			);
 		}
 
+		const generations = new Map(
+			(strategyOverview.generations || []).map((generation) => [
+				Number(generation.strategy_id), generation,
+			]),
+		);
+		const allVersions = strategyOverview.strategies || [];
+		const activeID = Number(snapshot.active?.id || 0);
+		const canaryID = Number(snapshot.canary?.id || 0);
+		const rollbackID = Number(snapshot.last_known_good?.id || 0);
+		const currentChange = snapshot.canary || allVersions.find((version) =>
+			!version.archived_at &&
+			![activeID, canaryID, rollbackID].includes(Number(version.id)) &&
+			["draft", "evaluating", "ready"].includes(version.state)
+		) || null;
+		const currentChangeID = Number(currentChange?.id || 0);
+		const historyVersions = allVersions.filter((version) =>
+			![activeID, canaryID, rollbackID, currentChangeID].includes(Number(version.id))
+		);
+
 		const draftControls = element("div", "cluster strategy-draft-controls");
 		const saveDraft = actionButton(
 			editingStrategyID ? "更新当前草稿" : "保存为新草稿",
 			"button-secondary",
 		);
-		saveDraft.addEventListener("click", async () => {
-			try {
-				await runEditorAction(alert, async () => {
-					syncForm();
-					const config = autoRoutingPayload(
-						working.config.auto_routing,
-					).strategy;
-					if (editingStrategyID) {
-						await actions.updateStrategy?.(editingStrategyID, config);
-						return;
-					}
-					await actions.createStrategy?.({ ...config, name: "" });
-				});
-			} catch {}
-		});
+		saveDraft.hidden = actions.editorSection === "routing" || Boolean(currentChange && !editingStrategyID);
+		saveDraft.addEventListener("click", persistStrategyDraft);
 		draftControls.append(saveDraft);
 		if (editingStrategyID) {
 			const stopEditing = actionButton("退出草稿编辑", "button-secondary");
@@ -2139,102 +2788,287 @@ export function renderProfileEditor(root, source, actions = {}) {
 			draftControls.append(stopEditing);
 		}
 
-		const versions = element("div", "stack strategy-version-list");
-		for (const version of strategyOverview.strategies || []) {
+		function archiveControl(version, label) {
+			const archive = actionButton(label, "button-secondary");
+			archive.disabled = typeof actions.archiveStrategy !== "function";
+			archive.addEventListener("click", () => {
+				if (!archive.disabled) {
+					invokeStrategyAction(() => actions.archiveStrategy?.(version.id));
+				}
+			});
+			return archive;
+		}
+
+		function versionCard(version, context) {
 			const card = element("article", "card strategy-version-card stack");
+			card.className += context === "current"
+				? " strategy-current-version"
+				: context === "rollback"
+					? " strategy-rollback-card"
+					: " strategy-history-version";
 			const header = element("div", "cluster strategy-version-header");
 			const title = textElement(
 				"h4",
-				version.config?.alias || version.config?.name || `策略 ${version.id}`,
+				`${context === "current" ? "待发布：" : ""}${version.config?.alias || version.config?.name || `策略 ${version.id}`}`,
 			);
 			const state = badge(
-				strategyStateLabel(version.state),
-				strategyStateBadge(version.state),
+				version.archived_at
+					? "已废弃"
+					: context === "current" && version.state === "draft"
+						? "草稿 · 尚未生效"
+						: context === "current" && version.state === "ready"
+							? "已确认 · 等待灰度"
+							: context === "current" && version.state === "canary"
+								? "正在灰度"
+								: strategyStateLabel(version.state),
+				version.archived_at ? "" : strategyStateBadge(version.state),
 			);
 			header.append(title, state);
 			if (version.rating?.grade) {
-				header.append(
-					badge(
-						`质量 ${version.rating.grade}`,
-						strategyGradeBadge(version.rating.grade),
-					),
-				);
+				header.append(badge(
+					`质量 ${version.rating.grade}`,
+					strategyGradeBadge(version.rating.grade),
+				));
+			}
+			const generation = generations.get(Number(version.id));
+			if (generation) {
+				header.append(badge("智能生成", "badge-info"));
+				if ((generation.manual_overrides || []).length > 0) {
+					header.append(badge(
+						`手动调整 ${(generation.manual_overrides || []).length} 项`,
+						"badge-warning",
+					));
+				}
 			}
 			const metadata = textElement(
 				"p",
 				`${version.config?.name || "-"} · ID ${version.id}`,
 			);
 			metadata.className = "muted";
+			const currentSummary = context === "current"
+				? element("div", "stack strategy-current-summary")
+				: null;
+			if (currentSummary) {
+				const models = strategyModelIDs(version.config);
+				const isCanary = Number(snapshot.canary?.id || 0) === Number(version.id);
+				currentSummary.append(
+					textElement("p", `候选模型：${models.length > 0 ? models.join("、") : "未设置"}`),
+					textElement(
+						"p",
+						`当前流量：${isCanary ? basisPointsToPercent(snapshot.canary_bps) : "0"}%`,
+						isCanary ? "strategy-canary-traffic" : "muted",
+					),
+				);
+			}
 			const rating = version.rating
 				? textElement(
 					"p",
-					`配置估算：${basisPointsToPercent(version.rating.display_score_bps)} 分 · 质量下限 ${basisPointsToPercent(version.rating.quality_floor_bps)}% · 严重错误上限 ${basisPointsToPercent(version.rating.severe_error_ceiling_bps)}%`,
+					`配置估算：${basisPointsToPercent(version.rating.display_score_bps)} 分 · 质量下限 ${basisPointsToPercent(version.rating.quality_floor_bps)}% · 稳定性下限 ${basisPointsToPercent(version.rating.stability_floor_bps)}% · 严重错误上限 ${basisPointsToPercent(version.rating.severe_error_ceiling_bps)}%`,
 				)
 				: null;
 			if (rating) {
 				rating.className = "muted";
 			}
-			const controls = element("div", "cluster strategy-version-actions");
-
-			if (version.state === "draft") {
-				const edit = actionButton("载入草稿", "button-secondary");
-				edit.addEventListener("click", () =>
-					invokeStrategyAction(() => actions.editStrategy?.(version.id))
+			const generationDetails = generation
+				? element("div", "stack strategy-generation-details")
+				: null;
+			if (generationDetails) {
+				const digest = String(generation.source_digest || "");
+				const source = textElement(
+					"p",
+					`生成器 ${generation.generator_version || "-"} · 数据快照 ${digest.slice(0, 12) || "-"}`,
 				);
-				const evaluate = actionButton("开始评估", "button-secondary");
-				evaluate.addEventListener("click", () =>
-					invokeStrategyAction(() =>
-						actions.advanceStrategy?.(version.id, "draft", "evaluating")
-					)
+				source.className = "muted";
+				generationDetails.append(source);
+				const explanationMessages = new Set(
+					(generation.explanations || [])
+						.map((explanation) => String(explanation.message || explanation.code || "").trim())
+						.filter(Boolean),
 				);
-				controls.append(edit, evaluate);
-			} else if (version.state === "evaluating") {
-				const ready = actionButton("评估通过", "button-secondary");
-				ready.addEventListener("click", () =>
-					invokeStrategyAction(() =>
-						actions.advanceStrategy?.(version.id, "evaluating", "ready")
-					)
-				);
-				controls.append(ready);
-			} else if (version.state === "ready" && !snapshot.canary) {
-				const percent = element("input");
-				percent.type = "number";
-				percent.min = "0.01";
-				percent.max = "99.99";
-				percent.step = "0.01";
-				percent.value = "10";
-				percent.setAttribute("aria-label", "灰度比例（%）");
-				const canary = actionButton("开始灰度", "button-secondary");
-				canary.addEventListener("click", async () => {
-					try {
-						const canaryBPS = percentToBasisPoints(percent.value, "灰度比例");
-						if (canaryBPS <= 0 || canaryBPS >= 10000) {
-							throw new Error("灰度比例必须大于 0% 且小于 100%。");
-						}
-						await runEditorAction(alert, () =>
-							actions.startStrategyCanary?.(
-								version.id,
-								canaryBPS,
-								snapshot.revision,
-							),
-						);
-					} catch (error) {
-						if (alert.hidden) {
-							alert.textContent = error?.message || "请求失败，请重试。";
-							alert.hidden = false;
-						}
+				for (const message of explanationMessages) {
+					generationDetails.append(textElement("p", message));
+				}
+				if ((generation.manual_overrides || []).length > 0) {
+					const overrides = element("div", "cluster strategy-generation-overrides");
+					for (const override of generation.manual_overrides) {
+						const field = String(override.path || "").split("/").at(-1) || "字段";
+						const restore = actionButton(`恢复推荐：${field}`, "button-secondary");
+						restore.disabled = version.state !== "draft" || Boolean(version.archived_at);
+						restore.addEventListener("click", () => {
+							if (!restore.disabled) {
+								invokeStrategyAction(() =>
+									actions.restoreGeneratedRecommendation?.(version.id, override.path)
+								);
+							}
+						});
+						overrides.append(restore);
 					}
-				});
-				controls.append(percent, canary);
+					generationDetails.append(overrides);
+				}
+			}
+			const controls = element("div", "cluster strategy-version-actions");
+			if (context === "current" && !version.archived_at) {
+				if (version.state === "draft") {
+					const edit = actionButton("载入草稿", "button-secondary");
+					edit.addEventListener("click", () =>
+						invokeStrategyAction(() => actions.editStrategy?.(version.id))
+					);
+					const ready = actionButton("确认并进入灰度准备", "button-secondary");
+					ready.addEventListener("click", () =>
+						invokeStrategyAction(() =>
+							actions.advanceStrategy?.(version.id, "draft", "ready")
+						)
+					);
+					controls.append(edit, ready);
+					controls.append(archiveControl(version, "废弃草稿"));
+				} else if (version.state === "evaluating") {
+					const ready = actionButton("确认并进入灰度准备", "button-secondary");
+					ready.addEventListener("click", () =>
+						invokeStrategyAction(() =>
+							actions.advanceStrategy?.(version.id, "evaluating", "ready")
+						)
+					);
+					controls.append(ready, archiveControl(version, "废弃此版本"));
+				} else if (version.state === "ready" && !snapshot.canary) {
+					const percent = element("input");
+					percent.type = "number";
+					percent.min = "0.01";
+					percent.max = "99.99";
+					percent.step = "0.01";
+					percent.value = "10";
+					percent.setAttribute("aria-label", "灰度比例（%）");
+					const canary = actionButton("开始灰度", "button-secondary");
+					canary.addEventListener("click", async () => {
+						try {
+							const canaryBPS = percentToBasisPoints(percent.value, "灰度比例");
+							if (canaryBPS <= 0 || canaryBPS >= 10000) {
+								throw new Error("灰度比例必须大于 0% 且小于 100%。");
+							}
+							await runEditorAction(alert, () =>
+								actions.startStrategyCanary?.(
+									version.id,
+									canaryBPS,
+									snapshot.revision,
+								),
+							);
+						} catch (error) {
+							if (alert.hidden) {
+								alert.textContent = error?.message || "请求失败，请重试。";
+								alert.hidden = false;
+							}
+						}
+					});
+					controls.append(percent, canary, archiveControl(version, "废弃此版本"));
+				}
+			} else if (context === "history" && !version.archived_at &&
+				["draft", "evaluating", "ready"].includes(version.state)) {
+				controls.append(archiveControl(version, "废弃此版本"));
 			}
 			card.append(header, metadata);
-			if (rating) {
-				card.append(rating);
+			if (currentSummary) {
+				card.append(currentSummary);
+			}
+			if (context === "current" && (rating || generationDetails)) {
+				const technicalDetails = element("details", "stack strategy-current-technical-details");
+				technicalDetails.append(textElement("summary", "查看质量估算和生成依据"));
+				if (rating) technicalDetails.append(rating);
+				if (generationDetails) technicalDetails.append(generationDetails);
+				card.append(technicalDetails);
+			} else {
+				if (rating) card.append(rating);
+				if (generationDetails) card.append(generationDetails);
 			}
 			if (controls.children.length) {
 				card.append(controls);
 			}
-			versions.append(card);
+			return card;
+		}
+
+		const activeOverview = element("article", "card stack strategy-active-version");
+		const activeHeader = element("div", "cluster strategy-version-header");
+		activeHeader.append(
+			textElement("h4", "线上正在使用"),
+			badge(snapshot.canary ? `${basisPointsToPercent(10000 - snapshot.canary_bps)}% 请求` : "100% 请求", "badge-success"),
+		);
+		const activeConfig = snapshot.active?.config || {};
+		const activeModels = strategyModelIDs(activeConfig);
+		activeOverview.append(
+			activeHeader,
+			textElement(
+				"p",
+				`${activeConfig.alias || activeConfig.name || "未命名策略"} · ${activeConfig.name || "-"} · ID ${snapshot.active?.id || "-"}`,
+				"muted",
+			),
+			textElement("p", `主回答候选：${activeModels.length > 0 ? activeModels.join("、") : "未设置"}`),
+			textElement("p", `路由规则：${strategyTaskSummary(activeConfig)}`),
+		);
+		if (activeConfig.roles?.task_analyzer_model) {
+			activeOverview.append(textElement(
+				"p",
+				`任务分析：${activeConfig.roles.task_analyzer_model}`,
+			));
+		}
+		if (activeConfig.roles?.strong_baseline_model) {
+			activeOverview.append(textElement(
+				"p",
+				`困难、高风险或异常时兜底：${activeConfig.roles.strong_baseline_model}`,
+			));
+		}
+		if (activeConfig.roles?.reviewer_model) {
+			activeOverview.append(textElement(
+				"p",
+				`异步质量评审（不参与主回答选型）：${activeConfig.roles.reviewer_model}`,
+			));
+		}
+
+		const currentChangePanel = element("div", "stack strategy-current-change");
+		currentChangePanel.append(textElement("h4", "线上与待发布"));
+		const comparison = element("div", "strategy-version-comparison");
+		comparison.append(activeOverview);
+		if (currentChange) {
+			comparison.append(versionCard(currentChange, "current"));
+		} else {
+			comparison.append(textElement("p", "当前没有待发布的策略，所有请求都使用左侧线上策略。", "muted"));
+		}
+		currentChangePanel.append(comparison);
+		const rollbackPanel = element("div", "stack strategy-rollback-version");
+		rollbackPanel.hidden = !snapshot.last_known_good;
+		if (snapshot.last_known_good) {
+			rollbackPanel.append(
+				textElement("h4", "可回滚版本"),
+				versionCard(snapshot.last_known_good, "rollback"),
+			);
+		}
+		const historyDisclosure = element("details", "stack strategy-history-disclosure");
+		historyDisclosure.hidden = historyVersions.length === 0;
+		if (historyVersions.length > 0) {
+			historyDisclosure.append(textElement("summary", `历史版本（${historyVersions.length}）`));
+			const historyList = element("div", "stack strategy-version-list");
+			const historyCards = historyVersions.map((version) => versionCard(version, "history"));
+			let visibleHistory = 10;
+			for (const [index, card] of historyCards.entries()) {
+				card.hidden = index >= visibleHistory;
+				historyList.append(card);
+			}
+			historyDisclosure.append(historyList);
+			if (historyCards.length > visibleHistory) {
+				const showMore = actionButton(
+					`再显示 ${Math.min(10, historyCards.length - visibleHistory)} 个历史版本`,
+					"button-secondary",
+				);
+				showMore.addEventListener("click", () => {
+					visibleHistory = Math.min(visibleHistory + 10, historyCards.length);
+					for (const [index, card] of historyCards.entries()) {
+						card.hidden = index >= visibleHistory;
+					}
+					const remaining = historyCards.length - visibleHistory;
+					showMore.hidden = remaining === 0;
+					if (remaining > 0) {
+						showMore.textContent = `再显示 ${Math.min(10, remaining)} 个历史版本`;
+					}
+				});
+				historyDisclosure.append(showMore);
+			}
 		}
 
 		const publicationControls = element(
@@ -2267,10 +3101,14 @@ export function renderProfileEditor(root, source, actions = {}) {
 
 		lifecycleSection.append(
 			lifecycleHelp,
+			lifecycleStepsTitle,
+			lifecycleSteps,
 			summary,
 			learningPanel,
 			draftControls,
-			versions,
+			currentChangePanel,
+			rollbackPanel,
+			historyDisclosure,
 			publicationControls,
 		);
 	}
@@ -2318,6 +3156,7 @@ export function renderProfileEditor(root, source, actions = {}) {
     });
     participantList.replaceChildren(...participantInputs.map(({ wrapper }) => wrapper));
     refreshRoleChoices();
+    refreshVisionModelOptions();
   };
   refreshAutoModelOptions();
 
@@ -2332,12 +3171,10 @@ export function renderProfileEditor(root, source, actions = {}) {
 		autoRoles,
 		riskSection,
 		dynamicOptimizationSection,
-		strategySection,
-		mappingSection,
-		budgetSection,
+		configurationSection,
 		lifecycleSection,
 	);
-	autoRouting.append(autoHelp, autoDependency, autoDetails);
+	autoRouting.append(strategyGuide, autoDependency, autoDetails);
 
   const vision = editorSection("视觉增强");
   const visionNote = textElement(
@@ -2368,16 +3205,22 @@ export function renderProfileEditor(root, source, actions = {}) {
       description: "仅控制识图请求；主请求仍使用当前 Profile 协议。",
     },
   );
-  const visionModel = fieldInput(
+  const visionModelField = fieldInputWithSuggestions(
     visionGrid,
     "识图模型",
     "vision_model",
     working.config.vision.model,
+    currentModelIDs(),
     {
       description:
-        "影子识图请求使用的模型；留空时不执行视觉增强。",
+        "影子识图请求使用的模型；可从当前 Profile 已录入的模型中选择，也可直接输入上游模型 ID；留空时不执行视觉增强。",
     },
   );
+  const visionModel = visionModelField.input;
+  refreshVisionModelOptions = () => {
+    visionModelField.setSuggestions(currentModelIDs());
+  };
+  refreshVisionModelOptions();
   const visionUnlistedModelPolicy = fieldSelect(
     visionGrid,
     "未收录模型",
@@ -2598,15 +3441,30 @@ export function renderProfileEditor(root, source, actions = {}) {
   const generate = actionButton("生成配置", "button-secondary");
   generator.append(generatorHelp, generate);
 
-  const footer = element("div", "cluster editor-actions");
-  const save = actionButton("保存 Profile", "button");
+  const routingEditor = actions.editorSection === "routing";
+  const footer = element(
+    "div",
+    `cluster editor-actions${routingEditor ? " routing-profile-actions" : ""}`,
+  );
+  const save = actionButton(
+    routingEditor ? "保存路由配置" : "保存 Profile",
+    "button",
+  );
   save.type = "submit";
   const cancel = actionButton("返回列表", "button-secondary");
+  if (routingEditor) {
+    footer.append(
+      textElement(
+        "p",
+        "保存模型角色、分析和优化设置；路由策略草稿需在策略摘要中单独保存。",
+        "field-help routing-profile-save-help",
+      ),
+    );
+  }
   footer.append(save, cancel);
 
   function syncForm() {
     syncModelCapabilities();
-    syncTargets();
     syncRetryRules();
     working.display_name = displayName.value;
     working.slug = slug.value;
@@ -2615,8 +3473,6 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.version = version.value;
     working.config.protocol = protocol.value;
     working.config.upstream = upstream.value;
-    working.config.provider_id = providerID.value;
-    working.config.credential_scope = credentialScope.value;
     if (!autoEnabled.checked) {
       working.config.auto_routing = {
         ...working.config.auto_routing,
@@ -2637,14 +3493,11 @@ export function renderProfileEditor(root, source, actions = {}) {
           "任务分析最低置信度",
         ),
         session_ttl: sessionTTL.value,
+        session_lock_token_threshold: requiredPositiveSafeInteger(
+          sessionLockTokenThreshold.value,
+          "Session 锁定 Token 阈值",
+        ),
         self_escalation: { enabled: selfEscalationEnabled.checked },
-        risk_policy: {
-		  version: 2,
-          sensitive_text_patterns: patternLines(sensitiveTextPatterns.value),
-          sensitive_tool_patterns: patternLines(sensitiveToolPatterns.value),
-		  structured_output_high_risk: false,
-		  long_context_threshold_bps: 7500,
-			},
 			dynamic_optimization: {
 				...working.config.auto_routing.dynamic_optimization,
 				enabled: dynamicEnabled.checked,
@@ -2666,6 +3519,14 @@ export function renderProfileEditor(root, source, actions = {}) {
           name: strategyName.value,
           alias: strategyAlias.value,
           default_route: defaultRoute.value,
+			min_net_savings_bps: percentToBasisPoints(
+				minimumNetSavings.value,
+				"最低净节省",
+			),
+			latency_target_ms: requiredNonnegativeSafeInteger(
+				strategyLatencyTarget.value,
+				"候选延迟上限",
+			),
           budget: Object.fromEntries(
             Object.entries(budgetFields).map(([field, control]) => [
               field,
@@ -2731,73 +3592,158 @@ export function renderProfileEditor(root, source, actions = {}) {
   cancel.addEventListener("click", () => actions.cancel?.());
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+		const participantChange = strategyParticipantChange(
+			source?.persisted_auto_participants ||
+				source?.config?.auto_routing?.participants,
+			participantModelIDs(),
+			currentActiveStrategy?.config,
+			strategyVersions,
+			{
+				strong_baseline_model: strongBaseline.value,
+				task_analyzer_model: taskAnalyzer.value,
+				reviewer_model: dynamicReviewer.value,
+			},
+		);
+		if (routingEditor && participantChange.requiresStrategy) {
+			openParticipantStrategyDialog(root, participantChange, async () => {
+				await generateStrategyDraft();
+			});
+			return;
+		}
     save.disabled = true;
+    saveStrategy.disabled = true;
     try {
       await runEditorAction(alert, () => {
-        syncForm();
+			syncForm();
         return actions.save?.(profilePayload(working));
       });
     } catch {
     } finally {
       save.disabled = false;
+      saveStrategy.disabled = false;
     }
   });
 
-  form.append(basic, targets, models, autoRouting, vision, retries, generator, alert, footer);
+  form.append(basic, models, autoRouting, vision, retries, generator, alert, footer);
   root.replaceChildren(form);
 }
 
-function targetsPayload(targets, primaryProviderID, primaryCredentialScope) {
-  assertTargetTrustID(primaryProviderID, "主上游节点供应商 ID");
-  assertTargetTrustID(primaryCredentialScope, "主上游节点凭据范围");
-  const ids = new Set();
-  const upstreams = new Set();
-  return targets.map((target, index) => {
-    const label = `备用上游节点 ${index + 1}`;
-    const id = String(target?.id ?? "");
-    const upstream = String(target?.upstream ?? "");
-    const providerID = String(target?.provider_id ?? "");
-    const credentialScope = String(target?.credential_scope ?? "");
-    if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(id) || id === "primary") {
-      throw new Error(`${label}：ID 必须是小写字母或数字开头的安全标识，且不能使用 primary。`);
-    }
-    if (ids.has(id)) {
-      throw new Error(`备用上游节点 ID 不能重复：${id}`);
-    }
-    if (upstream.trim() === "" || upstream.trim() !== upstream) {
-      throw new Error(`${label}：Upstream 不能为空或包含前后空格。`);
-    }
-    const normalizedUpstream = upstream.replace(/\/+$/, "");
-    if (upstreams.has(normalizedUpstream)) {
-      throw new Error(`备用上游节点地址不能重复：${normalizedUpstream}`);
-    }
-    const models = (target?.models || []).map((model) => String(model));
-    if (models.length === 0 || models.some((model) => model === "" || model.trim() !== model)) {
-      throw new Error(`${label}：至少填写一个精确模型 ID。`);
-    }
-    if (new Set(models).size !== models.length) {
-      throw new Error(`${label}：模型 ID 不能重复。`);
-    }
-    assertTargetTrustID(providerID, `${label} 供应商 ID`);
-    if (providerID !== primaryProviderID) {
-      throw new Error(`${label}：供应商 ID 必须与主上游节点精确一致。`);
-    }
-    assertTargetTrustID(credentialScope, `${label} 凭据范围`);
-    if (credentialScope !== primaryCredentialScope) {
-      throw new Error(`${label}：凭据范围必须与主上游节点精确一致。`);
-    }
-    ids.add(id);
-    upstreams.add(normalizedUpstream);
-    return {
-      id, upstream, provider_id: providerID, credential_scope: credentialScope, models,
-    };
-  });
+function strategyParticipantChange(
+	configured,
+	selected,
+	activeStrategy,
+	strategyVersions = [],
+	desiredRoles = {},
+) {
+	const previous = new Set((configured || []).map(String).filter(Boolean));
+	const next = new Set((selected || []).map(String).filter(Boolean));
+	const added = [...next].filter((model) => !previous.has(model)).sort();
+	const removed = [...previous].filter((model) => !next.has(model)).sort();
+	const activeModels = new Set();
+	const affectedRoutes = [];
+	for (const route of activeStrategy?.routes || []) {
+		const routeModels = (route.candidates || [])
+			.map((candidate) => String(candidate?.model || ""))
+			.filter(Boolean);
+		for (const model of routeModels) activeModels.add(model);
+		const removedCandidates = routeModels.filter((model) => !next.has(model));
+		if (removedCandidates.length > 0) {
+			affectedRoutes.push({
+				id: String(route?.id || "未命名 Route"),
+				models: [...new Set(removedCandidates)].sort(),
+			});
+		}
+	}
+	const unrepresentedAdded = added.filter((model) => !activeModels.has(model));
+	const compatibleVersion = strategyVersions.some((version) => {
+		if (version?.archived_at || !["draft", "evaluating", "ready", "canary"].includes(version?.state)) {
+			return false;
+		}
+		const roles = version?.config?.roles;
+		if (!roles || !sameStringSet(roles.participants, selected)) {
+			return false;
+		}
+		if (String(roles.strong_baseline_model || "") !== String(desiredRoles.strong_baseline_model || "") ||
+			String(roles.task_analyzer_model || "") !== String(desiredRoles.task_analyzer_model || "") ||
+			String(roles.reviewer_model || "") !== String(desiredRoles.reviewer_model || "")) {
+			return false;
+		}
+		return (version.config.routes || []).every((route) =>
+			(route.candidates || []).every((candidate) => next.has(String(candidate?.model || "")))
+		);
+	});
+	return {
+		added,
+		removed,
+		affectedRoutes,
+		requiresStrategy: Boolean(activeStrategy) && !compatibleVersion &&
+			(unrepresentedAdded.length > 0 || affectedRoutes.length > 0),
+	};
 }
 
-function assertTargetTrustID(value, label) {
-  if (!/^[a-z0-9][a-z0-9._:/-]{0,127}$/.test(value)) {
-    throw new Error(`${label}必须是小写字母或数字开头的安全标识。`);
-  }
+function sameStringSet(left = [], right = []) {
+	const leftSet = new Set(left.map(String).filter(Boolean));
+	const rightSet = new Set(right.map(String).filter(Boolean));
+	return leftSet.size === rightSet.size && [...leftSet].every((item) => rightSet.has(item));
+}
+
+function openParticipantStrategyDialog(root, change, generate) {
+	const dialog = element("dialog", "profile-dialog participant-strategy-dialog");
+	const body = element("section", "stack dialog-body");
+	const heading = textElement("h2", "参与模型变化需要新策略");
+	heading.id = "participant-strategy-dialog-title";
+	dialog.setAttribute("aria-labelledby", heading.id);
+	body.append(
+		heading,
+		textElement(
+			"p",
+			"当前正式策略与新的参与模型不一致。先生成兼容草稿即可保存模型角色；线上仍使用旧 Active 角色和规则，直到新草稿完成灰度并发布。",
+		),
+	);
+	const changes = element("ul", "participant-strategy-change-list");
+	if (change.added.length > 0) {
+		changes.append(textElement("li", `新增参与模型：${change.added.join("、")}`));
+	}
+	if (change.removed.length > 0) {
+		changes.append(textElement("li", `移除参与模型：${change.removed.join("、")}`));
+	}
+	for (const route of change.affectedRoutes) {
+		changes.append(textElement(
+			"li",
+			`Route ${route.id} 仍引用：${route.models.join("、")}`,
+		));
+	}
+	body.append(changes);
+	const controls = element("div", "dialog-actions");
+	const confirm = actionButton("生成新策略草稿", "button");
+	const cancel = actionButton("取消", "button-secondary");
+	let closed = false;
+	const closeDialog = () => {
+		if (closed) return;
+		closed = true;
+		dialog.close();
+		dialog.remove();
+	};
+	cancel.addEventListener("click", closeDialog);
+	dialog.addEventListener("cancel", (event) => {
+		event.preventDefault();
+		closeDialog();
+	});
+	confirm.addEventListener("click", async () => {
+		confirm.disabled = true;
+		try {
+			await generate();
+			closeDialog();
+		} catch {
+			confirm.disabled = false;
+		}
+	});
+	controls.append(confirm, cancel);
+	body.append(controls);
+	dialog.append(body);
+	root.append(dialog);
+	dialog.showModal();
+	return dialog;
 }
 
 function modelCapabilitiesPayload(models) {
@@ -2848,8 +3794,13 @@ function modelCapabilitiesPayload(models) {
       id,
       supports_vision: model.supports_vision,
     };
+	const canonicalModelID = String(model?.canonical_model_id ?? "");
+	if (canonicalModelID) {
+		result.canonical_model_id = canonicalModelID;
+	}
 	for (const [field, label] of [
 		["supports_tools", "工具调用"],
+		["supports_agent_workflow", "Agent 工作流"],
 		["supports_structured_output", "结构化输出"],
 	]) {
 		if (model?.[field] === "" || model?.[field] === undefined) {
@@ -2884,31 +3835,20 @@ function modelCapabilitiesPayload(models) {
 function autoRoutingDraft(configured = {}) {
   const defaults = newDefaultAutoRouting();
   const strategy = configured?.strategy || {};
-  const configuredRisk = configured?.risk_policy;
-	const riskPolicy = configuredRisk?.version === 2
-    ? {
-        ...defaults.risk_policy,
-        ...configuredRisk,
-				structured_output_high_risk:
-					typeof configuredRisk.structured_output_high_risk === "boolean"
-						? configuredRisk.structured_output_high_risk
-						: false,
-        sensitive_text_patterns: configuredRisk.sensitive_text_patterns == null
-          ? [...defaults.risk_policy.sensitive_text_patterns]
-          : [...configuredRisk.sensitive_text_patterns],
-        sensitive_tool_patterns: configuredRisk.sensitive_tool_patterns == null
-          ? [...defaults.risk_policy.sensitive_tool_patterns]
-          : [...configuredRisk.sensitive_tool_patterns],
-      }
-    : {
-        ...newDefaultRiskPolicy(),
-        structured_output_high_risk: false,
-      };
   return {
     ...defaults,
-    ...configured,
+		enabled: Boolean(configured?.enabled),
+		strong_baseline_model: String(configured?.strong_baseline_model || ""),
+		task_analyzer_model: String(configured?.task_analyzer_model || ""),
+		analyzer_timeout: String(configured?.analyzer_timeout || defaults.analyzer_timeout),
+		analyzer_min_confidence_bps: configured?.analyzer_min_confidence_bps ??
+			defaults.analyzer_min_confidence_bps,
+		session_ttl: String(configured?.session_ttl || defaults.session_ttl),
     participants: [...(configured?.participants || [])],
-		risk_policy: riskPolicy,
+		session_lock_token_threshold: positiveOrDefault(
+			configured?.session_lock_token_threshold,
+			defaults.session_lock_token_threshold,
+		),
 		dynamic_optimization: {
 			...defaults.dynamic_optimization,
 			...(configured?.dynamic_optimization || {}),
@@ -2936,8 +3876,6 @@ function autoRoutingDraft(configured = {}) {
 function strategyBudgetDraft(configured = {}) {
   const defaults = newDefaultAutoRouting().strategy.budget;
   return {
-    ...defaults,
-    ...configured,
     max_answer_attempts: positiveOrDefault(
       configured?.max_answer_attempts,
       defaults.max_answer_attempts,
@@ -2951,7 +3889,14 @@ function strategyBudgetDraft(configured = {}) {
       2,
       defaults.max_total_outbound_calls,
     ),
+    max_retries_per_target: configured?.max_retries_per_target ??
+      defaults.max_retries_per_target,
+    max_model_switches: configured?.max_model_switches ??
+      defaults.max_model_switches,
     deadline: String(configured?.deadline || defaults.deadline),
+    max_worst_case_cost_micro_usd:
+      configured?.max_worst_case_cost_micro_usd ??
+      defaults.max_worst_case_cost_micro_usd,
   };
 }
 
@@ -2978,17 +3923,34 @@ function autoRoutingPayload(auto) {
       "任务分析最低置信度",
     ),
     session_ttl: String(auto.session_ttl ?? "24h"),
+    session_lock_token_threshold: positiveOrDefault(
+      auto.session_lock_token_threshold,
+      100000,
+    ),
     self_escalation: {
       enabled: Boolean(auto.self_escalation?.enabled),
     },
-    risk_policy: riskPolicyPayload(auto.risk_policy),
     dynamic_optimization: dynamicOptimizationPayload(
       auto.dynamic_optimization,
     ),
     strategy: {
       name: String(strategy.name ?? ""),
       alias: String(strategy.alias ?? ""),
+		roles: {
+			participants: [...(auto.participants || [])].map(String),
+			strong_baseline_model: String(auto.strong_baseline_model ?? ""),
+			task_analyzer_model: String(auto.task_analyzer_model ?? ""),
+			reviewer_model: String(auto.dynamic_optimization?.reviewer_model ?? ""),
+		},
       default_route: String(strategy.default_route ?? ""),
+		min_net_savings_bps: boundedBasisPoints(
+			strategy.min_net_savings_bps || 0,
+			"最低净节省",
+		),
+		latency_target_ms: requiredNonnegativeSafeInteger(
+			strategy.latency_target_ms || 0,
+			"候选延迟上限",
+		),
       task_routes: (strategy.task_routes || []).map((mapping) => ({
         task_type: String(mapping.task_type ?? ""),
 		difficulty: String(mapping.difficulty ?? ""),
@@ -3000,20 +3962,39 @@ function autoRoutingPayload(auto) {
           route.min_quality_bps,
           `Route ${route.id || "未命名"}：最低质量`,
         ),
+				min_stability_bps: boundedBasisPoints(
+					route.min_stability_bps,
+					`Route ${route.id || "未命名"}：最低稳定性`,
+				),
         max_severe_error_rate_bps: boundedBasisPoints(
           route.max_severe_error_rate_bps,
           `Route ${route.id || "未命名"}：严重错误率`,
         ),
+				weights: {
+					quality_bps: boundedBasisPoints(route.weights?.quality_bps, "质量权重"),
+					stability_bps: boundedBasisPoints(route.weights?.stability_bps, "稳定性权重"),
+					cost_bps: boundedBasisPoints(route.weights?.cost_bps, "成本权重"),
+					performance_bps: boundedBasisPoints(route.weights?.performance_bps, "性能权重"),
+				},
         candidates: (route.candidates || []).map((candidate) => ({
           model: String(candidate.model ?? ""),
+          production_eligible: Boolean(candidate.production_eligible),
           quality_score_bps: boundedBasisPoints(
             candidate.quality_score_bps,
             `候选模型 ${candidate.model || "未选择"}：质量`,
           ),
+					stability_score_bps: boundedBasisPoints(
+						candidate.stability_score_bps,
+						`候选模型 ${candidate.model || "未选择"}：稳定性`,
+					),
           severe_error_rate_bps: boundedBasisPoints(
             candidate.severe_error_rate_bps,
             `候选模型 ${candidate.model || "未选择"}：严重错误率`,
           ),
+					expected_latency_ms: requiredNonnegativeSafeInteger(
+					candidate.expected_latency_ms,
+					`候选模型 ${candidate.model || "未选择"}：预期延迟`,
+				),
         })),
       })),
       budget: autoBudgetPayload(strategy.budget || {}),
@@ -3063,6 +4044,13 @@ function validateAutoRoutingConfiguration(auto, models, vision) {
     if (route.candidates.length === 0) {
       throw new Error(`Route ${route.id} 至少需要一个候选模型。`);
     }
+		const weightTotal = Object.values(route.weights || {}).reduce(
+			(total, value) => total + Number(value || 0),
+			0,
+		);
+		if (weightTotal !== 10000) {
+			throw new Error(`Route ${route.id} 的质量、稳定性、成本和性能权重之和必须为 100%。`);
+		}
     for (const candidate of route.candidates) {
       if (!participants.includes(candidate.model)) {
         throw new Error(`Route ${route.id} 的候选模型必须属于参与模型。`);
@@ -3082,7 +4070,7 @@ function validateAutoRoutingConfiguration(auto, models, vision) {
 	for (const mapping of strategy.task_routes || []) {
 	  const taskType = String(mapping.task_type || "");
 	  const difficulty = String(mapping.difficulty || "");
-	  if (taskType && !/^[a-z0-9][a-z0-9_-]{0,62}$/.test(taskType)) {
+	  if (taskType && !Object.hasOwn(routingTaskLabels, taskType)) {
 		throw new Error(`任务类型 ${taskType} 无效。`);
 	  }
 	  if (!["", "easy", "medium", "hard"].includes(difficulty)) {
@@ -3118,6 +4106,9 @@ function validateAutoRoutingConfiguration(auto, models, vision) {
     }
     requiredModels.add(auto.dynamic_optimization.reviewer_model);
   }
+	if (auto.dynamic_optimization.auto_update_policy && !auto.dynamic_optimization.enabled) {
+		throw new Error("自动更新线上策略前必须启用异步评测。");
+	}
   for (const modelID of requiredModels) {
     const model = byID.get(modelID);
     if (
@@ -3141,36 +4132,10 @@ function validateAutoRoutingConfiguration(auto, models, vision) {
   }
 }
 
-function riskPolicyPayload(policy = {}) {
-	const defaults = newDefaultRiskPolicy();
-  const threshold = boundedBasisPoints(
-    policy.long_context_threshold_bps || defaults.long_context_threshold_bps,
-    "长上下文阈值",
-  );
-  if (threshold === 0) {
-    throw new Error("长上下文阈值必须大于 0%。");
-  }
-  return {
-	version: 2,
-    sensitive_text_patterns: [...(policy.sensitive_text_patterns == null
-		? defaults.sensitive_text_patterns
-		: policy.sensitive_text_patterns)].map(String),
-    sensitive_tool_patterns: [...(policy.sensitive_tool_patterns == null
-		? defaults.sensitive_tool_patterns
-		: policy.sensitive_tool_patterns)].map(String),
-    structured_output_high_risk: Boolean(policy.structured_output_high_risk),
-    long_context_threshold_bps: threshold,
-  };
-}
-
-function patternLines(value) {
-  const text = String(value ?? "").replaceAll("\r\n", "\n");
-  return text.trim() === "" ? [] : text.split("\n");
-}
-
 function dynamicOptimizationPayload(config = {}) {
 	return {
 		enabled: Boolean(config?.enabled),
+		auto_update_policy: Boolean(config?.auto_update_policy),
 		sample_rate_bps: boundedBasisPoints(
 			config.sample_rate_bps,
 			"异步抽样比例",
@@ -3199,7 +4164,6 @@ function autoBudgetPayload(budget) {
     ["max_auxiliary_calls", "辅助调用次数"],
     ["max_total_outbound_calls", "总上游调用次数"],
     ["max_retries_per_target", "单节点重试次数"],
-    ["max_target_switches", "上游节点切换次数"],
     ["max_model_switches", "模型切换次数"],
     ["max_worst_case_cost_micro_usd", "最坏费用"],
   ]) {
@@ -3233,6 +4197,14 @@ function requiredNonnegativeSafeInteger(value, label) {
   const parsed = Number(normalized);
   if (!Number.isSafeInteger(parsed) || parsed < 0 || normalized === "") {
     throw new Error(`${label}必须是非负整数。`);
+  }
+  return parsed;
+}
+
+function requiredPositiveSafeInteger(value, label) {
+  const parsed = requiredNonnegativeSafeInteger(value, label);
+  if (parsed === 0) {
+    throw new Error(`${label}必须大于 0。`);
   }
   return parsed;
 }
@@ -3294,7 +4266,7 @@ function strategyStateLabel(state) {
 		case "draft":
 			return "草稿";
 		case "evaluating":
-			return "评估中";
+			return "待确认（旧流程）";
 		case "ready":
 			return "待灰度";
 		case "canary":
@@ -3693,6 +4665,40 @@ function fieldInput(parent, labelText, name, value, options = {}) {
   }
   appendField(parent, labelText, input, options.description);
   return input;
+}
+
+function fieldInputWithSuggestions(
+  parent,
+  labelText,
+  name,
+  value,
+  suggestions,
+  options = {},
+) {
+  const input = fieldInput(parent, labelText, name, value, options);
+  const list = element("datalist");
+  list.id = `${input.id}-suggestions`;
+  input.setAttribute("list", list.id);
+  input.parentNode.append(list);
+
+  const setSuggestions = (values) => {
+    const seen = new Set();
+    const options = [];
+    for (const value of values) {
+      const normalized = String(value ?? "").trim();
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      const option = element("option");
+      option.value = normalized;
+      options.push(option);
+    }
+    list.replaceChildren(...options);
+  };
+  setSuggestions(suggestions);
+
+  return { input, setSuggestions };
 }
 
 function fieldTextarea(parent, labelText, name, value, options = {}) {

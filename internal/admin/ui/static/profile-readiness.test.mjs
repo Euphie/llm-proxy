@@ -90,7 +90,6 @@ test("disabled intelligent routing blocks until two models are recorded", () => 
 test("Agent configuration is ready without models and reliability accepts no rules", () => {
   const draft = readyDraft();
   draft.config.models = [];
-  draft.config.targets = [];
   draft.config.overload_rules = [];
 
   const readiness = profileReadiness(draft, { saved: true });
@@ -158,8 +157,6 @@ test("model references name every dependent feature and field", () => {
     },
   };
   draft.config.vision.model = "strong";
-  draft.config.targets = [{ id: "backup", models: ["strong"] }];
-
   assert.deepEqual(modelReferences(draft, "strong"), [
     {
       section: "routing",
@@ -180,11 +177,6 @@ test("model references name every dependent feature and field", () => {
       section: "routing",
       label: "Route balanced",
       path: "config.auto_routing.strategy.routes[0].candidates[0].model",
-    },
-    {
-      section: "reliability",
-      label: "上游节点 backup",
-      path: "config.targets[0].models[0]",
     },
   ]);
 });

@@ -11,54 +11,86 @@ import {
 import {
   addModelCapability,
   addRetryRule,
-  addTarget,
   defaultProfileDraft,
   moveRetryRule,
-  moveTarget,
   profileDraft,
   profilePayload,
   removeModelCapability,
   removeRetryRule,
-  removeTarget,
   renderProfileEditor,
   renderProfileList,
 } from "./profiles.js";
 
 test("new Anthropic Profile contains explicit defaults", () => {
   const draft = defaultProfileDraft("anthropic");
-  assert.equal(draft.config.version, 1);
+  assert.equal(draft.config.version, 2);
   assert.equal(draft.config.protocol, "anthropic");
   assert.equal(draft.config.vision.model, "sonnet");
   assert.equal(draft.config.vision.timeout, "2m");
   assert.equal(draft.config.vision.unlisted_model_policy, "bypass");
   assert.deepEqual(draft.config.models, []);
   assert.equal(draft.config.auto_routing.enabled, false);
+  assert.equal(draft.config.auto_routing.analyzer_timeout, "15s");
   assert.match(draft.config.auto_routing.strategy.name, /^\d{8}-001$/);
   assert.equal(draft.config.auto_routing.strategy.default_route, "default");
   assert.deepEqual(draft.config.auto_routing.strategy.routes, [{
     id: "default",
     min_quality_bps: 9000,
+		min_stability_bps: 8000,
     max_severe_error_rate_bps: 100,
+		weights: {
+			quality_bps: 4000, stability_bps: 2500,
+			cost_bps: 2500, performance_bps: 1000,
+		},
     candidates: [],
   }]);
-	assert.deepEqual(draft.config.auto_routing.risk_policy, {
-		version: 2,
-		sensitive_text_patterns: [
-			"delete production", "drop table", "deploy to production", "rotate credential",
-			"删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
-		],
-		sensitive_tool_patterns: [
-			"delete_production", "deploy_production", "rotate_credential", "rotate_secret", "payment", "transfer",
-			"database_mutation", "database_write", "database_delete", "db_write", "db_delete",
-		],
-		structured_output_high_risk: false,
-		long_context_threshold_bps: 7500,
-	});
+	assert.equal(draft.config.auto_routing.session_lock_token_threshold, 100000);
+	assert.equal(Object.hasOwn(draft.config.auto_routing, "risk_policy"), false);
 	assert.equal(
 		draft.config.auto_routing.dynamic_optimization.enabled,
 		false,
 	);
   assert.deepEqual(draft.config.overload_rules, []);
+});
+
+test("legacy backup upstream fields are omitted from editable drafts and save payloads", () => {
+  const draft = profileDraft(profileFixture({
+    config: {
+      ...profileFixture().config,
+      provider_id: "acme-ai",
+      credential_scope: "team-a",
+      targets: [{
+        id: "backup",
+        upstream: "https://backup.example",
+        provider_id: "acme-ai",
+        credential_scope: "team-a",
+        models: ["strong"],
+      }],
+    },
+  }));
+
+  for (const field of ["provider_id", "credential_scope", "targets"]) {
+    assert.equal(Object.hasOwn(draft.config, field), false);
+    assert.equal(Object.hasOwn(profilePayload(draft).config, field), false);
+  }
+});
+
+test("legacy target-switch budget is omitted from drafts and save payloads", () => {
+  const source = defaultProfileDraft();
+  source.config.auto_routing.strategy.budget.max_target_switches = 4;
+  const draft = profileDraft(profileFixture({ config: source.config }));
+
+  assert.equal(
+    Object.hasOwn(draft.config.auto_routing.strategy.budget, "max_target_switches"),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(
+      profilePayload(draft).config.auto_routing.strategy.budget,
+      "max_target_switches",
+    ),
+    false,
+  );
 });
 
 test("legacy disabled Auto budgets reopen with safe editable defaults", () => {
@@ -165,80 +197,32 @@ test("saved Profile model capabilities and unlisted policy remain authoritative 
   assert.equal(draft.config.vision.unlisted_model_policy, "enhance");
 });
 
-test("saved risk policy preserves explicit empty arrays booleans basis points and order", () => {
+test("saved Session lock threshold round-trips", () => {
 	const draft = profileDraft(profileFixture({
 		config: {
 			...profileFixture().config,
 			auto_routing: {
 				...defaultProfileDraft().config.auto_routing,
 				enabled: false,
-				risk_policy: {
-					version: 2,
-					sensitive_text_patterns: [],
-					sensitive_tool_patterns: ["second", "first"],
-					structured_output_high_risk: false,
-					long_context_threshold_bps: 8125,
-				},
+				session_lock_token_threshold: 250000,
 			},
 		},
 	}));
-	const policy = profilePayload(draft).config.auto_routing.risk_policy;
-	assert.deepEqual(policy, {
-		version: 2,
-		sensitive_text_patterns: [],
-		sensitive_tool_patterns: ["second", "first"],
-		structured_output_high_risk: false,
-		long_context_threshold_bps: 8125,
-	});
+	assert.equal(draft.config.auto_routing.session_lock_token_threshold, 250000);
+	assert.equal(profilePayload(draft).config.auto_routing.session_lock_token_threshold, 250000);
 });
 
-test("saved empty or partial risk policy drafts use the Go missing-boolean contract", () => {
-	for (const riskPolicy of [
-		{ version: 2 },
-		{
-			version: 2,
-			sensitive_text_patterns: ["text"],
-			sensitive_tool_patterns: ["tool"],
-			long_context_threshold_bps: 8125,
-		},
-	]) {
-		const draft = profileDraft(profileFixture({
-			config: {
-				...profileFixture().config,
-				auto_routing: {
-					...defaultProfileDraft().config.auto_routing,
-					enabled: false,
-					risk_policy: riskPolicy,
-				},
-			},
-		}));
-		assert.equal(
-			draft.config.auto_routing.risk_policy.structured_output_high_risk,
-			false,
-		);
-		assert.equal(
-			profilePayload(draft).config.auto_routing.risk_policy.structured_output_high_risk,
-			false,
-		);
-	}
-});
-
-test("disabled Auto routing persists and round-trips an explicit risk policy", () => {
-	const expected = {
-		version: 2,
-		sensitive_text_patterns: [],
-		sensitive_tool_patterns: ["second", "first"],
-		structured_output_high_risk: false,
-		long_context_threshold_bps: 8125,
-	};
+test("disabled Auto routing persists the explicit Session lock threshold", () => {
 	const draft = defaultProfileDraft();
 	draft.config.auto_routing.enabled = false;
-	draft.config.auto_routing.risk_policy = structuredClone(expected);
+	draft.config.auto_routing.session_lock_token_threshold = 250000;
 	const first = profilePayload(draft).config.auto_routing;
 	assert.equal(first.enabled, false);
-	assert.deepEqual(first.risk_policy, expected);
+	assert.equal(first.session_lock_token_threshold, 250000);
+	assert.equal(Object.hasOwn(first, "risk_policy"), false);
 	assert.deepEqual(first.dynamic_optimization, {
 		enabled: false,
+		auto_update_policy: false,
 		sample_rate_bps: 1000,
 		daily_budget_micro_usd: 250000,
 		reviewer_model: "",
@@ -277,6 +261,7 @@ test("model capability helpers append an explicit row and remove without sorting
       max_output_tokens: "",
       supports_vision: "",
       supports_tools: "",
+      supports_agent_workflow: "",
       supports_structured_output: "",
       input_price_micro_usd_per_million: "",
       output_price_micro_usd_per_million: "",
@@ -285,65 +270,6 @@ test("model capability helpers append an explicit row and remove without sorting
     },
   ]);
   assert.deepEqual(removeModelCapability([first, second], 0), [second]);
-});
-
-test("Target helpers and payload preserve explicit failover order", () => {
-  const first = {
-    id: "region_b",
-    upstream: "https://region-b.example/v1",
-    provider_id: "acme-ai",
-    credential_scope: "team-a",
-    models: ["fast", "strong"],
-  };
-  const second = {
-    id: "strong_backup",
-    upstream: "https://strong.example/v1",
-    provider_id: "acme-ai",
-    credential_scope: "team-a",
-    models: ["strong"],
-  };
-  const added = addTarget([first, second]);
-  assert.deepEqual(added.slice(0, 2), [first, second]);
-  assert.deepEqual(added[2], {
-    id: "",
-    upstream: "",
-    provider_id: "",
-    credential_scope: "",
-    models: [],
-  });
-  assert.deepEqual(removeTarget([first, second], 0), [second]);
-  assert.deepEqual(moveTarget([first, second], 1, -1), [second, first]);
-
-  const draft = defaultProfileDraft();
-  draft.config.provider_id = "acme-ai";
-  draft.config.credential_scope = "team-a";
-  draft.config.targets = [first, second];
-  const payload = profilePayload(draft);
-  assert.equal(payload.config.provider_id, "acme-ai");
-  assert.equal(payload.config.credential_scope, "team-a");
-  assert.deepEqual(payload.config.targets, [first, second]);
-  assert.deepEqual(profileDraft({
-    enabled: true,
-    config: { ...draft.config, targets: [first, second] },
-  }).config.targets, [first, second]);
-});
-
-test("Target payload rejects malformed or incompatible trust identifiers", () => {
-  const draft = defaultProfileDraft();
-  draft.config.provider_id = "acme-ai";
-  draft.config.credential_scope = "team-a";
-  draft.config.targets = [{
-    id: "region_b",
-    upstream: "https://region-b.example/v1",
-    provider_id: "foreign-ai",
-    credential_scope: "team-a",
-    models: ["fast"],
-  }];
-
-  assert.throws(() => profilePayload(draft), /供应商.*主上游节点/);
-  draft.config.targets[0].provider_id = "acme-ai";
-  draft.config.targets[0].credential_scope = "team b";
-  assert.throws(() => profilePayload(draft), /凭据范围.*安全标识/);
 });
 
 test("payload preserves optional routing capabilities and integer micro-USD prices", () => {
@@ -418,11 +344,18 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
       routes: [{
         id: "balanced",
         min_quality_bps: "9000",
+				min_stability_bps: "8000",
         max_severe_error_rate_bps: "100",
+				weights: {
+					quality_bps: "4000", stability_bps: "2500",
+					cost_bps: "2500", performance_bps: "1000",
+				},
         candidates: [{
           model: "fast",
           quality_score_bps: "9200",
+					stability_score_bps: "9300",
           severe_error_rate_bps: "50",
+					expected_latency_ms: "250",
         }],
       }],
       budget: {
@@ -430,7 +363,6 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
         max_auxiliary_calls: "2",
         max_total_outbound_calls: "5",
         max_retries_per_target: "1",
-        max_target_switches: "0",
         max_model_switches: "1",
         deadline: "2m",
         max_worst_case_cost_micro_usd: "500000",
@@ -446,6 +378,7 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
 	assert.deepEqual(auto.self_escalation, { enabled: true });
 	assert.deepEqual(auto.dynamic_optimization, {
 		enabled: true,
+		auto_update_policy: false,
 		sample_rate_bps: 1250,
 		daily_budget_micro_usd: 250000,
 		reviewer_model: "strong",
@@ -454,7 +387,14 @@ test("payload serializes a complete Profile-local Auto strategy", () => {
 		task_timeout: "90s",
 	});
   assert.equal(auto.strategy.routes[0].min_quality_bps, 9000);
+	assert.equal(auto.strategy.routes[0].min_stability_bps, 8000);
+	assert.deepEqual(auto.strategy.routes[0].weights, {
+		quality_bps: 4000, stability_bps: 2500,
+		cost_bps: 2500, performance_bps: 1000,
+	});
   assert.equal(auto.strategy.routes[0].candidates[0].quality_score_bps, 9200);
+	assert.equal(auto.strategy.routes[0].candidates[0].stability_score_bps, 9300);
+	assert.equal(auto.strategy.routes[0].candidates[0].expected_latency_ms, 250);
   assert.equal(auto.strategy.budget.max_worst_case_cost_micro_usd, 500000);
 });
 
@@ -600,7 +540,18 @@ test("payload preserves every configured field with numeric JSON types and retry
       protocol: "anthropic",
       upstream: "https://upstream.example",
       models: [],
-      auto_routing: structuredClone(draft.config.auto_routing),
+      auto_routing: {
+        ...structuredClone(draft.config.auto_routing),
+        strategy: {
+          ...structuredClone(draft.config.auto_routing.strategy),
+          roles: {
+            participants: [],
+            strong_baseline_model: "",
+            task_analyzer_model: "",
+            reviewer_model: "",
+          },
+        },
+      },
       vision: {
         enabled: true,
         transport: "anthropic_messages",
@@ -708,15 +659,16 @@ test("Profile API methods use exact routes, methods, JSON, and CSRF", async (t) 
   await api.deleteProfile(7);
   await api.deleteProfile(7, 12);
   await api.setDefaultProfile(12);
-	await api.listStrategies(7);
-	await api.createStrategy(7, { name: "" });
-	await api.updateStrategy(7, 9, { name: "20260802-002" });
-	await api.advanceStrategy(7, 9, "draft", "evaluating");
-	await api.startStrategyCanary(7, 9, 2500, 4);
-	await api.cancelStrategyCanary(7, 5);
-	await api.promoteStrategy(7, 6);
-	await api.rollbackStrategy(7, 7);
-	await api.generateStrategyCandidate(7);
+  await api.routingPolicy(7);
+  await api.applyRoutingPolicy(7, 4, { name: "policy-2" }, "replace models");
+  await api.generateRoutingPolicy(7, { objective: "balanced" });
+  await api.rollbackRoutingPolicy(7, 5, 9, "restore known-good policy");
+  await api.profileModels(7);
+  await api.addProfileModel(7, 6, "glm", { id: "glm" }, "add glm");
+  await api.updateProfileModel(7, 7, "glm", { id: "glm", supports_tools: true }, "update glm");
+  await api.offlineProfileModel(7, { expected_runtime_revision: 8, model_id: "glm", reason: "incident" });
+  await api.restoreProfileModel(7, 9, "glm", "incident resolved");
+  await api.retireProfileModel(7, 10, "glm", "retire glm");
 
   assert.deepEqual(calls, [
     {
@@ -767,60 +719,66 @@ test("Profile API methods use exact routes, methods, JSON, and CSRF", async (t) 
       body: { profile_id: 12 },
       csrf: "csrf-token",
     },
-		{
-			path: "/_admin/api/profiles/7/strategies",
-			method: "GET",
-			body: undefined,
-			csrf: null,
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies",
-			method: "POST",
-			body: { config: { name: "" } },
-			csrf: "csrf-token",
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies/9",
-			method: "PUT",
-			body: { config: { name: "20260802-002" } },
-			csrf: "csrf-token",
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies/9/advance",
-			method: "POST",
-			body: { from: "draft", to: "evaluating" },
-			csrf: "csrf-token",
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies/9/canary",
-			method: "POST",
-			body: { canary_bps: 2500, expected_revision: 4 },
-			csrf: "csrf-token",
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies/cancel-canary",
-			method: "POST",
-			body: { expected_revision: 5 },
-			csrf: "csrf-token",
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies/promote",
-			method: "POST",
-			body: { expected_revision: 6 },
-			csrf: "csrf-token",
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies/rollback",
-			method: "POST",
-			body: { expected_revision: 7 },
-			csrf: "csrf-token",
-		},
-		{
-			path: "/_admin/api/profiles/7/strategies/generate-candidate",
-			method: "POST",
-			body: {},
-			csrf: "csrf-token",
-		},
+    {
+      path: "/_admin/api/profiles/7/routing-policy",
+      method: "GET",
+      body: undefined,
+      csrf: null,
+    },
+    {
+      path: "/_admin/api/profiles/7/routing-policy",
+      method: "PUT",
+      body: { expected_runtime_revision: 4, policy: { name: "policy-2" }, change_reason: "replace models" },
+      csrf: "csrf-token",
+    },
+    {
+      path: "/_admin/api/profiles/7/routing-policy/generate",
+      method: "POST",
+      body: { objective: "balanced" },
+      csrf: "csrf-token",
+    },
+    {
+      path: "/_admin/api/profiles/7/routing-policy/rollback",
+      method: "POST",
+      body: { expected_runtime_revision: 5, version_id: 9, change_reason: "restore known-good policy" },
+      csrf: "csrf-token",
+    },
+    {
+      path: "/_admin/api/profiles/7/models",
+      method: "GET",
+      body: undefined,
+      csrf: null,
+    },
+    {
+      path: "/_admin/api/profiles/7/models",
+      method: "POST",
+      body: { expected_runtime_revision: 6, model_id: "glm", capability: { id: "glm" }, reason: "add glm" },
+      csrf: "csrf-token",
+    },
+    {
+      path: "/_admin/api/profiles/7/models/update",
+      method: "PUT",
+      body: { expected_runtime_revision: 7, model_id: "glm", capability: { id: "glm", supports_tools: true }, reason: "update glm" },
+      csrf: "csrf-token",
+    },
+    {
+      path: "/_admin/api/profiles/7/models/offline",
+      method: "POST",
+      body: { expected_runtime_revision: 8, model_id: "glm", reason: "incident" },
+      csrf: "csrf-token",
+    },
+    {
+      path: "/_admin/api/profiles/7/models/restore",
+      method: "POST",
+      body: { expected_runtime_revision: 9, model_id: "glm", reason: "incident resolved" },
+      csrf: "csrf-token",
+    },
+    {
+      path: "/_admin/api/profiles/7/models/retire",
+      method: "POST",
+      body: { expected_runtime_revision: 10, model_id: "glm", reason: "retire glm" },
+      csrf: "csrf-token",
+    },
   ]);
 });
 
@@ -945,7 +903,6 @@ test("editor renders exact accessible labels and sections and submits every conf
 
   assert.deepEqual(sectionHeadings(root), [
     "基础配置",
-    "上游节点容错",
     "模型能力",
     "智能路由",
     "视觉增强",
@@ -1042,56 +999,47 @@ test("editor renders exact accessible labels and sections and submits every conf
   assert.deepEqual(generated, ["primary-renamed"]);
 });
 
-test("Target editor preserves visible failover order and exact model IDs", async (t) => {
+test("vision model suggests recorded models while accepting a manual model ID", async (t) => {
   const root = installFakeDOM(t);
-  const draft = defaultProfileDraft();
+  const data = profileListFixture();
+  const draft = profileDraft(data.profiles[0], data.default_profile_id);
   draft.config.models = [
-    { id: "fast", supports_vision: false },
-    { id: "strong", supports_vision: true },
+    { id: "vision-fast", supports_vision: true },
+    { id: "vision-strong", supports_vision: true },
   ];
-  draft.config.targets = [
-    {
-      id: "region_b", upstream: "https://b.example", provider_id: "acme-ai",
-      credential_scope: "team-a", models: ["fast", "strong"],
-    },
-    {
-      id: "region_c", upstream: "https://c.example", provider_id: "acme-ai",
-      credential_scope: "team-a", models: ["strong"],
-    },
-  ];
+  const saves = [];
 
-  draft.config.provider_id = "acme-ai";
-  draft.config.credential_scope = "team-a";
-  let saved;
   renderProfileEditor(root, draft, {
-    save: async (payload) => { saved = payload; },
+    save: async (payload) => saves.push(payload),
     cancel: () => {},
     generate: () => {},
   });
 
-  assert.match(findText(root, "Upstream 是主上游节点").textContent, /仅供 model=auto/);
-  assert.equal(controlByName(root, "provider_id").value, "acme-ai");
-  assert.match(fieldDescription(root, controlByName(root, "provider_id")), /供应商/);
-  assert.equal(controlByName(root, "credential_scope").value, "team-a");
-  assert.match(fieldDescription(root, controlByName(root, "credential_scope")), /凭据/);
-  assert.equal(controlByName(root, "target-0-id").value, "region_b");
-  assert.equal(controlByName(root, "target-0-provider-id").value, "acme-ai");
-  assert.match(fieldDescription(root, controlByName(root, "target-0-provider-id")), /主上游节点/);
-  assert.equal(controlByName(root, "target-0-credential-scope").value, "team-a");
-  assert.match(fieldDescription(root, controlByName(root, "target-0-credential-scope")), /主上游节点/);
-  assert.equal(controlByName(root, "target-0-models").value, "fast, strong");
-  assert.match(fieldDescription(root, controlByName(root, "target-0-models")), /精确 ID/);
+  const visionModel = controlByName(root, "vision_model");
+  const listID = visionModel.getAttribute("list");
+  const suggestions = descendants(root).find((element) => element.id === listID);
+  assert.equal(visionModel.tagName, "INPUT");
+  assert.ok(listID);
+  assert.equal(suggestions?.tagName, "DATALIST");
+  assert.deepEqual(
+    suggestions.children.map((option) => option.value),
+    ["vision-fast", "vision-strong"],
+  );
+  assert.match(fieldDescription(root, visionModel), /也可直接输入/);
 
-  await buttonsByText(root, "上移节点")[1].dispatch("click");
-  assert.equal(controlByName(root, "target-0-id").value, "region_c");
-  await buttonsByText(root, "下移节点")[0].dispatch("click");
-  assert.equal(controlByName(root, "target-0-id").value, "region_b");
-  await buttonByText(root, "添加备用上游节点").dispatch("click");
-  assert.equal(controls(root).filter((control) => /^target-\d+-id$/.test(control.name)).length, 3);
-  await buttonsByText(root, "删除节点")[2].dispatch("click");
+  const firstModelID = controlByName(root, "model-0-id");
+  firstModelID.value = "vision-renamed";
+  await firstModelID.dispatch("input");
+  assert.deepEqual(
+    suggestions.children.map((option) => option.value),
+    ["vision-renamed", "vision-strong"],
+  );
 
+  visionModel.value = "manual-vision-model";
   await findTag(root, "FORM").dispatch("submit");
-  assert.deepEqual(saved.config.targets, draft.config.targets);
+
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].config.vision.model, "manual-vision-model");
 });
 
 test("model editor rows add and remove in Profile order with explicit token and vision controls", async (t) => {
@@ -1249,8 +1197,9 @@ test("unmatched model ID can apply a searchable catalog preset without changing 
     supports_vision: false,
   }];
 
+  let saved;
   renderProfileEditor(root, draft, {
-    save: async () => {},
+    save: async (payload) => { saved = payload; },
     cancel: () => {},
     generate: () => {},
   });
@@ -1275,6 +1224,11 @@ test("unmatched model ID can apply a searchable catalog preset without changing 
   assert.equal(
     controlByField(row, "output_price_micro_usd_per_million").value,
     "5",
+  );
+  await findTag(root, "FORM").dispatch("submit");
+  assert.equal(
+    saved.config.models[0].canonical_model_id,
+    "anthropic/claude-haiku-4-5-20251001",
   );
 });
 
@@ -1417,14 +1371,8 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     analyzer_timeout: "5s",
     analyzer_min_confidence_bps: 7000,
     session_ttl: "48h",
+		session_lock_token_threshold: 100000,
 		self_escalation: { enabled: true },
-		risk_policy: {
-			version: 2,
-			sensitive_text_patterns: ["private mutation", "second"],
-			sensitive_tool_patterns: ["exec", "apply_patch"],
-			structured_output_high_risk: true,
-			long_context_threshold_bps: 7500,
-		},
 		dynamic_optimization: {
 			enabled: true,
 			sample_rate_bps: 1000,
@@ -1442,11 +1390,19 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
       routes: [{
         id: "balanced",
         min_quality_bps: 9000,
+				min_stability_bps: 8000,
         max_severe_error_rate_bps: 100,
+				weights: {
+					quality_bps: 4000, stability_bps: 2500,
+					cost_bps: 2500, performance_bps: 1000,
+				},
         candidates: [{
           model: "fast",
+					production_eligible: false,
           quality_score_bps: 9200,
+					stability_score_bps: 9300,
           severe_error_rate_bps: 50,
+					expected_latency_ms: 250,
         }],
       }],
       budget: {
@@ -1454,7 +1410,6 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
         max_auxiliary_calls: 2,
         max_total_outbound_calls: 5,
         max_retries_per_target: 1,
-        max_target_switches: 0,
         max_model_switches: 1,
         deadline: "2m",
         max_worst_case_cost_micro_usd: 500000,
@@ -1469,17 +1424,18 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
   });
 
   assert.equal(controlByName(root, "auto_routing_enabled").checked, true);
+	assert.ok(findText(
+		root,
+		"智能路由仅处理 model=auto。系统结合公开评测和本地证据，为参与模型生成角色、Route 门槛、权重、任务映射和预算。推荐结果始终是可编辑草稿，不会自动发布；客户端指定具体模型时仍原样转发。",
+	));
   assert.equal(controlByName(root, "auto_analyzer_confidence").value, "70");
   assert.equal(controlByName(root, "auto_session_ttl").value, "48h");
+	assert.equal(controlByName(root, "auto_session_lock_token_threshold").value, "100000");
 	assert.equal(controlByName(root, "auto_self_escalation_enabled").checked, true);
 	assert.match(
 		fieldDescription(root, controlByName(root, "auto_self_escalation_enabled")),
 		/输出任何文本前.*原始请求|原始请求.*低级模型/,
 	);
-	assert.equal(controlByName(root, "auto_sensitive_text_patterns").value, "private mutation\nsecond");
-	assert.equal(controlByName(root, "auto_sensitive_tool_patterns").value, "exec\napply_patch");
-	assert.match(fieldDescription(root, controlByName(root, "auto_sensitive_tool_patterns")), /当前请求.*强制|历史调用/);
-	assert.match(fieldDescription(root, controlByName(root, "auto_sensitive_text_patterns")), /当前轮.*用户文本/);
 	assert.equal(controlByName(root, "auto-task-0-difficulty").value, "");
 	assert.equal(controlByName(root, "auto_dynamic_enabled").checked, true);
 	assert.equal(controlByName(root, "auto_dynamic_sample_rate").value, "10");
@@ -1493,6 +1449,11 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     /X-LLM-Proxy-Session-ID/,
   );
   assert.equal(controlByName(root, "auto-route-0-min-quality").value, "90");
+	assert.equal(controlByName(root, "auto-route-0-min-stability").value, "80");
+	assert.equal(controlByName(root, "auto-route-0-weight-quality").value, "40");
+	assert.equal(controlByName(root, "auto-route-0-candidate-0-stability").value, "93");
+	assert.equal(controlByName(root, "auto-route-0-candidate-0-latency").value, "250");
+	assert.equal(controlByName(root, "auto-route-0-candidate-0-production-eligible").checked, false);
   assert.match(
     fieldDescription(root, controlByName(root, "auto-route-0-min-quality")),
     /质量估计 89.*排除.*92.*参与选型/,
@@ -1506,28 +1467,35 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
     strategyGuide.href,
     "/_admin/help/intelligent-routing",
   );
+	assert.equal(
+		descendants(findClass(root, "strategy-manual-panel")).includes(strategyGuide),
+		false,
+	);
   assert.match(
     fieldDescription(root, controlByName(root, "auto_strong_baseline_model")),
     /高风险/,
   );
+	assert.ok(findText(root, "支持多语言、标点和同义表达"));
+	assert.ok(findText(root, "高风险完全由任务分析模型按语义判断"));
   assert.match(
     fieldDescription(root, controlByName(root, "auto-budget-total")),
     /所有上游调用/,
   );
 
   controlByName(root, "auto_analyzer_confidence").value = "72.5";
-  controlByName(root, "auto_session_ttl").value = "72h";
+	controlByName(root, "auto_session_ttl").value = "72h";
+	controlByName(root, "auto_session_lock_token_threshold").value = "250000";
 	controlByName(root, "auto_dynamic_sample_rate").value = "12.5";
-	controlByName(root, "auto_sensitive_text_patterns").value = "";
-	controlByName(root, "auto_sensitive_tool_patterns").value = "apply_patch\nexec";
 	controlByName(root, "auto-task-0-difficulty").value = "easy";
 	controlByName(root, "auto_self_escalation_enabled").checked = false;
+	controlByName(root, "auto-route-0-candidate-0-production-eligible").checked = true;
   controlByName(root, "auto-route-0-min-quality").value = "91.25";
   await findTag(root, "FORM").dispatch("submit");
 
   assert.equal(saves.length, 1);
   assert.equal(saves[0].config.auto_routing.analyzer_min_confidence_bps, 7250);
   assert.equal(saves[0].config.auto_routing.session_ttl, "72h");
+	assert.equal(saves[0].config.auto_routing.session_lock_token_threshold, 250000);
 	assert.equal(
 		saves[0].config.auto_routing.dynamic_optimization.sample_rate_bps,
 		1250,
@@ -1537,14 +1505,12 @@ test("Auto editor explains roles routes and budget and saves percentage inputs a
 		250000,
 	);
   assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_quality_bps, 9125);
+	assert.equal(saves[0].config.auto_routing.strategy.routes[0].min_stability_bps, 8000);
+	assert.equal(saves[0].config.auto_routing.strategy.routes[0].candidates[0].stability_score_bps, 9300);
+	assert.equal(saves[0].config.auto_routing.strategy.routes[0].candidates[0].expected_latency_ms, 250);
+	assert.equal(saves[0].config.auto_routing.strategy.routes[0].candidates[0].production_eligible, true);
   assert.deepEqual(saves[0].config.auto_routing.participants, ["fast", "strong"]);
-	assert.deepEqual(saves[0].config.auto_routing.risk_policy, {
-		version: 2,
-		sensitive_text_patterns: [],
-		sensitive_tool_patterns: ["apply_patch", "exec"],
-		structured_output_high_risk: false,
-		long_context_threshold_bps: 7500,
-	});
+	assert.equal(Object.hasOwn(saves[0].config.auto_routing, "risk_policy"), false);
 	assert.equal(saves[0].config.auto_routing.strategy.task_routes[0].difficulty, "easy");
 	assert.deepEqual(saves[0].config.auto_routing.self_escalation, { enabled: false });
 
@@ -1591,7 +1557,7 @@ test("incomplete enabled Auto configuration fails locally with actionable guidan
   );
 });
 
-test("strategy lifecycle UI creates drafts and exposes only valid publication actions", async (t) => {
+test("strategy lifecycle UI focuses the current change and folds older versions", async (t) => {
 	const root = installFakeDOM(t);
 	const draft = autoLifecycleDraft();
 	const active = {
@@ -1609,48 +1575,91 @@ test("strategy lifecycle UI creates drafts and exposes only valid publication ac
 			source: "configured",
 		},
 	};
+	active.config.roles = {
+		participants: ["fast", "strong"],
+		strong_baseline_model: "strong",
+		task_analyzer_model: "fast",
+		reviewer_model: "strong",
+	};
 	const candidateConfig = structuredClone(active.config);
 	candidateConfig.name = "20260802-002";
 	candidateConfig.alias = "候选";
-	const draftVersion = { id: 2, profile_id: 7, state: "draft", config: candidateConfig };
-	const evaluating = { id: 3, profile_id: 7, state: "evaluating", config: { ...candidateConfig, name: "20260802-003" } };
+	const draftVersion = {
+		id: 2,
+		profile_id: 7,
+		state: "draft",
+		config: candidateConfig,
+		rating: structuredClone(active.rating),
+	};
 	const ready = { id: 4, profile_id: 7, state: "ready", config: { ...candidateConfig, name: "20260802-004" } };
+	const lastKnownGood = {
+		id: 5,
+		profile_id: 7,
+		state: "ready",
+		config: { ...candidateConfig, name: "20260801-001", alias: "上一正式策略" },
+	};
+	const archived = {
+		id: 3,
+		profile_id: 7,
+		state: "draft",
+		archived_at: "2026-08-05T08:00:00Z",
+		config: { ...candidateConfig, name: "20260802-003", alias: "已废弃候选" },
+	};
 	draft.strategy_overview = {
-		snapshot: { revision: 4, active, canary_bps: 0 },
-		strategies: [ready, evaluating, draftVersion, active],
+		snapshot: { revision: 4, active, canary_bps: 0, last_known_good: lastKnownGood },
+		strategies: [draftVersion, ready, archived, active, lastKnownGood],
 	};
 	const calls = [];
 	renderProfileEditor(root, draft, {
-		createStrategy: async (config) => calls.push(["create", config]),
 		editStrategy: (id) => calls.push(["edit", id]),
 		advanceStrategy: async (id, from, to) => calls.push(["advance", id, from, to]),
+		archiveStrategy: async (id) => calls.push(["archive", id]),
 		startStrategyCanary: async (id, bps, revision) => calls.push(["canary", id, bps, revision]),
 		save: async () => {},
 		cancel: () => {},
 		generate: () => {},
 	});
 
-	assert.ok(findText(root, "Profile 保存只更新模型角色等公共配置"));
-	assert.ok(findText(root, "配置估算：99.07 分"));
+	assert.ok(findText(root, "当前使用状态"));
+	assert.ok(findText(root, "已生效"));
+	assert.ok(findText(root, "当前正式策略：当前"));
+	assert.ok(findText(root, "请求中的 model 设置为 auto 时使用当前正式策略"));
+	assert.ok(findText(root, '"model": "auto"'));
+	assert.ok(findText(root, "新策略生效步骤"));
+	assert.ok(findText(root, "1. 编辑并保存草稿"));
+	assert.ok(findText(root, "3. 发布为正式策略"));
+	assert.ok(findText(root, "线上与待发布"));
+	assert.ok(findText(root, "线上正在使用"));
+	assert.ok(findText(root, "100% 请求"));
+	assert.ok(findText(root, "主回答候选：fast、strong"));
+	assert.ok(findText(root, "路由规则：1 类任务 → balanced"));
+	assert.ok(findText(root, "任务分析：fast"));
+	assert.ok(findText(root, "困难、高风险或异常时兜底：strong"));
+	assert.ok(findText(root, "异步质量评审（不参与主回答选型）：strong"));
+	assert.ok(findText(root, "待发布：候选"));
+	assert.ok(findText(root, "草稿 · 尚未生效"));
+	assert.ok(findText(root, "候选模型：fast、strong"));
+	assert.ok(findText(root, "当前流量：0%"));
+	const technicalDetails = findClass(root, "strategy-current-technical-details");
+	assert.equal(technicalDetails.tagName, "DETAILS");
+	assert.equal(technicalDetails.open, false);
+	assert.ok(descendants(technicalDetails).some((item) => item.textContent.startsWith("配置估算：99.07 分")));
 	assert.equal(controlByName(root, "auto_strategy_name").readOnly, true);
-	await buttonByText(root, "保存为新草稿").dispatch("click");
-	await buttonByText(root, "载入草稿").dispatch("click");
-	await buttonByText(root, "开始评估").dispatch("click");
-	await buttonByText(root, "评估通过").dispatch("click");
-	const canaryPercent = descendants(root).find(
-		(element) => element.getAttribute("aria-label") === "灰度比例（%）",
-	);
-	assert.ok(canaryPercent);
-	canaryPercent.value = "12.5";
-	await buttonByText(root, "开始灰度").dispatch("click");
-
-	assert.equal(calls[0][0], "create");
-	assert.equal(calls[0][1].name, "");
-	assert.deepEqual(calls.slice(1), [
+	const current = findClass(root, "strategy-current-change");
+	const rollback = findClass(root, "strategy-rollback-version");
+	const history = findClass(root, "strategy-history-disclosure");
+	assert.ok(descendants(current).some((item) => item.textContent === "待发布：候选"));
+	assert.ok(descendants(rollback).some((item) => item.textContent === "上一正式策略"));
+	assert.equal(history.tagName, "DETAILS");
+	assert.equal(history.open, false);
+	assert.ok(descendants(history).some((item) => item.textContent === "已废弃候选"));
+	await buttonByText(current, "载入草稿").dispatch("click");
+	await buttonByText(current, "确认并进入灰度准备").dispatch("click");
+	await buttonByText(current, "废弃草稿").dispatch("click");
+	assert.deepEqual(calls, [
 		["edit", 2],
-		["advance", 2, "draft", "evaluating"],
-		["advance", 3, "evaluating", "ready"],
-		["canary", 4, 1250, 4],
+		["advance", 2, "draft", "ready"],
+		["archive", 2],
 	]);
 
 	const canaryRoot = root;
@@ -1688,6 +1697,42 @@ test("strategy lifecycle UI creates drafts and exposes only valid publication ac
 	});
 	await buttonByText(rollbackRoot, "回滚到上一正式策略").dispatch("click");
 	assert.equal(rollbackRevision, 6);
+});
+
+test("strategy history reveals ten versions at a time", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const active = {
+		id: 1,
+		profile_id: 7,
+		state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	const history = Array.from({ length: 12 }, (_, index) => ({
+		id: index + 2,
+		profile_id: 7,
+		state: "draft",
+		archived_at: `2026-08-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+		config: {
+			...structuredClone(active.config),
+			name: `20260801-${String(index + 2).padStart(3, "0")}`,
+			alias: `历史 ${index + 1}`,
+		},
+	}));
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [...history, active],
+	};
+	renderProfileEditor(root, draft, {
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+	const disclosure = findClass(root, "strategy-history-disclosure");
+	const cards = descendants(disclosure).filter((item) =>
+		String(item.className || "").split(" ").includes("strategy-history-version")
+	);
+	assert.equal(cards.filter((card) => !card.hidden).length, 10);
+	await buttonByText(disclosure, "再显示 2 个历史版本").dispatch("click");
+	assert.equal(cards.filter((card) => !card.hidden).length, 12);
 });
 
 test("strategy lifecycle shows conservative evidence and generates only a draft", async (t) => {
@@ -1736,6 +1781,18 @@ test("strategy lifecycle shows conservative evidence and generates only a draft"
 			self_escalation_precision_bps: 8000,
 			missed_self_escalation_rate_bps: 1333,
 		}],
+		stability_estimates: [{
+			strategy: "20260802-001",
+			route: "balanced",
+			candidate_model: "fast",
+			reference_model: "strong",
+			raw_online_samples: 30,
+			effective_review_samples: 29.5,
+			mean_bps: 9500,
+			lower_bps: 9100,
+			expected_latency_ms: 250,
+			reliable: true,
+		}],
 	};
 	let generated = 0;
 	renderProfileEditor(root, draft, {
@@ -1744,11 +1801,630 @@ test("strategy lifecycle shows conservative evidence and generates only a draft"
 	});
 
 	assert.ok(findText(root, "今日评测：$0.005 / $0.25"));
-	assert.ok(findText(root, "模型表现：1 个分组，其中 1 个证据可靠。"));
+	assert.ok(findText(root, "模型表现：1 个质量分组、1 个稳定性分组，其中 1 个可生成学习草稿。"));
 	const performanceLink = findText(root, "查看模型表现");
 	assert.equal(performanceLink.getAttribute("href"), "/_admin/stats/models?profile_id=7");
 	await buttonByText(root, "生成学习候选").dispatch("click");
 	assert.equal(generated, 1);
+});
+
+test("intelligent strategy generator creates immutable drafts and exposes sources constraints and restore", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const active = {
+		id: 1,
+		profile_id: 7,
+		state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	const generatedConfig = structuredClone(active.config);
+	generatedConfig.name = "20260802-002";
+	generatedConfig.alias = "智能生成 · 均衡";
+	const generatedVersion = {
+		id: 2,
+		profile_id: 7,
+		state: "draft",
+		config: generatedConfig,
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [generatedVersion, active],
+		generations: [{
+			strategy_id: 2,
+			profile_id: 7,
+			generator_version: "strategy-compiler/v1",
+			intent: { objective: "balanced", participants: ["fast", "strong"] },
+			source_digest: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+			manual_overrides: [
+				{ path: "/alias", value: "人工别名" },
+				{ path: "/routes/0/candidates/0/quality_score_bps", value: 9700 },
+			],
+			explanations: [
+				{ code: "external_prior", message: "使用公开评测冷启动。" },
+				{ code: "insufficient_data", model: "fast", message: "没有可精确匹配的公开评测或可靠本地证据，使用系统临时质量值。" },
+				{ code: "insufficient_data", model: "strong", message: "没有可精确匹配的公开评测或可靠本地证据，使用系统临时质量值。" },
+				{ code: "system_provisional", model: "fast", message: "稳定性 80%、严重错误上界 5%、延迟未知均为系统临时值，需要优先采样验证。" },
+				{ code: "system_provisional", model: "strong", message: "稳定性 80%、严重错误上界 5%、延迟未知均为系统临时值，需要优先采样验证。" },
+			],
+		}],
+	};
+	draft.evaluation_catalog = {
+		revision: "1234567890abcdef",
+		sources: [{ id: "livebench", name: "LiveBench", version: "2026-08" }],
+		results: [{ model_id: "acme/fast", domain: "general" }],
+	};
+	draft.config.models[0].canonical_model_id = "acme/fast";
+	const calls = [];
+	renderProfileEditor(root, draft, {
+		generateStrategy: async (intent) => calls.push(["generate", intent]),
+		restoreGeneratedRecommendation: async (id, path) => calls.push(["restore", id, path]),
+		updateEvaluationCatalog: async (onProgress) => {
+			calls.push(["catalog"]);
+			onProgress?.({
+				id: "job-1", state: "running",
+				sources: [{ id: "livebench", state: "running", stage: "download_and_import", imported: 0, skipped_unmapped: 0 }],
+			});
+			const job = {
+				id: "job-1", state: "succeeded", changed: true,
+				sources: [{ id: "livebench", state: "succeeded", stage: "completed", imported: 12, skipped_unmapped: 3 }],
+			};
+			onProgress?.(job);
+			return job;
+		},
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+
+	assert.ok(findText(root, "新策略配置"));
+	const generatorPanel = findClass(root, "strategy-generator-panel");
+	const manualPanel = findClass(root, "strategy-manual-panel");
+	assert.equal(generatorPanel.hidden, false);
+	assert.equal(manualPanel.hidden, true);
+	assert.equal(
+		controls(root).some((control) => control.name === "strategy_configuration_mode"),
+		false,
+	);
+	assert.ok(findText(root, "重新生成新草稿"));
+	assert.ok(findText(root, "根据当前模型配置、最新公开评测和本地证据生成一个新草稿，不会改写已有版本或影响正式策略。"));
+	assert.ok(findText(root, "公开评测只用于冷启动排序和 Shadow 候选；只有可靠本地证据通过质量与稳定性门槛后，候选才可获得生产流量。"));
+	assert.ok(buttonByText(root, "重新生成新草稿").className.includes("button-secondary"));
+	assert.ok(findText(root, "直接手动配置"));
+	assert.ok(findText(root, "公开评测可用 · 已覆盖 1/2 个模型"));
+	const advancedGenerator = findClass(root, "strategy-generator-advanced");
+	assert.equal(advancedGenerator.tagName, "DETAILS");
+	assert.equal(advancedGenerator.open, false);
+	assert.ok(descendants(advancedGenerator).includes(
+		controlByName(root, "strategy_generation_max_cost_usd"),
+	));
+	assert.ok(descendants(advancedGenerator).includes(
+		buttonByText(root, "下载并更新公开评测"),
+	));
+	assert.equal(descendants(advancedGenerator).includes(
+		controlByName(root, "strategy_generation_objective"),
+	), false);
+	assert.ok(findText(root, "LiveBench · 2026-08"));
+	assert.ok(findText(root, "已载入 1 个公开评测来源，共 1 条结果。"));
+	assert.ok(findText(root, "1 / 2 个模型有公开评测覆盖"));
+	assert.ok(findText(root, "手动调整 2 项"));
+	assert.ok(findText(root, "使用公开评测冷启动"));
+	assert.equal(
+		descendants(root).filter((item) =>
+			item.textContent === "没有可精确匹配的公开评测或可靠本地证据，使用系统临时质量值。"
+		).length,
+		1,
+	);
+	assert.equal(
+		descendants(root).filter((item) =>
+			item.textContent === "稳定性 80%、严重错误上界 5%、延迟未知均为系统临时值，需要优先采样验证。"
+		).length,
+		1,
+	);
+	await buttonByText(root, "直接手动配置").dispatch("click");
+	assert.equal(generatorPanel.hidden, true);
+	assert.equal(manualPanel.hidden, false);
+	await buttonByText(root, "重新生成草稿").dispatch("click");
+	assert.equal(generatorPanel.hidden, false);
+	assert.equal(manualPanel.hidden, true);
+	assert.equal(controlByName(root, "strategy_generation_objective").disabled, false);
+	await buttonByText(root, "下载并更新公开评测").dispatch("click");
+	assert.ok(findText(root, "LiveBench · 完成 · 导入 12 · 未映射 3"));
+	await buttonByText(root, "重新生成新草稿").dispatch("click");
+	assert.equal(generatorPanel.hidden, true);
+	assert.equal(manualPanel.hidden, false);
+	assert.ok(findText(root, "推荐草稿已生成，可以直接调整后保存。"));
+	assert.equal(buttonsByText(root, "刷新智能推荐").length, 0);
+	await buttonByText(root, "恢复推荐：quality_score_bps").dispatch("click");
+
+	assert.equal(calls[0][0], "catalog");
+	assert.equal(calls[1][0], "generate");
+	assert.deepEqual(calls[2], ["restore", 2, "/routes/0/candidates/0/quality_score_bps"]);
+});
+
+test("intelligent recommendation defaults to every recorded model and opens manual editing", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = defaultProfileDraft();
+	draft.id = 7;
+	draft.slug = "coding";
+	draft.display_name = "Coding";
+	draft.config.upstream = "https://upstream.example";
+	draft.config.models = [{ id: "fast" }, { id: "strong" }];
+	const intents = [];
+
+	renderProfileEditor(root, draft, {
+		generateStrategy: async (intent) => intents.push(intent),
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+	const enabled = controlByName(root, "auto_routing_enabled");
+	enabled.checked = true;
+	await enabled.dispatch("change");
+	await buttonByText(root, "生成可编辑策略").dispatch("click");
+
+	assert.deepEqual(intents, [{
+		objective: "balanced",
+		participants: ["fast", "strong"],
+		daily_eval_budget_micro_usd: 250000,
+	}]);
+	assert.equal(findClass(root, "strategy-generator-panel").hidden, true);
+	assert.equal(findClass(root, "strategy-manual-panel").hidden, false);
+});
+
+test("generated strategy stays a draft and saves through the strategy lifecycle", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const active = {
+		id: 1,
+		profile_id: 7,
+		state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	const generated = {
+		id: 2,
+		profile_id: 7,
+		state: "draft",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [generated, active],
+		generations: [{
+			strategy_id: 2,
+			profile_id: 7,
+			generator_version: "strategy-compiler/v1",
+			intent: { objective: "balanced", participants: ["fast", "strong"] },
+			source_digest: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+			manual_overrides: [],
+			explanations: [],
+		}],
+	};
+	draft.strategy_editing_id = 2;
+	draft.strategy_configuration_mode = "manual";
+	draft.strategy_generation_notice = "推荐草稿已生成，可以直接调整后保存。";
+	const updates = [];
+	const generations = [];
+	let profileSaves = 0;
+
+	renderProfileEditor(root, draft, {
+		editorSection: "routing",
+		generateStrategy: async (intent) => generations.push(intent),
+		updateStrategy: async (id, config) => updates.push([id, config]),
+		save: async () => { profileSaves++; }, cancel: () => {}, generate: () => {},
+	});
+
+	assert.ok(findText(root, "待发布的新策略"));
+	assert.ok(findText(root, "① 当前线上 · 正在使用"));
+	assert.ok(findText(root, "策略：当前"));
+	assert.ok(findText(root, "② 新策略草稿 · 尚未生效"));
+	assert.ok(findText(root, "当前没有请求使用这份策略。"));
+	assert.ok(findText(root, "③ 下一步"));
+	assert.ok(findText(root, "保存修改并开始灰度"));
+	assert.ok(findText(root, "只有发布为正式策略后，所有请求才会切换到新模型。"));
+	assert.ok(findText(root, "包含 1 个模型组，覆盖 1 类任务。"));
+	assert.ok(findText(root, "未匹配到特定任务时使用：balanced"));
+	assert.ok(findText(root, "新策略只会在这些模型中选择：fast、strong"));
+	assert.ok(findText(root, "困难、高风险或其他模型不可用时使用：strong"));
+	assert.ok(findText(root, "所有难度 → balanced"));
+	assert.ok(findText(root, "1 类任务：简单"));
+	assert.equal(elementsByClass(root, "strategy-task-route-row").length, 1);
+	const details = findClass(root, "strategy-configuration-details");
+	assert.equal(details.tagName, "DETAILS");
+	assert.equal(details.open, false);
+	assert.ok(descendants(details).some((item) => item.textContent === "手动设置策略"));
+	assert.ok(descendants(details).some((item) => item.textContent === "任务映射"));
+	assert.ok(descendants(details).some((item) => item.textContent === "统一尝试预算"));
+	const save = buttonByText(root, "保存草稿修改");
+	assert.equal(save.type, "button");
+	await save.dispatch("click");
+	assert.equal(updates.length, 1);
+	assert.equal(updates[0][0], 2);
+	assert.equal(profileSaves, 0);
+	assert.equal(buttonByText(root, "更新当前草稿").hidden, true);
+	const profileSave = buttonByText(root, "保存路由配置");
+	assert.equal(profileSave.type, "submit");
+	assert.equal(findClass(root, "routing-profile-actions").hidden, false);
+	assert.ok(findText(root, "保存模型角色、分析和优化设置；路由策略草稿需在策略摘要中单独保存。"));
+	controlByName(root, "auto_task_analyzer_model").value = "strong";
+	await descendants(root).find((element) => element.tagName === "FORM").dispatch("submit");
+	assert.equal(profileSaves, 1);
+	await buttonByText(root, "重新生成草稿").dispatch("click");
+	assert.equal(controlByName(root, "strategy_generation_objective").disabled, false);
+	await buttonByText(root, "重新生成新草稿").dispatch("click");
+	assert.equal(generations.length, 1);
+});
+
+test("strategy summary groups repeated task mappings by difficulty and route", (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const taskTypes = ["general", "simple", "reasoning", "math", "coding", "tool_use", "vision"];
+	draft.config.auto_routing.strategy.task_routes = taskTypes.flatMap((taskType) => [
+		{ task_type: taskType, difficulty: "easy", route: "general" },
+		{ task_type: taskType, difficulty: "medium", route: "general" },
+		{ task_type: taskType, difficulty: "hard", route: "strong" },
+	]);
+	const active = {
+		id: 1,
+		profile_id: 7,
+		state: "active",
+		config: { ...structuredClone(draft.config.auto_routing.strategy), alias: "线上策略" },
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [active],
+	};
+	draft.strategy_configuration_mode = "manual";
+
+	renderProfileEditor(root, draft, {
+		editorSection: "routing",
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+
+	assert.ok(findText(root, "简单、中等 → 常规模型组（general）"));
+	assert.ok(findText(root, "困难 → 高能力模型组（strong）"));
+	assert.ok(findText(root, "7 类任务：编程、通用、数学、推理、简单请求、工具调用、视觉"));
+	assert.equal(elementsByClass(root, "strategy-task-route-row").length, 2);
+	assert.equal(descendants(root).some((item) => item.textContent.includes("任务安排：")), false);
+});
+
+test("an open generated draft is never refreshed in place", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const active = {
+		id: 1,
+		profile_id: 7,
+		state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	const generated = {
+		id: 2,
+		profile_id: 7,
+		state: "draft",
+		config: { ...structuredClone(active.config), name: "20260805-002" },
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [generated, active],
+		generations: [{
+			strategy_id: 2,
+			profile_id: 7,
+			generator_version: "strategy-compiler/v1",
+			intent: { objective: "balanced", participants: ["fast", "strong"] },
+			source_digest: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+			manual_overrides: [],
+			explanations: [],
+		}],
+	};
+	const generations = [];
+	renderProfileEditor(root, draft, {
+		generateStrategy: async (intent) => generations.push(intent),
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+	assert.equal(buttonsByText(root, "刷新当前草稿").length, 0);
+	await buttonByText(root, "重新生成新草稿").dispatch("click");
+	assert.equal(generations.length, 1);
+});
+
+test("changing participating models requires a compatible strategy draft", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	draft.config.models.splice(1, 0, {
+		id: "balanced", context_window: 128000, max_output_tokens: 16000,
+		supports_vision: false, supports_tools: true,
+		supports_structured_output: true,
+		input_price_micro_usd_per_million: 500000,
+		output_price_micro_usd_per_million: 1500000,
+	});
+	draft.config.auto_routing.participants = ["fast", "balanced", "strong"];
+	draft.config.auto_routing.strategy.routes[0].candidates.splice(1, 0, {
+		model: "balanced", quality_score_bps: 9500, stability_score_bps: 9500,
+		severe_error_rate_bps: 30, expected_latency_ms: 400,
+	});
+	const active = {
+		id: 1, profile_id: 7, state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [active], generations: [],
+	};
+	const generations = [];
+	let saves = 0;
+	renderProfileEditor(root, draft, {
+		editorSection: "routing",
+		generateStrategy: async (intent) => generations.push(intent),
+		save: async () => { saves++; }, cancel: () => {}, generate: () => {},
+	});
+
+	const strong = controlByName(root, "auto-participant-2");
+	strong.checked = false;
+	await strong.dispatch("change");
+	await findAllTags(root, "FORM")[0].dispatch("submit");
+
+	const dialog = openDialog(root);
+	assert.ok(findText(dialog, "参与模型变化需要新策略"));
+	assert.ok(findText(dialog, "移除参与模型：strong"));
+	assert.ok(findText(dialog, "Route balanced 仍引用：strong"));
+	assert.equal(saves, 0);
+	await buttonByText(dialog, "生成新策略草稿").dispatch("click");
+	assert.equal(dialog.parentNode, null);
+	assert.deepEqual(generations, [{
+		objective: "balanced",
+		participants: ["fast", "balanced"],
+		daily_eval_budget_micro_usd: 250000,
+	}]);
+});
+
+test("adding a participating model also requires regenerating the strategy", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	draft.config.models.push({
+		id: "new", context_window: 128000, max_output_tokens: 16000,
+		supports_vision: false, supports_tools: true,
+		supports_structured_output: true,
+		input_price_micro_usd_per_million: 500000,
+		output_price_micro_usd_per_million: 1500000,
+	});
+	const active = {
+		id: 1, profile_id: 7, state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [active], generations: [],
+	};
+	let saves = 0;
+	renderProfileEditor(root, draft, {
+		editorSection: "routing",
+		generateStrategy: async () => {},
+		save: async () => { saves++; }, cancel: () => {}, generate: () => {},
+	});
+
+	const added = controlByName(root, "auto-participant-2");
+	added.checked = true;
+	await added.dispatch("change");
+	await findAllTags(root, "FORM")[0].dispatch("submit");
+
+	const dialog = openDialog(root);
+	assert.ok(findText(dialog, "新增参与模型：new"));
+	assert.equal(saves, 0);
+	await buttonByText(dialog, "取消").dispatch("click");
+	assert.equal(dialog.parentNode, null);
+});
+
+test("compatible published strategy allows the pending model roles to save", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	draft.config.models.splice(1, 0, {
+		id: "balanced", context_window: 128000, max_output_tokens: 16000,
+		supports_vision: false, supports_tools: true,
+		supports_structured_output: true,
+		input_price_micro_usd_per_million: 500000,
+		output_price_micro_usd_per_million: 1500000,
+	});
+	draft.persisted_auto_participants = ["fast", "balanced", "strong"];
+	draft.config.auto_routing.participants = ["fast", "balanced"];
+	draft.config.auto_routing.strong_baseline_model = "balanced";
+	draft.config.auto_routing.strategy.routes[0].candidates = [
+		draft.config.auto_routing.strategy.routes[0].candidates[0],
+		{
+			model: "balanced", quality_score_bps: 9500, stability_score_bps: 9500,
+			severe_error_rate_bps: 30, expected_latency_ms: 400,
+		},
+	];
+	const active = {
+		id: 2, profile_id: 7, state: "active",
+		config: structuredClone(draft.config.auto_routing.strategy),
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 2, active, canary_bps: 0 },
+		strategies: [active], generations: [],
+	};
+	let saves = 0;
+	renderProfileEditor(root, draft, {
+		editorSection: "routing",
+		generateStrategy: async () => {},
+		save: async () => { saves++; }, cancel: () => {}, generate: () => {},
+	});
+
+	await findAllTags(root, "FORM")[0].dispatch("submit");
+	assert.equal(saves, 1);
+	assert.equal(findAllTags(root, "DIALOG").length, 0);
+});
+
+test("compatible strategy draft allows replacement model roles to save", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	draft.config.models.splice(1, 0, {
+		id: "replacement", context_window: 128000, max_output_tokens: 16000,
+		supports_vision: false, supports_tools: true,
+		supports_structured_output: true,
+		input_price_micro_usd_per_million: 500000,
+		output_price_micro_usd_per_million: 1500000,
+	});
+	draft.persisted_auto_participants = ["fast", "strong"];
+	draft.config.auto_routing.participants = ["fast", "replacement"];
+	draft.config.auto_routing.strong_baseline_model = "replacement";
+	draft.config.auto_routing.task_analyzer_model = "fast";
+	const active = {
+		id: 1, profile_id: 7, state: "active",
+		config: {
+			...structuredClone(draft.config.auto_routing.strategy),
+			roles: {
+				participants: ["fast", "strong"],
+				strong_baseline_model: "strong",
+				task_analyzer_model: "fast",
+			},
+		},
+	};
+	const compatibleDraft = {
+		id: 2, profile_id: 7, state: "draft",
+		config: {
+			...structuredClone(draft.config.auto_routing.strategy),
+			roles: {
+				participants: ["fast", "replacement"],
+				strong_baseline_model: "replacement",
+				task_analyzer_model: "fast",
+			},
+			routes: [{
+				...structuredClone(draft.config.auto_routing.strategy.routes[0]),
+				candidates: [
+					draft.config.auto_routing.strategy.routes[0].candidates[0],
+					{
+						model: "replacement", quality_score_bps: 9500,
+						stability_score_bps: 9500, severe_error_rate_bps: 30,
+						expected_latency_ms: 400,
+					},
+				],
+			}],
+		},
+	};
+	draft.strategy_overview = {
+		snapshot: { revision: 1, active, canary_bps: 0 },
+		strategies: [compatibleDraft, active], generations: [],
+	};
+	draft.config.auto_routing.strategy = structuredClone(compatibleDraft.config);
+	draft.strategy_editing_id = compatibleDraft.id;
+	draft.strategy_configuration_mode = "manual";
+	let saves = 0;
+	renderProfileEditor(root, draft, {
+		editorSection: "routing",
+		generateStrategy: async () => {},
+		save: async () => { saves++; }, cancel: () => {}, generate: () => {},
+	});
+
+	await findAllTags(root, "FORM")[0].dispatch("submit");
+	assert.equal(saves, 1);
+	assert.equal(findAllTags(root, "DIALOG").length, 0);
+});
+
+test("empty embedded evaluation catalog is reported as loaded", (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	draft.evaluation_catalog = {
+		revision: "e3b0c44298fc1c14",
+		sources: [{ id: "livebench", name: "LiveBench", version: "not-imported" }],
+		results: [],
+	};
+	renderProfileEditor(root, draft, {
+		generateStrategy: async () => {},
+		updateEvaluationCatalog: async () => {},
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+
+	assert.ok(findText(root, "已载入 1 个公开评测来源定义，尚未下载结果。"));
+	assert.ok(findText(root, "尚未下载"));
+	assert.ok(findText(root, "2 个模型尚未确认标准身份，暂时无法匹配公开评测。"));
+	assert.equal(
+		descendants(root).some((element) => element.textContent.includes("尚未载入公开评测目录")),
+		false,
+	);
+});
+
+test("routing coverage uses uniquely matched model identities before the next save", (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const aliases = {
+		fast: "claude-glm-5.2",
+		strong: "claude-haiku-4-5-20251001",
+	};
+	for (const model of draft.config.models) model.id = aliases[model.id];
+	draft.config.auto_routing.participants = [aliases.fast, aliases.strong];
+	draft.config.auto_routing.strong_baseline_model = aliases.strong;
+	draft.config.auto_routing.task_analyzer_model = aliases.fast;
+	for (const candidate of draft.config.auto_routing.strategy.routes[0].candidates) {
+		candidate.model = aliases[candidate.model];
+	}
+	draft.evaluation_catalog = {
+		revision: "catalog-revision",
+		sources: [{ id: "arena", name: "LMArena", version: "v1" }],
+		results: [
+			{ model_id: "zhipuai/glm-5.2", domain: "general" },
+			{ model_id: "anthropic/claude-haiku-4-5-20251001", domain: "general" },
+		],
+	};
+	renderProfileEditor(root, draft, {
+		generateStrategy: async () => {},
+		updateEvaluationCatalog: async () => {},
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+
+	assert.ok(findText(root, "2 / 2 个模型有公开评测覆盖"));
+	assert.equal(
+		descendants(root).some((item) => item.textContent.includes("未确认身份 2")),
+		false,
+	);
+});
+
+test("evaluation catalog versions stay behind details and update progress is visible", async (t) => {
+	const root = installFakeDOM(t);
+	const draft = autoLifecycleDraft();
+	const fullVersion = "4e52c8e709c90a4cad8498d9db5aad11709b04e0";
+	draft.evaluation_catalog = {
+		revision: "catalog-revision",
+		sources: [{ id: "lmarena", name: "LMArena", version: fullVersion }],
+		results: [{ model_id: "acme/fast", domain: "general" }],
+	};
+	let finishUpdate;
+	renderProfileEditor(root, draft, {
+		generateStrategy: async () => {},
+		updateEvaluationCatalog: (onProgress) => new Promise((resolve) => {
+			finishUpdate = () => {
+				const job = {
+					state: "succeeded",
+					sources: [{
+						id: "lmarena", state: "succeeded", stage: "completed",
+						imported: 18, skipped_unmapped: 2,
+					}],
+				};
+				onProgress(job);
+				resolve(job);
+			};
+		}),
+		save: async () => {}, cancel: () => {}, generate: () => {},
+	});
+
+	assert.ok(findText(root, "查看数据来源与版本"));
+	const compactVersion = findText(root, "LMArena · 4e52c8e7");
+	assert.equal(compactVersion.getAttribute("title"), fullVersion);
+	assert.equal(
+		descendants(root).some((item) => item.textContent.includes(fullVersion)),
+		false,
+	);
+
+	const updateButton = buttonByText(root, "下载并更新公开评测");
+	const click = updateButton.dispatch("click");
+	await Promise.resolve();
+	assert.equal(findClass(root, "strategy-generator-advanced").open, true);
+	assert.equal(updateButton.disabled, true);
+	assert.equal(updateButton.getAttribute("aria-busy"), "true");
+	assert.ok(updateButton.className.includes("is-loading"));
+	assert.equal(updateButton.textContent, "正在更新公开评测…");
+	assert.ok(findText(root, "正在更新公开评测 · 已处理 0 / 1 个来源"));
+	assert.equal(findClass(root, "strategy-catalog-progress-track").getAttribute("aria-valuenow"), "0");
+
+	finishUpdate();
+	await click;
+	assert.equal(updateButton.disabled, false);
+	assert.equal(updateButton.getAttribute("aria-busy"), "false");
+	assert.ok(findText(root, "公开评测更新完成 · 1 / 1 个来源"));
+	assert.equal(findClass(root, "strategy-catalog-progress-track").getAttribute("aria-valuenow"), "100");
 });
 
 test("saved model rows fill blank catalog values while preserving configured values", async (t) => {
@@ -1810,6 +2486,40 @@ test("unique model input immediately applies exact values", async (t) => {
   assert.equal(output.value, "131072");
   assert.equal(vision.value, "false");
   assert.equal(id.value, "glm-5.2");
+});
+
+test("changing an upstream model ID clears its persisted canonical identity", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [{
+    id: "glm-5.2",
+    canonical_model_id: "zhipuai/glm-5.2",
+    context_window: 1000000,
+    max_output_tokens: 131072,
+    supports_vision: false,
+  }];
+  const saves = [];
+
+  renderProfileEditor(root, draft, {
+    save: async (payload) => saves.push(payload),
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  await findTag(root, "FORM").dispatch("submit");
+  assert.equal(
+    saves[0].config.models[0].canonical_model_id,
+    "zhipuai/glm-5.2",
+  );
+
+  const id = controlByField(modelRows(root)[0], "id");
+  id.value = "private-upstream-model";
+  await id.dispatch("input");
+  await findTag(root, "FORM").dispatch("submit");
+  assert.equal(
+    Object.hasOwn(saves[1].config.models[0], "canonical_model_id"),
+    false,
+  );
 });
 
 test("pasting a unique model ID immediately applies its safe recommendation", async (t) => {
@@ -1894,6 +2604,60 @@ test("compatibility aliases immediately apply all template values without changi
   assert.equal(
     controlByField(row, "cache_write_price_micro_usd_per_million").value,
     "0",
+  );
+});
+
+test("CRS DeepSeek aliases restore and persist canonical identities", async (t) => {
+  const root = installFakeDOM(t);
+  const draft = defaultProfileDraft();
+  draft.config.models = [
+    {
+      id: "azure-ds-v4-flash",
+      context_window: 1000000,
+      max_output_tokens: 384000,
+      supports_vision: false,
+    },
+    {
+      id: "azure-ds-v4-pro",
+      context_window: 1000000,
+      max_output_tokens: 384000,
+      supports_vision: false,
+    },
+  ];
+  let saved;
+
+  renderProfileEditor(root, draft, {
+    save: async (payload) => { saved = payload; },
+    cancel: () => {},
+    generate: () => {},
+  });
+
+  const rows = modelRows(root);
+  assert.equal(
+    controlByName(rows[0], "model-0-preset").value,
+    "deepseek/deepseek-v4-flash",
+  );
+  assert.equal(
+    controlByName(rows[1], "model-1-preset").value,
+    "deepseek/deepseek-v4-pro",
+  );
+
+  await findTag(root, "FORM").dispatch("submit");
+  assert.deepEqual(
+    saved.config.models.map(({ id, canonical_model_id }) => ({
+      id,
+      canonical_model_id,
+    })),
+    [
+      {
+        id: "azure-ds-v4-flash",
+        canonical_model_id: "deepseek/deepseek-v4-flash",
+      },
+      {
+        id: "azure-ds-v4-pro",
+        canonical_model_id: "deepseek/deepseek-v4-pro",
+      },
+    ],
   );
 });
 
@@ -2236,6 +3000,7 @@ test("a candidate button keeps its DOM identity through change and blur before d
     apply,
   );
 
+  await apply.dispatch("pointerdown");
   await id.dispatch("change");
   assert.equal(findClass(row, "model-recommendation-card"), card);
   assert.equal(
@@ -2248,6 +3013,10 @@ test("a candidate button keeps its DOM identity through change and blur before d
   assert.equal(
     buttonByText(row, "应用 GPT-5.6 Sol 推荐值"),
     apply,
+  );
+  assert.equal(
+    descendants(root).some((element) => element.tagName === "DIALOG"),
+    false,
   );
 
   await apply.dispatch("click");
@@ -2663,8 +3432,17 @@ test("delete dialog blocks the only Profile and requires an enabled replacement 
   assert.deepEqual(deletes, [[1, 2]]);
 });
 
-test("authenticated app creates a Profile only through the injected API client", async (t) => {
+test("authenticated app opens the four-step Profile creation wizard and persists its first step", async (t) => {
   const root = installFakeDOM(t);
+	const timeouts = [];
+	const originalSetTimeout = globalThis.setTimeout;
+	globalThis.setTimeout = (callback, delay) => {
+		timeouts.push({ callback, delay });
+		return timeouts.length;
+	};
+	t.after(() => {
+		globalThis.setTimeout = originalSetTimeout;
+	});
   let listCalls = 0;
   const creates = [];
   const client = {
@@ -2678,11 +3456,22 @@ test("authenticated app creates a Profile only through the injected API client",
     },
     createProfile: async (payload) => {
       creates.push(payload);
+			return { ...structuredClone(payload), id: 7 };
     },
+		updateProfile: async (_id, payload) => ({ ...structuredClone(payload), id: 7 }),
+		profileModels: async () => ({
+			runtime_state: { revision: 1, model_catalog_revision: 1 },
+			models: [],
+		}),
   };
 
   await bootstrap({ root, client, path: "/_admin/profiles" });
   await buttonByText(root, "创建第一个 Profile").dispatch("click");
+	assert.deepEqual(
+		elementsByClass(root, "profile-create-step").map((item) => item.textContent),
+		["连接上游", "录入模型", "智能路由", "完成"],
+	);
+	assert.equal(controls(root).some((control) => control.name === "model_batch_ids"), false);
   assert.equal(controlByName(root, "enabled").checked, true);
   assert.equal(controlByName(root, "enabled").disabled, true);
   controlByName(root, "display_name").value = "New Profile";
@@ -2690,17 +3479,28 @@ test("authenticated app creates a Profile only through the injected API client",
   controlByName(root, "upstream").value = "https://new.example";
   await findTag(root, "FORM").dispatch("submit");
 
-  assert.equal(listCalls, 2);
+	assert.equal(listCalls, 1);
   assert.equal(creates.length, 1);
   assert.equal(creates[0].display_name, "New Profile");
   assert.equal(creates[0].slug, "new-profile");
   assert.equal(creates[0].make_default, true);
   assert.equal(creates[0].config.upstream, "https://new.example");
   assert.equal(typeof creates[0].config.vision.max_tokens, "number");
-  const created = findClass(root, "success-banner");
-  assert.equal(created.hidden, false);
-  assert.equal(created.getAttribute("role"), "status");
-  assert.equal(created.textContent, "Profile 保存成功。");
+	assert.ok(controlByName(root, "model_batch_ids"));
+	assert.ok(findText(root, "保存并继续"));
+	await buttonByText(root, "暂不录入").dispatch("click");
+	assert.ok(findText(root, "智能路由仅处理 model=auto"));
+	await findTag(root, "FORM").dispatch("submit");
+	const success = findClass(root, "app-flash");
+	assert.equal(success.hidden, false);
+	assert.equal(success.getAttribute("role"), "status");
+	assert.equal(success.textContent, "Profile 保存成功。");
+	assert.equal(success.parentNode.className, "desktop-stage");
+	assert.equal(timeouts.length, 1);
+	assert.equal(timeouts[0].delay, 4000);
+	timeouts[0].callback();
+	assert.equal(success.hidden, true);
+	assert.equal(success.textContent, "");
 });
 
 test("authenticated Profile detail route mounts only its selected settings section", async (t) => {
@@ -2730,6 +3530,236 @@ test("authenticated Profile detail route mounts only its selected settings secti
   assert.equal(findText(root, "视觉增强"), linkByText(root, "视觉增强"));
 });
 
+test("authenticated v2 model page previews and imports a batch with advancing revisions", async (t) => {
+  const root = installFakeDOM(t);
+  const profile = autoLifecycleDraft();
+  profile.config.version = 2;
+  let revision = 4;
+  const models = profile.config.models.map((capability) => ({
+    model_id: capability.id,
+    status: "available",
+    capability: structuredClone(capability),
+  }));
+  const calls = [];
+  const policy = structuredClone(profile.config.auto_routing.strategy);
+  policy.roles = {
+    participants: ["fast", "strong"],
+    strong_baseline_model: "strong",
+    task_analyzer_model: "fast",
+  };
+  const directory = () => ({
+    runtime_state: { revision, model_catalog_revision: revision },
+    models: structuredClone(models),
+  });
+  const client = {
+    session: async () => ({ username: "admin", must_change_password: false }),
+    getProfile: async () => profile,
+    listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+    routingPolicy: async () => ({
+      runtime_state: { revision, model_catalog_revision: revision },
+      active: { id: 11, policy },
+      history: [],
+    }),
+    profileModels: async () => directory(),
+    addProfileModel: async (_profileID, expectedRevision, modelID, capability) => {
+      calls.push({ expectedRevision, modelID });
+      assert.equal(expectedRevision, revision);
+      models.push({ model_id: modelID, status: "available", capability });
+      revision += 1;
+      return directory();
+    },
+  };
+
+  await bootstrap({ root, path: "/_admin/profiles/7/models", client });
+  controlByName(root, "model_batch_ids").value = "qwen-flash\nqwen-max";
+  await buttonByText(root, "预览批量导入").dispatch("click");
+  assert.ok(buttonByText(root, "确认导入 2 个模型"));
+  await buttonByText(root, "确认导入 2 个模型").dispatch("click");
+
+  assert.deepEqual(calls, [
+    { expectedRevision: 4, modelID: "qwen-flash" },
+    { expectedRevision: 5, modelID: "qwen-max" },
+  ]);
+  assert.ok(findText(root, "qwen-flash"));
+  assert.ok(findText(root, "qwen-max"));
+});
+
+test("authenticated v2 routing page shows the one active Policy without draft or canary controls", async (t) => {
+  const root = installFakeDOM(t);
+  const profile = autoLifecycleDraft();
+  profile.config.version = 2;
+  const policy = structuredClone(profile.config.auto_routing.strategy);
+  policy.roles = {
+    participants: ["fast", "strong"],
+    strong_baseline_model: "strong",
+    task_analyzer_model: "fast",
+  };
+  const overview = {
+    runtime_state: { revision: 4, model_catalog_revision: 2 },
+    active: { id: 11, policy },
+    history: [{ id: 11, policy, change_kind: "apply", change_reason: "initial" }],
+  };
+  const client = {
+    session: async () => ({ username: "admin", must_change_password: false }),
+    getProfile: async () => profile,
+    listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+    routingPolicy: async () => overview,
+    profileModels: async () => ({
+      runtime_state: overview.runtime_state,
+      models: profile.config.models.map((capability) => ({
+        model_id: capability.id,
+        status: "available",
+        capability,
+      })),
+    }),
+  };
+
+  await bootstrap({ root, path: "/_admin/profiles/7/routing", client });
+  assert.ok(findText(root, "线上 Routing Policy"));
+  assert.ok(findText(root, "立即生效"));
+  assert.ok(findText(root, "当前策略概览"));
+  assert.ok(findText(root, "20260802-001"));
+  assert.ok(buttonByText(root, "手动调整"));
+  assert.equal(buttonsByText(root, "保存并立即生效").length, 0);
+  assert.equal(descendants(root).some((element) => element.textContent === "载入草稿"), false);
+  assert.equal(descendants(root).some((element) => element.textContent === "开始灰度"), false);
+});
+
+test("authenticated v2 routing page saves a complete Policy immediately", async (t) => {
+  const root = installFakeDOM(t);
+  const profile = autoLifecycleDraft();
+  profile.config.version = 2;
+  const policy = structuredClone(profile.config.auto_routing.strategy);
+  policy.roles = {
+    participants: ["fast", "strong"],
+    strong_baseline_model: "strong",
+    task_analyzer_model: "fast",
+  };
+	policy.session_lock_token_threshold = 100000;
+	policy.routes[0].candidates[0].production_eligible = false;
+  const overview = {
+    runtime_state: { revision: 4, model_catalog_revision: 2 },
+    active: { id: 11, policy },
+    history: [{ id: 11, policy, change_kind: "apply", change_reason: "initial" }],
+  };
+  const applications = [];
+  const client = {
+    session: async () => ({ username: "admin", must_change_password: false }),
+    getProfile: async () => profile,
+    listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+    routingPolicy: async () => overview,
+    profileModels: async () => ({
+      runtime_state: overview.runtime_state,
+      models: profile.config.models.map((capability) => ({
+        model_id: capability.id,
+        status: "available",
+        capability,
+      })),
+    }),
+    applyRoutingPolicy: async (...args) => {
+      applications.push(args);
+      return overview;
+    },
+  };
+
+  await bootstrap({ root, path: "/_admin/profiles/7/routing", client });
+  await buttonByText(root, "手动调整").dispatch("click");
+	await buttonByText(root, "高级设置").dispatch("click");
+	controlByLabel(root, "Session 锁定 Token 阈值").value = "250000";
+	controlByLabel(root, "允许生产流量").checked = true;
+	assert.equal(descendants(root).some((item) => item.textContent.includes("长上下文阈值（%）")), false);
+	assert.equal(descendants(root).some((item) => item.textContent.includes("结构化输出按高风险处理")), false);
+  await buttonByText(root, "4 确认生效").dispatch("click");
+  await buttonByText(root, "保存并立即生效").dispatch("click");
+
+	const expected = structuredClone(policy);
+	expected.session_lock_token_threshold = 250000;
+	expected.routes[0].candidates[0].production_eligible = true;
+	for (const route of expected.routes) {
+		for (const candidate of route.candidates || []) {
+			candidate.production_eligible = Boolean(candidate.production_eligible);
+		}
+	}
+	assert.deepEqual(applications, [[7, 4, expected, ""]]);
+});
+
+test("authenticated v2 routing page keeps the complete intelligent generation workflow", async (t) => {
+  const root = installFakeDOM(t);
+  const profile = autoLifecycleDraft();
+  profile.config.version = 2;
+  const policy = structuredClone(profile.config.auto_routing.strategy);
+  policy.roles = {
+    participants: ["fast", "strong"],
+    strong_baseline_model: "strong",
+    task_analyzer_model: "fast",
+  };
+  const overview = {
+    runtime_state: { revision: 4, model_catalog_revision: 2 },
+    active: { id: 11, policy },
+    history: [{ id: 11, policy, change_kind: "apply", change_reason: "initial" }],
+  };
+  const generationCalls = [];
+  const generatedPolicy = structuredClone(policy);
+  generatedPolicy.alias = "质量优先";
+  const client = {
+    session: async () => ({ username: "admin", must_change_password: false }),
+    getProfile: async () => profile,
+    listProfiles: async () => ({ default_profile_id: 7, profiles: [profile] }),
+    routingPolicy: async () => overview,
+    profileModels: async () => ({
+      runtime_state: overview.runtime_state,
+      models: profile.config.models.map((capability) => ({
+        model_id: capability.id,
+        status: "available",
+        capability,
+      })),
+    }),
+    generateRoutingPolicy: async (profileID, intent) => {
+      generationCalls.push([profileID, intent]);
+      return {
+        policy: generatedPolicy,
+        confidence: {
+          level: "medium",
+          local_candidates: 2,
+          external_candidates: 4,
+          provisional_candidates: 1,
+        },
+        source_digest: "source-digest-1234567890",
+        explanations: [{ code: "role", message: "根据本地证据选择 strong。" }],
+      };
+    },
+  };
+
+  await bootstrap({ root, path: "/_admin/profiles/7/routing", client });
+  await buttonByText(root, "智能生成策略").dispatch("click");
+  assert.ok(findText(root, "智能生成策略"));
+  controlByName(root, "routing_policy_generation_objective").value = "quality";
+  controlByName(root, "routing_policy_generation_max_cost_usd").value = "0.25";
+  controlByName(root, "routing_policy_generation_latency_ms").value = "900";
+  controlByName(root, "routing_policy_generation_daily_eval_usd").value = "1.5";
+  await buttonByText(root, "智能生成建议").dispatch("click");
+
+  assert.deepEqual(generationCalls, [[7, {
+    objective: "quality",
+    participants: ["fast", "strong"],
+    max_cost_per_request_micro_usd: 250000,
+    latency_target_ms: 900,
+    daily_eval_budget_micro_usd: 1500000,
+  }]]);
+  assert.ok(findText(root, "生成建议已完成"));
+  assert.ok(findText(root, "根据本地证据选择 strong。"));
+  assert.ok(descendants(root).some((element) => element.textContent.includes("本地候选 2")));
+  assert.ok(findText(root, "与当前策略的差异"));
+  assert.ok(descendants(root).some((element) => element.textContent === "显示名称"));
+  assert.ok(descendants(root).some((element) => element.textContent === "质量优先"));
+  assert.ok(buttonByText(root, "载入并编辑"));
+  assert.equal(descendants(root).some((element) => element.textContent === "1 模型与角色"), false);
+
+  await buttonByText(root, "载入并编辑").dispatch("click");
+  assert.ok(findText(root, "1 模型与角色"));
+  assert.ok(findText(root, "模型角色"));
+});
+
 test("authenticated help route renders the built-in intelligent routing guide", async (t) => {
   const root = installFakeDOM(t);
   await bootstrap({
@@ -2743,12 +3773,12 @@ test("authenticated help route renders the built-in intelligent routing guide", 
   assert.equal(findAllTags(root, "H1")[0].textContent, "帮助");
   assert.equal(linkByText(root, "帮助").getAttribute("aria-current"), "page");
   assert.equal(
-    linkByText(root, "智能路由").getAttribute("aria-current"),
+    linkByText(root, "Routing Policy").getAttribute("aria-current"),
     "page",
   );
-  assert.ok(findText(root, "智能路由配置说明"));
-  assert.ok(findText(root, "先过门槛，再比成本"));
-  assert.ok(findText(root, "为什么候选会被排除"));
+  assert.ok(findText(root, "线上 Routing Policy"));
+	assert.ok(findText(root, "保存并立即生效"));
+  assert.ok(findText(root, "Production 与 Shadow"));
 });
 
 test("authenticated help overview renders the secondary help navigation", async (t) => {
@@ -2764,11 +3794,11 @@ test("authenticated help overview renders the secondary help navigation", async 
   assert.equal(findAllTags(root, "H1")[0].textContent, "帮助");
   assert.equal(linkByText(root, "帮助").getAttribute("href"), "/_admin/help/overview");
   assert.equal(
-    linkByText(root, "使用概览").getAttribute("aria-current"),
+    linkByText(root, "快速开始").getAttribute("aria-current"),
     "page",
   );
-  assert.ok(findText(root, "推荐配置顺序"));
-  assert.ok(findText(root, "智能路由只是其中一个主题"));
+  assert.ok(findText(root, "推荐操作顺序"));
+  assert.ok(findText(root, "显式模型与 model=auto"));
 });
 
 test("model detail loads the active server catalog before rendering recommendations", async (t) => {
@@ -3072,10 +4102,15 @@ function autoLifecycleDraft() {
 			routes: [{
 				id: "balanced",
 				min_quality_bps: 9000,
+				min_stability_bps: 8000,
 				max_severe_error_rate_bps: 100,
+				weights: {
+					quality_bps: 4000, stability_bps: 2500,
+					cost_bps: 2500, performance_bps: 1000,
+				},
 				candidates: [
-					{ model: "fast", quality_score_bps: 9200, severe_error_rate_bps: 50 },
-					{ model: "strong", quality_score_bps: 9900, severe_error_rate_bps: 10 },
+					{ model: "fast", quality_score_bps: 9200, stability_score_bps: 9300, severe_error_rate_bps: 50, expected_latency_ms: 250 },
+					{ model: "strong", quality_score_bps: 9900, stability_score_bps: 9900, severe_error_rate_bps: 10, expected_latency_ms: 800 },
 				],
 			}],
 			budget: {
@@ -3083,7 +4118,6 @@ function autoLifecycleDraft() {
 				max_auxiliary_calls: 2,
 				max_total_outbound_calls: 5,
 				max_retries_per_target: 1,
-				max_target_switches: 0,
 				max_model_switches: 1,
 				deadline: "2m",
 				max_worst_case_cost_micro_usd: 500000,
@@ -3372,6 +4406,16 @@ function controlByField(root, field) {
   );
   assert.ok(control, `model control ${field} not found`);
   return control;
+}
+
+function controlByLabel(root, text) {
+	const label = findAllTags(root, "LABEL").find((candidate) =>
+		descendants(candidate).some((item) => item.textContent.includes(text))
+	);
+	assert.ok(label, `label ${text} not found`);
+	const control = controls(label)[0];
+	assert.ok(control, `control for ${text} not found`);
+	return control;
 }
 
 function openDialog(root) {

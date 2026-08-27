@@ -37,11 +37,18 @@ test("disabled intelligent routing retains its complete inactive configuration",
       routes: [{
         id: "balanced",
         min_quality_bps: 9800,
+				min_stability_bps: 9800,
         max_severe_error_rate_bps: 100,
+				weights: {
+					quality_bps: 4000, stability_bps: 2500,
+					cost_bps: 2500, performance_bps: 1000,
+				},
         candidates: [{
           model: "strong",
           quality_score_bps: 9900,
+					stability_score_bps: 9900,
           severe_error_rate_bps: 10,
+					expected_latency_ms: 800,
         }],
       }],
     },
@@ -54,6 +61,7 @@ test("disabled intelligent routing retains its complete inactive configuration",
   assert.equal(auto.task_analyzer_model, "fast");
   assert.deepEqual(auto.dynamic_optimization, {
     enabled: false,
+    auto_update_policy: false,
     sample_rate_bps: 1250,
     daily_budget_micro_usd: 300000,
     reviewer_model: "strong",
@@ -111,6 +119,30 @@ test("Profile draft round-trips inactive feature details", () => {
 
   const reloaded = profileDraft(saved);
   assert.deepEqual(profilePayload(reloaded).config, saved.config);
+});
+
+test("Profile draft round-trips exact canonical model identities", () => {
+  const source = defaultProfileDraft();
+  source.config.models = [{
+    ...model("gateway-alpha"),
+    canonical_model_id: "acme/alpha-2026",
+  }, model("unmapped")];
+
+  const payload = profilePayload(source);
+  assert.equal(
+    payload.config.models[0].canonical_model_id,
+    "acme/alpha-2026",
+  );
+  assert.equal(
+    Object.hasOwn(payload.config.models[1], "canonical_model_id"),
+    false,
+  );
+
+  const reloaded = profileDraft({ config: payload.config });
+  assert.equal(
+    reloaded.config.models[0].canonical_model_id,
+    "acme/alpha-2026",
+  );
 });
 
 test("section merging changes only the selected Profile section", () => {

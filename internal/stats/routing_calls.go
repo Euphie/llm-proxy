@@ -21,11 +21,9 @@ type RoutingCallRow struct {
 	Sequence           int       `json:"sequence"`
 	Kind               string    `json:"kind"`
 	Model              string    `json:"model"`
-	Target             string    `json:"target"`
 	ImageIndex         int       `json:"image_index"`
 	RetryIndex         int       `json:"retry_index"`
 	ModelSwitchIndex   int       `json:"model_switch_index"`
-	TargetSwitchIndex  int       `json:"target_switch_index"`
 	EstimatedMicroUSD  int64     `json:"estimated_cost_micro_usd"`
 	ActualCostKnown    bool      `json:"actual_cost_known"`
 	ActualMicroUSD     int64     `json:"actual_cost_micro_usd"`
@@ -65,8 +63,8 @@ func (s *DB) QueryRoutingCalls(
 	args = append(args, filter.Limit)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, created_at, trace_id, correlation_id, sequence, kind,
-		       logical_model, target, image_index, retry_index,
-		       model_switch_index, target_switch_index,
+		       logical_model, image_index, retry_index,
+		       model_switch_index,
 		       estimated_cost_micro_usd, actual_cost_known,
 		       actual_cost_micro_usd, usage_present, input_tokens, output_tokens,
 		       cache_read_tokens, cache_write_tokens, input_includes_cache,
@@ -89,9 +87,9 @@ func (s *DB) QueryRoutingCalls(
 		var inputIncludesCache int
 		if err := rows.Scan(
 			&row.ID, &createdAt, &row.TraceID, &row.CorrelationID,
-			&row.Sequence, &row.Kind, &row.Model, &row.Target,
+			&row.Sequence, &row.Kind, &row.Model,
 			&row.ImageIndex, &row.RetryIndex, &row.ModelSwitchIndex,
-			&row.TargetSwitchIndex, &row.EstimatedMicroUSD, &actualKnown,
+			&row.EstimatedMicroUSD, &actualKnown,
 			&row.ActualMicroUSD, &usagePresent, &row.InputTokens, &row.OutputTokens,
 			&row.CacheReadTokens, &row.CacheWriteTokens, &inputIncludesCache,
 			&row.StatusCode, &row.Outcome,

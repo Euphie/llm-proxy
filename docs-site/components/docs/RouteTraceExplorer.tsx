@@ -4,17 +4,16 @@ const budgetDimensions = [
   ["回答尝试", trace.attempt_budget.max_answer_attempts, "次"],
   ["辅助调用", trace.attempt_budget.max_auxiliary_calls, "次"],
   ["总出站调用", trace.attempt_budget.max_total_outbound_calls, "次"],
-  ["单 Target 重试", trace.attempt_budget.max_retries_per_target, "次"],
-  ["Target 切换", trace.attempt_budget.max_target_switches, "次"],
+  ["单 Upstream 重试", trace.attempt_budget.max_retries_per_target, "次"],
   ["模型切换", trace.attempt_budget.max_model_switches, "次"],
   ["deadline", trace.attempt_budget.deadline, ""],
   ["最坏成本", trace.attempt_budget.max_worst_case_cost_micro_usd, "μUSD"],
 ] as const;
 
 const planBindings = [
-  ["策略", trace.execution_plan.snapshot_refs.strategy_id],
-  ["模型目录", trace.execution_plan.snapshot_refs.catalog_version],
-  ["价格表", trace.execution_plan.snapshot_refs.price_version],
+  ["Routing Policy", trace.execution_plan.snapshot_refs.routing_policy_version],
+  ["模型目录修订", trace.execution_plan.snapshot_refs.model_catalog_revision],
+  ["运行时修订", trace.execution_plan.snapshot_refs.runtime_revision],
 ] as const;
 
 export function RouteTraceExplorer() {
@@ -28,12 +27,12 @@ export function RouteTraceExplorer() {
         <span className="route-trace-badge">{trace.label}</span>
       </header>
       <p className="route-trace-disclaimer">
-        这是去敏的静态设计示例，不是实时遥测，也不代表智能路由已经实现。它用于说明一次请求为什么选择某个模型，以及失败后如何在统一预算内处理。
+        这是按当前实现字段整理的去敏示例，不是实时遥测。它用于说明一次请求为什么排除候选，以及失败后如何在统一预算内处理。
       </p>
 
       <div className="trace-grid trace-grid--scope">
         <section aria-labelledby="trace-scope-title">
-          <h3 id="trace-scope-title">当前 Profile 与策略</h3>
+          <h3 id="trace-scope-title">当前 Profile 与 Policy</h3>
           <dl className="trace-definition-list">
             <div><dt>profile_id</dt><dd>{trace.scope.profile_id}</dd></div>
             <div><dt>任务类型 → Route</dt><dd>{trace.route.task_type} → {trace.route.route_id}</dd></div>
@@ -44,8 +43,9 @@ export function RouteTraceExplorer() {
         <section aria-labelledby="trace-filter-title">
           <h3 id="trace-filter-title">分析与硬约束</h3>
           <p className="trace-reason">
-            本地规则：{trace.task_analysis.local_rule_result}；轻量分析器：
-            {trace.task_analysis.analyzer_called ? `已调用，结果 ${trace.task_analysis.result}` : "未调用"}
+            任务分析模型：{trace.task_analysis.analyzer_called
+              ? `已调用，结果 ${trace.task_analysis.result} / ${trace.task_analysis.difficulty} / ${trace.task_analysis.risk}`
+              : "未调用"}
           </p>
           <ul className="trace-list">
             {trace.hard_filter.excluded.map((candidate) => (
@@ -69,8 +69,7 @@ export function RouteTraceExplorer() {
               <li key={attempt.order}>
                 <span className="trace-attempt-order">{attempt.order}</span>
                 <div>
-                  <strong>{attempt.target_id}</strong>
-                  <span>{attempt.model_id}</span>
+                  <strong>{attempt.model_id}</strong>
                 </div>
                 {outcome && <span className={`trace-outcome trace-outcome--${outcome.outcome}`}>{outcome.outcome}</span>}
               </li>
@@ -98,7 +97,7 @@ export function RouteTraceExplorer() {
       </section>
 
       <p className="trace-commit-boundary">
-        第一次尝试以 <strong>retryable_pre_commit_failure</strong> 结束；第二次在同一 Target 重试，并在首个完整合法响应事件后形成 <strong>ClientCommit</strong>，此后不再重试或切换。
+        第一次尝试以 <strong>retryable_pre_commit_failure</strong> 结束；只有 <strong>overload_rules</strong>、规则次数和 Policy 预算同时允许，第二次才会在同一 Upstream 重试。首个完整合法响应事件形成 <strong>ClientCommit</strong>，此后不再重试或切换。
       </p>
     </section>
   );

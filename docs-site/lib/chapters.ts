@@ -1,25 +1,18 @@
-import competitorEvidenceMarkdown from "../content/competitor-evidence.md?raw";
-import coreModelMarkdown from "../content/core-model.md?raw";
-import engineeringAndDeliveryMarkdown from "../content/engineering-and-delivery.md?raw";
-import evaluationFeedbackMarkdown from "../content/evaluation-feedback.md?raw";
+import adminWorkflowMarkdown from "../content/admin-workflow.md?raw";
+import evaluationMarkdown from "../content/evaluation.md?raw";
+import observabilityMarkdown from "../content/observability.md?raw";
 import onlineRoutingMarkdown from "../content/online-routing.md?raw";
+import operationsMarkdown from "../content/operations.md?raw";
 import overviewMarkdown from "../content/overview.md?raw";
-import profileIsolationMarkdown from "../content/profile-isolation.md?raw";
-import qualityAndCostMarkdown from "../content/quality-and-cost.md?raw";
-import runtimeReliabilityMarkdown from "../content/runtime-reliability.md?raw";
-import sourceBaselineMarkdown from "../content/source-baseline.md?raw";
-import strategyLifecycleMarkdown from "../content/strategy-lifecycle.md?raw";
-import targetReliabilityMarkdown from "../content/target-reliability.md?raw";
+import profilesModelsMarkdown from "../content/profiles-models.md?raw";
+import reliabilityMarkdown from "../content/reliability.md?raw";
+import routingPolicyMarkdown from "../content/routing-policy.md?raw";
+import visionMarkdown from "../content/vision.md?raw";
 import chapterManifest from "../data/chapters.json";
-import competitorEvidence from "../data/competitor-evidence.json";
-import sourceBaselines from "../data/source-baselines.json";
 import {
-  expandEvidenceMarkers,
   isEvidenceLevel,
-  type CompetitorEvidence,
   type EvidenceLevel,
   type ImplementationStatus,
-  type SourceBaselines,
 } from "./content-contract";
 import {
   buildSearchEntries,
@@ -70,24 +63,21 @@ interface ManifestChapter {
 
 const markdownBySlug: Record<string, string> = {
   overview: overviewMarkdown,
-  "source-baseline": sourceBaselineMarkdown,
-  "competitor-evidence": competitorEvidenceMarkdown,
-  "core-model": coreModelMarkdown,
-  "profile-isolation": profileIsolationMarkdown,
+  "admin-workflow": adminWorkflowMarkdown,
+  "profiles-models": profilesModelsMarkdown,
+  "routing-policy": routingPolicyMarkdown,
   "online-routing": onlineRoutingMarkdown,
-  "quality-and-cost": qualityAndCostMarkdown,
-  "target-reliability": targetReliabilityMarkdown,
-  "runtime-reliability": runtimeReliabilityMarkdown,
-  "evaluation-feedback": evaluationFeedbackMarkdown,
-  "strategy-lifecycle": strategyLifecycleMarkdown,
-  "engineering-and-delivery": engineeringAndDeliveryMarkdown,
+  vision: visionMarkdown,
+  reliability: reliabilityMarkdown,
+  evaluation: evaluationMarkdown,
+  observability: observabilityMarkdown,
+  operations: operationsMarkdown,
 };
 
-const implementationStatuses = new Set<ImplementationStatus>(["已实现", "本版目标", "后续方向"]);
 function manifestChapter(value: (typeof chapterManifest.chapters)[number]): ManifestChapter {
   if (
     !chapterGroups.includes(value.group as ChapterGroup) ||
-    !implementationStatuses.has(value.implementation_status as ImplementationStatus) ||
+    value.implementation_status !== "已实现" ||
     !isEvidenceLevel(value.evidence_level)
   ) {
     throw new Error(`Invalid chapter manifest entry: ${value.slug}`);
@@ -96,14 +86,8 @@ function manifestChapter(value: (typeof chapterManifest.chapters)[number]): Mani
 }
 
 function makeChapter(value: ManifestChapter, index: number): Chapter {
-  const markdown = markdownBySlug[value.slug];
-  if (!markdown) {
-    throw new Error(`Missing Markdown content for chapter: ${value.slug}`);
-  }
-  const content = expandEvidenceMarkers(markdown, {
-    sourceBaselines: sourceBaselines as SourceBaselines,
-    competitorEvidence: competitorEvidence as CompetitorEvidence[],
-  });
+  const content = markdownBySlug[value.slug];
+  if (!content) throw new Error(`Missing Markdown content for chapter: ${value.slug}`);
   const tableOfContents = extractMarkdownHeadings(content)
     .filter(({ level }) => level === 2 || level === 3)
     .map(({ id, title, level, line }) => ({ id, title, level: level as 2 | 3, line }));

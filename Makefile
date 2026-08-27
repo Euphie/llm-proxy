@@ -5,10 +5,10 @@ BIN     := llm-proxy
 CMD     := ./cmd/llm-proxy
 IMAGE   := llm-proxy
 DOCS_SITE_INPUTS := app assets build components content data diagrams lib public scripts tests types worker eslint.config.mjs next.config.ts package-lock.json package.json playwright.config.ts postcss.config.mjs tsconfig.json vite.config.ts
-DOCS_ARCHIVE_INPUTS := Makefile docs/intelligent-routing.md $(addprefix docs-site/,$(DOCS_SITE_INPUTS))
+DOCS_ARCHIVE_INPUTS := Makefile docs/intelligent-routing.md docs/evaluation-catalog-import.md $(addprefix docs-site/,$(DOCS_SITE_INPUTS))
 ADMIN_UI_TESTS := $(sort $(wildcard scripts/*.test.mjs internal/admin/ui/static/*.test.mjs))
 
-.PHONY: build run test vet test-e2e docker-build docker-up docker-down clean update-model-catalog docs-verify docs-e2e docs-preview
+.PHONY: build run test vet test-e2e docker-build docker-up docker-down clean update-model-catalog update-evaluation-catalog docs-verify docs-e2e docs-preview
 
 ## build: compile binary to ./bin/llm-proxy
 build:
@@ -40,6 +40,15 @@ update-model-catalog:
 		-v "$(CURDIR)":/src -w /src \
 		node:24-alpine \
 		node scripts/update-model-catalog.mjs
+
+## update-evaluation-catalog: build a verified local public-evaluation snapshot (set MANIFEST and OUTPUT)
+update-evaluation-catalog:
+	@test -n "$(MANIFEST)" || (echo "MANIFEST is required" >&2; exit 2)
+	@test -n "$(OUTPUT)" || (echo "OUTPUT is required" >&2; exit 2)
+	docker run --rm \
+		-v "$(CURDIR)":/src -w /src \
+		golang:1.25 \
+		go run ./cmd/evalcatalog-import -manifest "$(MANIFEST)" -output "$(OUTPUT)"
 
 ## test-e2e: run the isolated Chromium admin workflow
 test-e2e:

@@ -20,11 +20,12 @@ type profileResponse struct {
 }
 
 type saveProfileRequest struct {
-	Slug        string         `json:"slug"`
-	DisplayName string         `json:"display_name"`
-	Enabled     bool           `json:"enabled"`
-	Config      profile.Config `json:"config"`
-	MakeDefault bool           `json:"make_default"`
+	Slug                    string         `json:"slug"`
+	DisplayName             string         `json:"display_name"`
+	Enabled                 bool           `json:"enabled"`
+	Config                  profile.Config `json:"config"`
+	MakeDefault             bool           `json:"make_default"`
+	ExpectedRuntimeRevision int64          `json:"expected_runtime_revision,omitempty"`
 }
 
 type copyProfileRequest struct {
@@ -68,7 +69,7 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 		a.writeRequestError(w, r, err)
 		return
 	}
-	record, err := a.profiles.Save(r.Context(), profile.SaveInput{
+	record, err := a.profiles.CreateRuntime(r.Context(), profile.SaveInput{
 		Slug:        request.Slug,
 		DisplayName: request.DisplayName,
 		Enabled:     request.Enabled,
@@ -106,13 +107,21 @@ func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 		a.writeRequestError(w, r, err)
 		return
 	}
-	record, err := a.profiles.Save(r.Context(), profile.SaveInput{
+	input := profile.SaveInput{
 		ID:          id,
 		Slug:        request.Slug,
 		DisplayName: request.DisplayName,
 		Enabled:     request.Enabled,
 		Config:      request.Config,
-	}, request.MakeDefault)
+	}
+	var record profile.Record
+	if request.Config.Version == 2 {
+		record, err = a.profiles.SaveRuntime(
+			r.Context(), input, request.MakeDefault, request.ExpectedRuntimeRevision,
+		)
+	} else {
+		record, err = a.profiles.Save(r.Context(), input, request.MakeDefault)
+	}
 	if err != nil {
 		a.writeDomainError(w, r, err)
 		return

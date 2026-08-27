@@ -2,6 +2,10 @@ import { profileDraft } from "./profile-draft.js";
 import { profileReadiness } from "./profile-readiness.js";
 import { renderProfileEditor as renderLegacyProfileEditor } from "./profiles.js";
 import { profileSectionHref } from "./routes.js";
+import {
+  renderImmediateRoutingPolicy,
+  renderProfileModelDirectory,
+} from "./routing-policy-editor.js";
 
 const sectionDefinitions = [
   ["overview", "概况"],
@@ -18,7 +22,7 @@ const legacyHeadings = {
   models: new Set(["模型能力"]),
   routing: new Set(["智能路由"]),
   vision: new Set(["视觉增强"]),
-  reliability: new Set(["上游节点容错", "容错规则"]),
+  reliability: new Set(["容错规则"]),
   agents: new Set(["配置生成"]),
 };
 
@@ -30,6 +34,23 @@ export function renderProfileEditor(root, source, {
   ...actions
 } = {}) {
   const draft = profileDraft(source, defaultProfileID);
+  draft.strategy_overview = source?.strategy_overview
+    ? structuredClone(source.strategy_overview)
+    : null;
+  draft.strategy_editing_id = Number(source?.strategy_editing_id || 0);
+  draft.strategy_configuration_mode = source?.strategy_configuration_mode === "manual"
+    ? "manual"
+    : "intelligent";
+  draft.strategy_generation_notice = String(source?.strategy_generation_notice || "");
+  draft.evaluation_catalog = source?.evaluation_catalog
+    ? structuredClone(source.evaluation_catalog)
+    : null;
+  draft.routing_policy_overview = source?.routing_policy_overview
+    ? structuredClone(source.routing_policy_overview)
+    : null;
+  draft.model_directory_overview = source?.model_directory_overview
+    ? structuredClone(source.model_directory_overview)
+    : null;
   const readiness = profileReadiness(draft, { saved: draft.id > 0 });
   const shell = element("div", "profile-detail-layout");
   const navigation = element("nav", "profile-section-nav");
@@ -79,17 +100,26 @@ export function renderProfileEditor(root, source, {
     if (state?.state === "blocked" || state?.state === "attention") {
       content.append(dependencyPanel(state));
     }
-    const targetDependency = section === "reliability"
-      ? reliabilityTargetDependency(draft)
-      : null;
-    if (targetDependency) {
-      content.append(dependencyPanel(targetDependency));
+    if (Number(draft.config?.version) === 2 && section === "routing") {
+      const policyEditor = renderImmediateRoutingPolicy(draft, {
+        ...guardedActions,
+        markDirty: () => { dirtyState.value = true; },
+        clearDirty: () => { dirtyState.value = false; },
+        applyRoutingPolicy: async (...args) => {
+          await guardedActions.applyRoutingPolicy?.(...args);
+          dirtyState.value = false;
+        },
+      });
+      editedForm = policyEditor;
+      content.append(policyEditor);
+    } else if (Number(draft.config?.version) === 2 && section === "models") {
+      const modelDirectory = renderProfileModelDirectory(draft, guardedActions);
+      content.append(modelDirectory);
+    } else {
+      const legacyMount = renderLegacySection(draft, section, renderLegacy, guardedActions);
+      editedForm = legacyMount.children[0] || null;
+      content.append(legacyMount);
     }
-    const legacyMount = renderLegacySection(draft, section, renderLegacy, guardedActions, {
-      hideTargets: Boolean(targetDependency),
-    });
-    editedForm = legacyMount.children[0] || null;
-    content.append(legacyMount);
   }
 
   if (editedForm) {
@@ -110,10 +140,9 @@ function renderLegacySection(
   section,
   renderLegacy,
   actions,
-  { hideTargets = false } = {},
 ) {
   const mount = element("div");
-  renderLegacy(mount, draft, actions);
+  renderLegacy(mount, draft, { ...actions, editorSection: section });
   const form = mount.children[0];
   if (!form) {
     throw new Error("Profile 编辑器未生成表单。");
@@ -125,10 +154,7 @@ function renderLegacySection(
     }
     const heading = child.children.find?.((item) => item.tagName === "H2") ||
       child.children[0];
-    if (
-      !selectedHeadings.has(heading?.textContent) ||
-      (hideTargets && heading?.textContent === "上游节点容错")
-    ) {
+    if (!selectedHeadings.has(heading?.textContent)) {
       child.remove();
     }
   }
@@ -195,30 +221,6 @@ function dependencyPanel(sectionState) {
   return panel;
 }
 
-function reliabilityTargetDependency(draft) {
-  if ((draft.config.models || []).length === 0) {
-    return {
-      state: "blocked",
-      reasons: ["备用上游节点只服务于智能路由；请先录入可参与路由的模型。普通重试仍可使用。"],
-      action: {
-        label: "录入模型",
-        href: profileSectionHref(draft.id, "models"),
-      },
-    };
-  }
-  if (!draft.config.auto_routing?.enabled) {
-    return {
-      state: "blocked",
-      reasons: ["备用上游节点只在智能路由发生可重试故障时使用。普通重试仍可使用。"],
-      action: {
-        label: "配置智能路由",
-        href: profileSectionHref(draft.id, "routing"),
-      },
-    };
-  }
-  return null;
-}
-
 function protectUnsavedChanges(navigation, form, dirtyState, confirmLeave) {
   const markDirty = () => { dirtyState.value = true; };
   form.addEventListener("input", markDirty);
@@ -253,7 +255,7 @@ function sectionDescription(section, state) {
     models: "补充能力、上下文和价格信息。",
     routing: "按任务复杂度选择合适的模型。",
     vision: "为不支持视觉的主模型补充图片理解。",
-    reliability: "管理普通重试和 Auto 上游节点切换。",
+    reliability: "管理同一 Upstream 的普通重试。",
     agents: "生成 Claude Code、Codex 或 OpenCode 配置。",
   }[section];
 }

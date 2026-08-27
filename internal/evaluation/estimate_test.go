@@ -148,3 +148,63 @@ func TestEstimateQualityRequiresEnoughCurrentStrategyEvidence(t *testing.T) {
 		t.Fatal("unrelated evidence produced an estimate")
 	}
 }
+
+func TestEstimateQualityTreatsTiesAsNonInferior(t *testing.T) {
+	now := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	estimate, ok := EstimateQuality([]EvidenceAggregate{{
+		Day: "2026-08-31", Strategy: "active", Route: "balanced",
+		CandidateModel: "fast", ReferenceModel: "strong", Samples: 100,
+		Ties:       100,
+		Dimensions: dimensionAggregates(100, 0, 100, 0),
+	}}, EstimateRequest{
+		Now: now, Strategy: "active", Route: "balanced",
+		CandidateModel: "fast", ReferenceModel: "strong",
+		ConfiguredQualityBPS: 9000, ConfiguredSevereErrorBPS: 100,
+	})
+	if !ok || !estimate.Reliable || estimate.QualityLowerBPS < 9500 {
+		t.Fatalf("non-inferiority estimate=%+v ok=%v", estimate, ok)
+	}
+}
+
+func TestEstimateStabilityCombinesOnlineAndEvaluationEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	rows := []EvidenceAggregate{{
+		Day: "2026-08-31", Strategy: "active", Route: "balanced",
+		CandidateModel: "fast", ReferenceModel: "strong", Samples: 40,
+		SevereErrors: 1, DeterministicFailures: 2,
+	}}
+	estimate, ok := EstimateStability(rows, OnlineStabilityAggregate{
+		Samples: 40, SuccessfulCompletions: 38, CleanCompletions: 36,
+		TotalLatencyMS: 4000,
+	}, StabilityEstimateRequest{
+		Now: now, Strategy: "active", Route: "balanced",
+		CandidateModel: "fast", ReferenceModel: "strong",
+		ConfiguredStabilityBPS: 9000, ConfiguredSevereErrorBPS: 100,
+	})
+	if !ok || !estimate.Reliable || estimate.MeanBPS <= estimate.LowerBPS ||
+		estimate.LowerBPS < 8000 || estimate.ExpectedLatencyMS != 100 {
+		t.Fatalf("stability estimate=%+v ok=%v", estimate, ok)
+	}
+}
+
+func TestEstimateStabilityRequiresEnoughRecentOnlineEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	rows := []EvidenceAggregate{{
+		Day: "2026-08-31", Strategy: "active", Route: "balanced",
+		CandidateModel: "fast", ReferenceModel: "strong", Samples: 40,
+	}}
+	estimate, ok := EstimateStability(rows, OnlineStabilityAggregate{
+		Samples: 100, SuccessfulCompletions: 95, CleanCompletions: 90,
+		TotalLatencyMS: 10_000, EffectiveSamples: 10,
+		EffectiveSuccessfulCompletions: 9.5, EffectiveCleanCompletions: 9,
+		EffectiveLatencyMS: 1000,
+	}, StabilityEstimateRequest{
+		Now: now, Strategy: "active", Route: "balanced",
+		CandidateModel: "fast", ReferenceModel: "strong",
+		ConfiguredStabilityBPS: 9000, ConfiguredSevereErrorBPS: 100,
+	})
+	if !ok || estimate.Reliable || estimate.EffectiveOnlineSamples != 10 ||
+		estimate.ExpectedLatencyMS != 100 {
+		t.Fatalf("stability estimate=%+v ok=%v", estimate, ok)
+	}
+}

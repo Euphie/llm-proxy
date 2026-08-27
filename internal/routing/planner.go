@@ -39,15 +39,22 @@ const (
 	ClassificationSourceAnalyzer ClassificationSource = "analyzer"
 	ClassificationSourceFallback ClassificationSource = "fallback"
 	ClassificationSourceSession  ClassificationSource = "session"
+
+	ClassificationReasonSessionModelRetained = "session_model_retained_after_analyzer_failure"
 )
 
 type Classification struct {
-	TaskType      string
-	Difficulty    Difficulty
-	Risk          Risk
-	ConfidenceBPS int
-	Source        ClassificationSource
-	ReasonCodes   []string
+	TaskType                string
+	Difficulty              Difficulty
+	Risk                    Risk
+	ConfidenceBPS           int
+	TaskTypeConfidenceBPS   int
+	DifficultyConfidenceBPS int
+	RiskConfidenceBPS       int
+	Underspecified          bool
+	ComplexitySignals       ComplexitySignals
+	Source                  ClassificationSource
+	ReasonCodes             []string
 }
 
 type SessionPreference struct {
@@ -58,6 +65,8 @@ type SessionPreference struct {
 	MinQualityScoreBPS int
 	Strategy           string
 	CacheMetrics       map[string]CacheMetrics
+	TaskContinuation   bool
+	ModelLocked        bool
 }
 
 type CacheMetrics struct {
@@ -107,12 +116,16 @@ type CandidateDecision struct {
 	Decision               string
 	Reason                 string
 	QualityScoreBPS        int
+	StabilityScoreBPS      int
 	SevereErrorRateBPS     int
+	ExpectedLatencyMS      int64
+	CostEfficiencyScoreBPS int
+	PerformanceScoreBPS    int
+	RoutingScoreBPS        int
 	ExpectedCostMicroUSD   int64
 	AnswerCallCostMicroUSD int64
 	VisionCallCostMicroUSD int64
 	VisionMode             VisionMode
-	UpstreamNodeIDs        []string
 }
 
 type ExecutionPlanSnapshot struct {
@@ -141,7 +154,6 @@ type ModelAttemptPlan struct {
 
 type ModelAttemptSnapshot struct {
 	Model                  string
-	TargetIDs              []string
 	VisionMode             VisionMode
 	QualityScoreBPS        int
 	ExpectedCostMicroUSD   int64
@@ -222,12 +234,26 @@ func (p *Planner) planWithPreference(
 	routeID := p.RouteID(classification)
 	route := p.strategy.Routes[routeID]
 
+	if classification.Source == ClassificationSourceSession &&
+		preference.Model == p.auto.StrongBaselineModel {
+		plan, err := p.planStrongBaseline(request, routeID, "Session binding", preference)
+		return p.finalizePlan(request, plan, budget, err)
+	}
 	if classification.Source == ClassificationSourceFallback {
 		plan, err := p.planStrongBaseline(request, routeID, "task analyzer fallback", preference)
 		return p.finalizePlan(request, plan, budget, err)
 	}
 	if classification.Risk == RiskHigh {
 		plan, err := p.planStrongBaseline(request, routeID, "high risk", preference)
+		return p.finalizePlan(request, plan, budget, err)
+	}
+	if classification.Risk == RiskUnknown {
+		plan, err := p.planStrongBaseline(request, routeID, "guarded risk baseline", preference)
+		return p.finalizePlan(request, plan, budget, err)
+	}
+	if classification.Difficulty == DifficultyHard ||
+		classification.Difficulty == DifficultyUnknown && classification.Source != ClassificationSourceSession {
+		plan, err := p.planStrongBaseline(request, routeID, "guarded difficulty baseline", preference)
 		return p.finalizePlan(request, plan, budget, err)
 	}
 
@@ -238,12 +264,29 @@ func (p *Planner) planWithPreference(
 
 	ranked := make([]rankedCandidate, 0, len(candidates))
 	decisions := make([]CandidateDecision, 0, len(candidates)+1)
+	baseline, baselineComparable := p.evaluateCandidate(
+		request, p.auto.StrongBaselineModel, preference,
+	)
+	consumedCostMicroUSD := int64(0)
+	if budget != nil {
+		consumedCostMicroUSD = addCost(
+			budget.WorstCaseCostMicroUSD,
+			budget.HeldCostMicroUSD,
+		)
+	}
 	for _, candidate := range candidates {
 		decision := CandidateDecision{
 			Model: candidate.Model, QualityScoreBPS: candidate.QualityScoreBPS,
+			StabilityScoreBPS:  candidate.StabilityScoreBPS,
 			SevereErrorRateBPS: candidate.SevereErrorRateBPS,
+			ExpectedLatencyMS:  candidate.ExpectedLatencyMS,
 		}
 		switch {
+		case candidate.Model != p.auto.StrongBaselineModel && !candidate.ProductionEligible:
+			decision.Decision = "rejected"
+			decision.Reason = "production_not_eligible"
+			decisions = append(decisions, decision)
+			continue
 		case candidate.QualityScoreBPS < route.MinQualityBPS:
 			decision.Decision = "rejected"
 			decision.Reason = "quality_below_route_minimum"
@@ -254,9 +297,20 @@ func (p *Planner) planWithPreference(
 			decision.Reason = "severe_error_rate_above_route_maximum"
 			decisions = append(decisions, decision)
 			continue
+		case candidate.StabilityScoreBPS < route.MinStabilityBPS:
+			decision.Decision = "rejected"
+			decision.Reason = "stability_below_route_minimum"
+			decisions = append(decisions, decision)
+			continue
 		case candidate.QualityScoreBPS < preference.MinQualityScoreBPS:
 			decision.Decision = "rejected"
 			decision.Reason = "quality_below_session_minimum"
+			decisions = append(decisions, decision)
+			continue
+		case candidate.Model != p.auto.StrongBaselineModel && p.strategy.LatencyTargetMS > 0 &&
+			(candidate.ExpectedLatencyMS <= 0 || candidate.ExpectedLatencyMS > p.strategy.LatencyTargetMS):
+			decision.Decision = "rejected"
+			decision.Reason = "latency_target_not_met"
 			decisions = append(decisions, decision)
 			continue
 		}
@@ -269,16 +323,36 @@ func (p *Planner) planWithPreference(
 			decisions = append(decisions, decision)
 			continue
 		}
+		expectedCost := planned.estimatedCost
+		if candidate.Model != p.auto.StrongBaselineModel {
+			expectedCost = p.expectedCandidateLifecycleCost(request, planned, baseline, candidate)
+		}
+		if candidate.Model != p.auto.StrongBaselineModel && p.strategy.MinNetSavingsBPS > 0 &&
+			(!baselineComparable || !meetsNetSavings(
+				addCost(consumedCostMicroUSD, expectedCost),
+				baseline.estimatedCost,
+				p.strategy.MinNetSavingsBPS,
+			)) {
+			decision.Decision = "rejected"
+			decision.Reason = "net_savings_below_minimum"
+			decision.ExpectedCostMicroUSD = expectedCost
+			decision.AnswerCallCostMicroUSD = planned.answerCallCost
+			decision.VisionCallCostMicroUSD = planned.visionCallCost
+			decision.VisionMode = planned.visionMode
+			decisions = append(decisions, decision)
+			continue
+		}
 		planned.qualityScoreBPS = candidate.QualityScoreBPS
 		decision.Decision = "eligible"
 		decision.Reason = "passed_all_gates"
-		decision.ExpectedCostMicroUSD = planned.estimatedCost
+		decision.ExpectedCostMicroUSD = expectedCost
 		decision.AnswerCallCostMicroUSD = planned.answerCallCost
 		decision.VisionCallCostMicroUSD = planned.visionCallCost
 		decision.VisionMode = planned.visionMode
-		decision.UpstreamNodeIDs = candidateTargetIDs(planned.targets)
 		decisions = append(decisions, decision)
-		ranked = append(ranked, rankedCandidate{plan: planned, metrics: candidate})
+		ranked = append(ranked, rankedCandidate{
+			plan: planned, metrics: candidate, decisionIndex: len(decisions) - 1,
+		})
 	}
 	if len(ranked) == 0 {
 		plan, err := p.planStrongBaseline(
@@ -290,10 +364,17 @@ func (p *Planner) planWithPreference(
 		plan.candidateDecisions = append(decisions, plan.candidateDecisions...)
 		return p.finalizePlan(request, plan, budget, err)
 	}
+	scoreRankedCandidates(ranked, route.Weights)
+	for _, candidate := range ranked {
+		decision := &decisions[candidate.decisionIndex]
+		decision.CostEfficiencyScoreBPS = candidate.costEfficiencyScoreBPS
+		decision.PerformanceScoreBPS = candidate.performanceScoreBPS
+		decision.RoutingScoreBPS = candidate.routingScoreBPS
+	}
 	sort.SliceStable(ranked, func(i, j int) bool {
-		return betterCandidate(ranked[i].plan, ranked[j].plan, ranked[i].metrics, ranked[j].metrics)
+		return betterCandidate(ranked[i], ranked[j])
 	})
-	reason := "lowest expected cost"
+	reason := "highest weighted routing score"
 	if preference.Model != "" {
 		for index := range ranked {
 			if ranked[index].plan.model == preference.Model {
@@ -314,6 +395,84 @@ func (p *Planner) planWithPreference(
 	return p.finalizePlan(request, plan, budget, nil)
 }
 
+func meetsNetSavings(candidateCost, referenceCost int64, minimumBPS int) bool {
+	if referenceCost <= 0 || candidateCost < 0 || minimumBPS < 0 || minimumBPS > 10_000 {
+		return false
+	}
+	whole := referenceCost / 10_000
+	remainder := referenceCost % 10_000
+	requiredSavings := whole*int64(minimumBPS) +
+		(remainder*int64(minimumBPS)+9_999)/10_000
+	return candidateCost <= referenceCost-requiredSavings
+}
+
+func (p *Planner) expectedCandidateLifecycleCost(
+	request Request,
+	candidate candidatePlan,
+	baseline candidatePlan,
+	metrics profile.RouteCandidateRuntime,
+) int64 {
+	failureBPS := max(10_000-metrics.StabilityScoreBPS, metrics.SevereErrorRateBPS)
+	failureBPS = min(10_000, max(0, failureBPS))
+	retries := min(p.strategy.Budget.MaxRetriesPerTarget, p.maxConfiguredRetries)
+	continuationCost := int64(0)
+	if p.strategy.Budget.MaxModelSwitches > 0 {
+		continuationCost = baseline.estimatedCost
+	}
+	for range retries {
+		continuationCost = addCost(
+			candidate.estimatedCost,
+			scaleExpectedCost(continuationCost, failureBPS),
+		)
+	}
+	cost := addCost(
+		candidate.estimatedCost,
+		scaleExpectedCost(continuationCost, failureBPS),
+	)
+	if p.auto.DynamicOptimization.Enabled {
+		comparisonCost := max(candidate.estimatedCost, baseline.estimatedCost)
+		reviewerCost := p.estimatedReviewerCost(request)
+		evaluationCost := addCost(comparisonCost, reviewerCost)
+		cost = addCost(cost, scaleExpectedCost(evaluationCost, p.auto.DynamicOptimization.SampleRateBPS))
+	}
+	return cost
+}
+
+func (p *Planner) estimatedReviewerCost(request Request) int64 {
+	model, ok := p.models[p.auto.DynamicOptimization.ReviewerModel]
+	if !ok {
+		return math.MaxInt64
+	}
+	inputTokens, ok := addCount(request.Facts.EstimatedInputTokens, 512)
+	if !ok {
+		return math.MaxInt64
+	}
+	outputReserve := request.Facts.RequestedOutputTokens
+	if outputReserve <= 0 {
+		outputReserve = 4096
+	}
+	if outputReserve > (int(^uint(0)>>1)-inputTokens)/2 {
+		return math.MaxInt64
+	}
+	inputTokens += outputReserve * 2
+	return estimateCallCost(inputTokens, 256, model)
+}
+
+func scaleExpectedCost(cost int64, basisPoints int) int64 {
+	if cost <= 0 || basisPoints <= 0 {
+		return 0
+	}
+	if cost == math.MaxInt64 || basisPoints >= 10_000 {
+		return cost
+	}
+	whole := cost / 10_000
+	remainder := cost % 10_000
+	return addCost(
+		whole*int64(basisPoints),
+		(remainder*int64(basisPoints)+9_999)/10_000,
+	)
+}
+
 func (p *Planner) RouteID(classification Classification) string {
 	if mapped, ok := p.strategy.RouteFor(
 		classification.TaskType,
@@ -329,7 +488,8 @@ func (p *Planner) EvaluationPair(
 	classification Classification,
 	selectedModel string,
 ) (EvaluationPair, bool) {
-	if classification.Source == ClassificationSourceFallback || classification.Risk == RiskHigh {
+	if classification.Source == ClassificationSourceFallback ||
+		classification.Risk == RiskHigh || classification.Risk == RiskUnknown {
 		return EvaluationPair{}, false
 	}
 	route := p.strategy.Routes[p.RouteID(classification)]
@@ -369,11 +529,9 @@ func (p *Planner) EvaluationPair(
 		if len(candidates) == 0 {
 			return EvaluationPair{}, false
 		}
+		scoreRankedCandidates(candidates, route.Weights)
 		sort.SliceStable(candidates, func(i, j int) bool {
-			return betterCandidate(
-				candidates[i].plan, candidates[j].plan,
-				candidates[i].metrics, candidates[j].metrics,
-			)
+			return betterCandidate(candidates[i], candidates[j])
 		})
 		candidate = candidates[0].plan
 	}
@@ -398,14 +556,27 @@ func (p *Planner) planStrongBaseline(
 	if !ok {
 		return ExecutionPlan{}, fmt.Errorf("%w: strong baseline %q", ErrNoCapableModel, p.auto.StrongBaselineModel)
 	}
-	candidate.qualityScoreBPS = 10_000
+	route := p.strategy.Routes[routeID]
+	metrics := profile.RouteCandidateRuntime{
+		Model: p.auto.StrongBaselineModel, QualityScoreBPS: 10_000, StabilityScoreBPS: 10_000,
+	}
+	if configured := candidatesForModel(route.Candidates, p.auto.StrongBaselineModel); configured.Model != "" {
+		metrics = configured
+	}
+	candidate.qualityScoreBPS = metrics.QualityScoreBPS
+	ranked := []rankedCandidate{{plan: candidate, metrics: metrics}}
+	scoreRankedCandidates(ranked, route.Weights)
 	plan := p.executionPlan(routeID, []candidatePlan{candidate}, true, reason)
 	plan.candidateDecisions = []CandidateDecision{{
 		Model: p.auto.StrongBaselineModel, Decision: "selected", Reason: selectionReasonCode(reason),
-		QualityScoreBPS: 10_000, ExpectedCostMicroUSD: candidate.estimatedCost,
+		QualityScoreBPS: metrics.QualityScoreBPS, StabilityScoreBPS: metrics.StabilityScoreBPS,
+		SevereErrorRateBPS: metrics.SevereErrorRateBPS, ExpectedLatencyMS: metrics.ExpectedLatencyMS,
+		CostEfficiencyScoreBPS: ranked[0].costEfficiencyScoreBPS,
+		PerformanceScoreBPS:    ranked[0].performanceScoreBPS, RoutingScoreBPS: ranked[0].routingScoreBPS,
+		ExpectedCostMicroUSD:   candidate.estimatedCost,
 		AnswerCallCostMicroUSD: candidate.answerCallCost,
 		VisionCallCostMicroUSD: candidate.visionCallCost,
-		VisionMode:             candidate.visionMode, UpstreamNodeIDs: candidateTargetIDs(candidate.targets),
+		VisionMode:             candidate.visionMode,
 	}}
 	return plan, nil
 }
@@ -437,8 +608,12 @@ func (p *Planner) executionPlan(
 }
 
 type rankedCandidate struct {
-	plan    candidatePlan
-	metrics profile.RouteCandidateRuntime
+	plan                   candidatePlan
+	metrics                profile.RouteCandidateRuntime
+	decisionIndex          int
+	costEfficiencyScoreBPS int
+	performanceScoreBPS    int
+	routingScoreBPS        int
 }
 
 func (p *Planner) plannedAttempts(
@@ -494,14 +669,6 @@ func containsAttempt(attempts []candidatePlan, model string) bool {
 	return false
 }
 
-func candidateTargetIDs(targets []TargetPlan) []string {
-	ids := make([]string, 0, len(targets))
-	for _, target := range targets {
-		ids = append(ids, target.id)
-	}
-	return ids
-}
-
 func markSelectedCandidate(
 	decisions []CandidateDecision,
 	selectedModel string,
@@ -535,10 +702,14 @@ func selectionReasonCode(reason string) string {
 		return "high_risk"
 	case "task analyzer fallback":
 		return "task_analyzer_fallback"
+	case "analyzer failure; retained Session model":
+		return "analyzer_failure_session_retained"
 	case "no route candidate passed all gates":
 		return "no_route_candidate_passed_all_gates"
+	case "highest weighted routing score":
+		return "highest_weighted_routing_score"
 	default:
-		return "lowest_expected_cost"
+		return "highest_weighted_routing_score"
 	}
 }
 
@@ -599,6 +770,10 @@ func (p *Planner) evaluateCandidateWithReason(
 	if requiresTools && (!model.HasSupportsTools || !model.SupportsTools) {
 		return candidatePlan{}, "tools_not_supported", false
 	}
+	if request.Facts.RequiresAgentWorkflow &&
+		(!model.HasSupportsAgentWorkflow || !model.SupportsAgentWorkflow) {
+		return candidatePlan{}, "agent_workflow_not_supported", false
+	}
 	if request.Facts.RequiresStructuredOutput &&
 		(!model.HasSupportsStructuredOutput || !model.SupportsStructuredOutput) {
 		return candidatePlan{}, "structured_output_not_supported", false
@@ -618,10 +793,6 @@ func (p *Planner) evaluateCandidateWithReason(
 			}
 			if !visionTransportSupportsSources(p.vision.Transport, request.Facts.ImageSources) {
 				return candidatePlan{}, "image_source_not_supported", false
-			}
-			targets = intersectTargetPlans(targets, p.targets[p.vision.Model])
-			if len(targets) == 0 {
-				return candidatePlan{}, "no_shared_vision_upstream_node", false
 			}
 			visionMode = VisionComposite
 			visionCallCost = estimateCallCost(
@@ -687,19 +858,74 @@ func compositeAnswerInputTokens(
 	return addCount(facts.EstimatedInputTokens, perImage*facts.ImageCount)
 }
 
-func betterCandidate(
-	candidate candidatePlan,
-	selected candidatePlan,
-	candidateMetrics profile.RouteCandidateRuntime,
-	selectedMetrics profile.RouteCandidateRuntime,
-) bool {
-	if candidate.estimatedCost != selected.estimatedCost {
-		return candidate.estimatedCost < selected.estimatedCost
+func betterCandidate(candidate, selected rankedCandidate) bool {
+	if candidate.routingScoreBPS != selected.routingScoreBPS {
+		return candidate.routingScoreBPS > selected.routingScoreBPS
 	}
-	if candidateMetrics.QualityScoreBPS != selectedMetrics.QualityScoreBPS {
-		return candidateMetrics.QualityScoreBPS > selectedMetrics.QualityScoreBPS
+	if candidate.plan.estimatedCost != selected.plan.estimatedCost {
+		return candidate.plan.estimatedCost < selected.plan.estimatedCost
 	}
-	return candidate.model < selected.model
+	if candidate.metrics.QualityScoreBPS != selected.metrics.QualityScoreBPS {
+		return candidate.metrics.QualityScoreBPS > selected.metrics.QualityScoreBPS
+	}
+	return candidate.plan.model < selected.plan.model
+}
+
+func scoreRankedCandidates(candidates []rankedCandidate, weights profile.RoutingWeightsRuntime) {
+	if len(candidates) == 0 {
+		return
+	}
+	minimumCost := candidates[0].plan.estimatedCost
+	minimumLatency := int64(0)
+	for _, candidate := range candidates {
+		minimumCost = min(minimumCost, candidate.plan.estimatedCost)
+		if candidate.metrics.ExpectedLatencyMS > 0 &&
+			(minimumLatency == 0 || candidate.metrics.ExpectedLatencyMS < minimumLatency) {
+			minimumLatency = candidate.metrics.ExpectedLatencyMS
+		}
+	}
+	for index := range candidates {
+		candidate := &candidates[index]
+		candidate.costEfficiencyScoreBPS = relativeScoreBPS(minimumCost, candidate.plan.estimatedCost, 0)
+		if candidate.metrics.ExpectedLatencyMS > 0 {
+			candidate.performanceScoreBPS = relativeScoreBPS(
+				minimumLatency, candidate.metrics.ExpectedLatencyMS, 0,
+			)
+		}
+		candidate.routingScoreBPS = weightedRoutingScoreBPS(
+			candidate.metrics, weights,
+			candidate.costEfficiencyScoreBPS, candidate.performanceScoreBPS,
+		)
+	}
+}
+
+func relativeScoreBPS(best, current int64, unknown int) int {
+	if current <= 0 {
+		if best == 0 && current == 0 && unknown == 0 {
+			return 10_000
+		}
+		return unknown
+	}
+	if best <= 0 {
+		return unknown
+	}
+	if best >= current {
+		return 10_000
+	}
+	return int(best * 10_000 / current)
+}
+
+func weightedRoutingScoreBPS(
+	metrics profile.RouteCandidateRuntime,
+	weights profile.RoutingWeightsRuntime,
+	costEfficiencyBPS int,
+	performanceBPS int,
+) int {
+	total := int64(metrics.QualityScoreBPS)*int64(weights.QualityBPS) +
+		int64(metrics.StabilityScoreBPS)*int64(weights.StabilityBPS) +
+		int64(costEfficiencyBPS)*int64(weights.CostBPS) +
+		int64(performanceBPS)*int64(weights.PerformanceBPS)
+	return int(total / 10_000)
 }
 
 func candidatesForModel(
@@ -837,31 +1063,15 @@ func cloneModels(models profile.ModelCatalog) profile.ModelCatalog {
 func buildTargetPlans(runtime profile.Runtime) map[string][]TargetPlan {
 	targets := make(map[string][]TargetPlan, len(runtime.Models))
 	for model := range runtime.Models {
-		for _, target := range runtime.RoutingTargets(model) {
-			targets[model] = append(targets[model], TargetPlan{
-				id: target.ID, upstream: target.Upstream, protocol: runtime.Protocol,
-			})
-		}
+		targets[model] = []TargetPlan{{
+			id: profile.PrimaryTargetID, upstream: runtime.Upstream, protocol: runtime.Protocol,
+		}}
 	}
 	return targets
 }
 
 func cloneTargetPlans(targets []TargetPlan) []TargetPlan {
 	return append([]TargetPlan(nil), targets...)
-}
-
-func intersectTargetPlans(answer []TargetPlan, vision []TargetPlan) []TargetPlan {
-	visionTargets := make(map[string]struct{}, len(vision))
-	for _, target := range vision {
-		visionTargets[target.id] = struct{}{}
-	}
-	compatible := make([]TargetPlan, 0, len(answer))
-	for _, target := range answer {
-		if _, ok := visionTargets[target.id]; ok {
-			compatible = append(compatible, target)
-		}
-	}
-	return compatible
 }
 
 func visionTransportSupportsSources(
@@ -895,8 +1105,6 @@ func visionTransportSupportsSources(
 
 func cloneAutoRouting(auto profile.AutoRoutingRuntime) profile.AutoRoutingRuntime {
 	auto.Participants = append([]string(nil), auto.Participants...)
-	auto.RiskPolicy.SensitiveTextPatterns = append([]string(nil), auto.RiskPolicy.SensitiveTextPatterns...)
-	auto.RiskPolicy.SensitiveToolPatterns = append([]string(nil), auto.RiskPolicy.SensitiveToolPatterns...)
 	auto.Strategy = cloneStrategy(auto.Strategy)
 	return auto
 }
@@ -936,13 +1144,7 @@ func (p ExecutionPlan) ModelAttempts() []ModelAttemptPlan {
 }
 
 func (p ExecutionPlan) CandidateDecisions() []CandidateDecision {
-	decisions := append([]CandidateDecision(nil), p.candidateDecisions...)
-	for index := range decisions {
-		decisions[index].UpstreamNodeIDs = append(
-			[]string(nil), decisions[index].UpstreamNodeIDs...,
-		)
-	}
-	return decisions
+	return append([]CandidateDecision(nil), p.candidateDecisions...)
 }
 
 func (p ExecutionPlan) NextStrongerModelAttempt(current int) (int, bool) {
@@ -971,13 +1173,8 @@ func (p ModelAttemptPlan) AnswerCallCostMicroUSD() int64 { return p.answerCallCo
 func (p ModelAttemptPlan) VisionCallCostMicroUSD() int64 { return p.visionCallCostMicroUSD }
 
 func (p ModelAttemptPlan) Snapshot() ModelAttemptSnapshot {
-	targetIDs := make([]string, 0, len(p.targets))
-	for _, target := range p.targets {
-		targetIDs = append(targetIDs, target.id)
-	}
 	return ModelAttemptSnapshot{
 		Model:                  p.model,
-		TargetIDs:              targetIDs,
 		VisionMode:             p.visionMode,
 		QualityScoreBPS:        p.qualityScoreBPS,
 		ExpectedCostMicroUSD:   p.expectedCostMicroUSD,

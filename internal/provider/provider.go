@@ -66,9 +66,7 @@ func ClassifyHTTPFailure(rules []Rule, statusCode int, body []byte, cause error)
 	switch {
 	case statusCode == 401 || statusCode == 403:
 		class = FailureAuthentication
-	case Match(rules, statusCode, body) != nil,
-		statusCode == 429,
-		statusCode >= 500 && statusCode <= 599:
+	case Match(rules, statusCode, body) != nil, IsRetryableStatus(statusCode):
 		class = FailureOverloadTransient
 	}
 	return NewFailure(class, statusCode, cause)

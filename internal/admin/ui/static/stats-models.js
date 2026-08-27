@@ -1,4 +1,5 @@
 import { formatMicroUSD } from "./money.js";
+import { renderAgentTrajectorySection } from "./stats-agent-trajectories.js";
 import {
 	dateValue,
 	positivePageParameter,
@@ -45,10 +46,48 @@ export async function renderModelPerformancePage(
 	{
 		profiles = [],
 		loadModelPerformance = async () => emptyPage(),
+		loadEvaluationCatalog = async () => null,
+		loadAgentTrajectories = async () => emptyPage(),
+		loadAgentTrajectory = async () => null,
+		deleteAgentTrajectory = async () => {},
 		onUnauthorized = () => {},
 		initialProfileID,
 	} = {},
 ) {
+	const publicSection = element("section", "stack model-evaluation-section");
+	publicSection.append(
+		textElement("h2", "公开评测"),
+		textElement("p", "用于新 Profile 冷启动和智能生成策略，只提供公开排名与能力先验，不代表本地 Agent 的实际质量。"),
+	);
+	const publicOutput = element("div", "stack");
+	publicSection.append(publicOutput);
+	const agentSection = element("section", "stack model-evaluation-section");
+	agentSection.append(
+		textElement("h2", "本地 Agent 评测"),
+		textElement("p", "记录真实 Agent 的完整工具调用轨迹。任务明确结束后只评测一次；不保存上游凭据，也不支持重新评测。"),
+	);
+	const agentOutput = element("div", "stack");
+	agentSection.append(agentOutput);
+	const evidenceSection = element("section", "stack model-evaluation-section");
+	evidenceSection.append(
+		textElement("h2", "本地质量证据"),
+		textElement("p", "本地 Agent 评审通过后会聚合到这里，供后续智能路由策略学习使用。"),
+	);
+	root.replaceChildren(publicSection, agentSection, evidenceSection);
+	publicOutput.replaceChildren(statusMessage("正在加载公开评测目录…"));
+	try {
+		publicOutput.replaceChildren(publicCatalog(await loadEvaluationCatalog()));
+	} catch (error) {
+		if (error?.status === 401) {
+			onUnauthorized();
+			return;
+		}
+		publicOutput.replaceChildren(alertMessage(error?.message || "公开评测目录加载失败。"));
+	}
+	await renderAgentTrajectorySection(agentOutput, {
+		profiles, loadAgentTrajectories, loadAgentTrajectory,
+		deleteAgentTrajectory, onUnauthorized,
+	});
 	const initial = statsURLParameters();
 	const state = {
 		page: positivePageParameter(initial, "page", 1),
@@ -86,7 +125,7 @@ export async function renderModelPerformancePage(
 	submit.className = "button";
 	form.append(fields, submit);
 	const output = element("div", "stack model-performance-output");
-	root.replaceChildren(form, output);
+	evidenceSection.append(form, output);
 	model.value = initial.get("model") || "";
 	taskType.value = initial.get("task_type") || "";
 	difficulty.value = initial.get("difficulty") || "";
@@ -140,6 +179,36 @@ export async function renderModelPerformancePage(
 	await refresh();
 }
 
+function publicCatalog(catalog) {
+	const card = element("article", "card public-evaluation-overview stack");
+	if (!catalog) {
+		card.append(
+			textElement("strong", "公开评测状态暂不可用"),
+			textElement("p", "本地 Agent 采集与评测不受影响；仍可在 Profile 中手动配置策略。"),
+		);
+		return card;
+	}
+	const sources = Array.isArray(catalog.sources) ? catalog.sources : [];
+	const results = Array.isArray(catalog.results) ? catalog.results : [];
+	card.append(
+		textElement("strong", `${sources.length} 个来源 · ${results.length} 条公开结果`),
+		textElement("p", results.length
+			? "公开数据已载入。模型必须先确认 canonical ID，才能精确关联到对应结果。"
+			: "已载入来源定义，但尚未下载评测结果。可在 Profile 的智能路由高级设置中下载并更新。"),
+	);
+	if (sources.length) {
+		const details = element("details", "public-evaluation-sources");
+		details.append(textElement("summary", "查看来源与版本"));
+		const list = element("ul", "public-evaluation-source-list");
+		for (const source of sources) {
+			list.append(textElement("li", `${source.name || source.id} · ${source.version || "未知版本"}`));
+		}
+		details.append(list);
+		card.append(details);
+	}
+	return card;
+}
+
 function performanceSummary(summary = {}) {
 	const wrapper = element("div", "summary-grid model-performance-summary");
 	const totalCost = Number(summary.candidate_cost_micro_usd || 0) +
@@ -161,7 +230,7 @@ function performanceSummary(summary = {}) {
 function performanceList(items) {
 	const list = element("div", "stack model-performance-list");
 	if (!items.length) {
-		list.append(statusMessage("暂无模型评测数据。开启动态策略训练并积累抽样后会显示在这里。"));
+		list.append(statusMessage("还没有可聚合的本地质量证据。请先完成包含工具调用的 Agent 任务；轨迹评测成功后会自动显示。"));
 		return list;
 	}
 	for (const item of items) {
@@ -214,13 +283,13 @@ function pager(page, onPage) {
 	const wrapper = element("div", "routing-pager");
 	const previous = textElement("button", "上一页");
 	previous.type = "button";
-	previous.className = "button-secondary";
+	previous.className = "button button-secondary button-compact";
 	previous.disabled = page.page <= 1;
 	previous.addEventListener("click", () => onPage(page.page - 1));
 	const label = textElement("span", `第 ${page.page} / ${Math.max(page.total_pages, 1)} 页 · 共 ${page.total} 个分组`);
 	const next = textElement("button", "下一页");
 	next.type = "button";
-	next.className = "button-secondary";
+	next.className = "button button-secondary button-compact";
 	next.disabled = page.total_pages === 0 || page.page >= page.total_pages;
 	next.addEventListener("click", () => onPage(page.page + 1));
 	wrapper.append(previous, label, next);

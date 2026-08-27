@@ -37,7 +37,6 @@ type AttemptBudgetSnapshot struct {
 	AuxiliaryCalls        int
 	TotalOutboundCalls    int
 	ModelSwitches         int
-	TargetSwitches        int
 	WorstCaseCostMicroUSD int64
 	RetriesByTarget       map[string]int
 	HeldAnswerAttempts    int
@@ -151,31 +150,6 @@ func (b *AttemptBudget) ReserveModelSwitchCall(
 	return nil
 }
 
-func (b *AttemptBudget) ReserveTargetSwitch() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.used.TargetSwitches >= b.limits.MaxTargetSwitches {
-		return fmt.Errorf("%w: target switches", ErrAttemptBudgetExceeded)
-	}
-	b.used.TargetSwitches++
-	return nil
-}
-
-func (b *AttemptBudget) CanReserveTargetSwitchCall(
-	ctx context.Context,
-	cost int64,
-) error {
-	if err := b.contextError(ctx); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := b.contextError(ctx); err != nil {
-		return err
-	}
-	return b.canReserveTargetSwitchCallLocked(cost)
-}
-
 func (b *AttemptBudget) contextError(caller context.Context) error {
 	if err := caller.Err(); err != nil {
 		return err
@@ -183,26 +157,6 @@ func (b *AttemptBudget) contextError(caller context.Context) error {
 	if b.context != nil {
 		return b.context.Err()
 	}
-	return nil
-}
-
-func (b *AttemptBudget) ReserveTargetSwitchCall(
-	ctx context.Context,
-	cost int64,
-) error {
-	if err := b.contextError(ctx); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := b.contextError(ctx); err != nil {
-		return err
-	}
-	if err := b.canReserveTargetSwitchCallLocked(cost); err != nil {
-		return err
-	}
-	b.used.TargetSwitches++
-	b.applyCallLocked(CallAnswer, cost)
 	return nil
 }
 
@@ -267,13 +221,6 @@ func exceedsCostLimit(cost, limit int64) bool {
 func (b *AttemptBudget) canReserveModelSwitchCallLocked(cost int64) error {
 	if b.used.ModelSwitches >= b.limits.MaxModelSwitches {
 		return fmt.Errorf("%w: model switches", ErrAttemptBudgetExceeded)
-	}
-	return b.canReserveCallLocked(CallAnswer, cost)
-}
-
-func (b *AttemptBudget) canReserveTargetSwitchCallLocked(cost int64) error {
-	if b.used.TargetSwitches >= b.limits.MaxTargetSwitches {
-		return fmt.Errorf("%w: target switches", ErrAttemptBudgetExceeded)
 	}
 	return b.canReserveCallLocked(CallAnswer, cost)
 }

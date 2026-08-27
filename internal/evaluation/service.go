@@ -26,6 +26,7 @@ const (
 type Job struct {
 	ProfileID             int64
 	SampleRateBPS         int
+	Sampling              SamplingKey
 	DailyBudgetMicroUSD   int64
 	EstimatedCostMicroUSD int64
 	MaxConcurrency        int
@@ -33,6 +34,26 @@ type Job struct {
 	Timeout               time.Duration
 	ExpiresAt             time.Time
 	Run                   func(context.Context) (Result, error)
+	OnTerminal            func(TerminalResult)
+}
+
+type TerminalStatus string
+
+const (
+	TerminalCompleted      TerminalStatus = "completed"
+	TerminalFailed         TerminalStatus = "failed"
+	TerminalSampledOut     TerminalStatus = "sampled_out"
+	TerminalExpired        TerminalStatus = "expired"
+	TerminalBudgetRejected TerminalStatus = "budget_rejected"
+	TerminalClosed         TerminalStatus = "closed"
+)
+
+type TerminalResult struct {
+	Status           TerminalStatus
+	SpentMicroUSD    int64
+	EvidenceRecorded bool
+	Evidence         *Evidence
+	Err              error
 }
 
 type Result struct {
@@ -53,22 +74,25 @@ type Status struct {
 }
 
 type ServiceOptions struct {
-	Now    func() time.Time
-	Sample func(rateBPS int) bool
+	Now          func() time.Time
+	Sample       func(rateBPS int) bool
+	AdaptiveRate func(context.Context, Job) (int, error)
 }
 
 type Service struct {
-	store  *Store
-	now    func() time.Time
-	sample func(int) bool
-	ctx    context.Context
-	cancel context.CancelFunc
+	store        *Store
+	now          func() time.Time
+	sample       func(int) bool
+	adaptiveRate func(context.Context, Job) (int, error)
+	ctx          context.Context
+	cancel       context.CancelFunc
 
-	mu       sync.Mutex
-	closed   bool
-	profiles map[int64]*profileQueue
-	status   Status
-	wg       sync.WaitGroup
+	mu                 sync.Mutex
+	closed             bool
+	onEvidenceRecorded func(context.Context, int64) error
+	profiles           map[int64]*profileQueue
+	status             Status
+	wg                 sync.WaitGroup
 
 	closeOnce sync.Once
 	closeErr  error
@@ -95,8 +119,14 @@ func NewService(store *Store, options ServiceOptions) (*Service, error) {
 		sample = randomSample
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	adaptiveRate := options.AdaptiveRate
+	if adaptiveRate == nil {
+		adaptiveRate = func(ctx context.Context, job Job) (int, error) {
+			return store.AdaptiveSampleRate(ctx, job.SampleRateBPS, job.Sampling)
+		}
+	}
 	return &Service{
-		store: store, now: now, sample: sample,
+		store: store, now: now, sample: sample, adaptiveRate: adaptiveRate,
 		ctx: ctx, cancel: cancel, profiles: make(map[int64]*profileQueue),
 	}, nil
 }
@@ -161,6 +191,18 @@ func (s *Service) run(job Job) {
 
 	if !job.ExpiresAt.After(s.now()) {
 		s.increment(func(status *Status) { status.Expired++ })
+		notifyTerminal(job, TerminalResult{Status: TerminalExpired})
+		return
+	}
+	adaptiveRate, err := s.adaptiveRate(s.ctx, job)
+	if err != nil {
+		adaptiveRate = job.SampleRateBPS
+		slog.Warn("routing.evaluation.adaptive_sampling_failed", "profile_id", job.ProfileID, "error", err)
+	}
+	conditionalRate := conditionalSampleRateBPS(adaptiveRate, job.SampleRateBPS)
+	if conditionalRate < 10_000 && !s.sample(conditionalRate) {
+		s.increment(func(status *Status) { status.SampledOut++ })
+		notifyTerminal(job, TerminalResult{Status: TerminalSampledOut})
 		return
 	}
 	reservation, err := s.store.ReserveBudget(
@@ -169,9 +211,11 @@ func (s *Service) run(job Job) {
 	if err != nil {
 		if errors.Is(err, ErrBudgetExceeded) {
 			s.increment(func(status *Status) { status.BudgetRejected++ })
+			notifyTerminal(job, TerminalResult{Status: TerminalBudgetRejected, Err: err})
 		} else {
 			s.increment(func(status *Status) { status.Failed++ })
 			slog.Warn("routing.evaluation.budget_failed", "profile_id", job.ProfileID, "error", err)
+			notifyTerminal(job, TerminalResult{Status: TerminalFailed, Err: err})
 		}
 		return
 	}
@@ -180,6 +224,7 @@ func (s *Service) run(job Job) {
 	if timeout <= 0 {
 		_ = reservation.Release(context.Background())
 		s.increment(func(status *Status) { status.Expired++ })
+		notifyTerminal(job, TerminalResult{Status: TerminalExpired})
 		return
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, timeout)
@@ -197,15 +242,28 @@ func (s *Service) run(job Job) {
 	if err != nil {
 		runErr = errors.Join(runErr, err)
 	}
+	evidenceRecorded := false
 	if runErr == nil && result.Evidence != nil {
 		runErr = s.store.RecordEvidence(context.Background(), *result.Evidence)
+		evidenceRecorded = runErr == nil
+		if evidenceRecorded {
+			s.notifyEvidenceRecorded(job.ProfileID)
+		}
 	}
 	if runErr != nil {
 		s.increment(func(status *Status) { status.Failed++ })
 		slog.Warn("routing.evaluation.failed", "profile_id", job.ProfileID, "error", runErr)
+		notifyTerminal(job, TerminalResult{
+			Status: TerminalFailed, SpentMicroUSD: result.SpentMicroUSD,
+			EvidenceRecorded: evidenceRecorded, Err: runErr,
+		})
 		return
 	}
 	s.increment(func(status *Status) { status.Completed++ })
+	notifyTerminal(job, TerminalResult{
+		Status: TerminalCompleted, SpentMicroUSD: result.SpentMicroUSD,
+		EvidenceRecorded: evidenceRecorded, Evidence: result.Evidence,
+	})
 }
 
 func (s *Service) finish(profileID int64) {
@@ -240,20 +298,62 @@ func (s *Service) Status() Status {
 	return s.status
 }
 
+func (s *Service) SetEvidenceRecordedHook(hook func(context.Context, int64) error) {
+	s.mu.Lock()
+	s.onEvidenceRecorded = hook
+	s.mu.Unlock()
+}
+
+func (s *Service) notifyEvidenceRecorded(profileID int64) {
+	s.mu.Lock()
+	hook := s.onEvidenceRecorded
+	s.mu.Unlock()
+	if hook == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Warn("routing.evaluation.evidence_hook_panicked", "profile_id", profileID)
+		}
+	}()
+	if err := hook(ctx, profileID); err != nil {
+		slog.Warn("routing.evaluation.evidence_hook_failed", "profile_id", profileID, "error", err)
+	}
+}
+
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
+		var dropped []Job
 		s.mu.Lock()
 		s.closed = true
 		for _, state := range s.profiles {
 			s.status.QueueDropped += int64(len(state.jobs))
 			s.status.Queued -= int64(len(state.jobs))
+			dropped = append(dropped, state.jobs...)
 			state.jobs = nil
 		}
 		s.cancel()
 		s.mu.Unlock()
+		for _, job := range dropped {
+			notifyTerminal(job, TerminalResult{Status: TerminalClosed})
+		}
 		s.wg.Wait()
 	})
 	return s.closeErr
+}
+
+func notifyTerminal(job Job, result TerminalResult) {
+	if job.OnTerminal == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Warn("routing.evaluation.terminal_callback_panicked", "profile_id", job.ProfileID)
+		}
+	}()
+	job.OnTerminal(result)
 }
 
 func (s *Service) increment(update func(*Status)) {

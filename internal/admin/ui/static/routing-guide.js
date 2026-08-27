@@ -1,14 +1,14 @@
 import { helpHref } from "./routes.js";
 
 const helpTopics = [
-  ["overview", "使用概览"],
-  ["glossary", "名词解释"],
-  ["profiles-models", "Profiles 与模型"],
+  ["overview", "快速开始"],
+  ["profiles-models", "Profile 与模型目录"],
+  ["intelligent-routing", "Routing Policy"],
+  ["vision", "视觉预处理"],
+  ["reliability", "重试与超时"],
   ["agents", "Agent 配置"],
-  ["vision", "视觉增强"],
-  ["intelligent-routing", "智能路由"],
-  ["reliability", "容错与上游节点"],
-  ["statistics", "统计与诊断"],
+  ["statistics", "统计与排障"],
+  ["glossary", "术语表"],
 ];
 
 export function renderHelpPage(root, topic = "overview") {
@@ -20,6 +20,7 @@ export function renderHelpPage(root, topic = "overview") {
     if (id === topic) link.setAttribute("aria-current", "page");
     navigation.append(link);
   }
+
   const content = element("section", "help-topic-content");
   content.append(helpContent(topic));
   shell.append(navigation, content);
@@ -28,418 +29,286 @@ export function renderHelpPage(root, topic = "overview") {
 
 function helpContent(topic) {
   switch (topic) {
-  case "overview":
-    return overviewHelp();
+  case "profiles-models":
+    return profilesModelsHelp();
+  case "intelligent-routing":
+    return routingPolicyHelp();
+  case "vision":
+    return visionHelp();
+  case "reliability":
+    return reliabilityHelp();
+  case "agents":
+    return agentsHelp();
+  case "statistics":
+    return statisticsHelp();
   case "glossary":
     return glossaryHelp();
-  case "profiles-models":
-    return simpleHelpTopic({
-      title: "Profiles 与模型",
-      description: "Profile 是协议、上游、模型事实和运行策略的隔离边界。普通转发只需要连接信息；视觉增强和智能路由才依赖完整模型目录。",
-      steps: [
-        "先创建 Profile，选择协议并填写上游地址；代理不会保存或管理上游密钥。",
-        "需要视觉、智能路由或 Agent 上下文参数时，再录入精确且区分大小写的模型 ID。",
-        "为模型补齐上下文、最大输出、能力和价格；自动模板只是辅助填写，保存值才是运行时事实。",
-      ],
-      notes: [
-        "只做显式模型透传时，模型目录可以为空。",
-        "模型被视觉、Route、模型角色或上游节点引用后，必须先解除引用才能删除或改名。",
-      ],
-      action: ["打开 Profiles", "/_admin/profiles"],
-    });
-  case "agents":
-    return simpleHelpTopic({
-      title: "Agent 配置",
-      description: "后台根据 Profile 协议生成 Claude Code、OpenCode、Codex 或通用客户端示例，只生成连接与模型映射，不写入真实密钥。",
-      steps: [
-        "先保存 Profile，再从该 Profile 的“Agent 配置”页面选择客户端。",
-        "填写代理公网地址和临时密钥占位符，按项目级或全局级下载配置。",
-        "已录入模型上下文时，可填写压缩百分比并生成保守的上下文设置。",
-      ],
-      notes: [
-        "生成器不会把输入的临时密钥保存到数据库。",
-        "调用方最终发送的路径仍由 Agent 协议决定，Profile URL 只负责选择隔离配置。",
-      ],
-      action: ["选择 Profile", "/_admin/profiles"],
-    });
-  case "vision":
-    return simpleHelpTopic({
-      title: "视觉增强",
-      description: "视觉增强用于主模型不支持图片的场景：代理先用视觉模型生成描述，再用描述替换图片后调用原主模型。",
-      steps: [
-        "启用视觉增强并选择视觉模型；未开启或模型为空时不会发送影子识图请求。",
-        "在模型目录中标明哪些主模型支持视觉；不支持时才增强，支持时直接透传图片。",
-        "按需调整识图提示词；相同图片和识图配置可以复用缓存，避免重复调用。",
-      ],
-      notes: [
-        "视觉描述会影响主模型看到的图片信息，因此提示词应保持客观、完整，不直接替用户作答。",
-        "缓存命中只省去视觉调用，不代表主回答请求也命中上游提示缓存。",
-      ],
-      action: ["选择 Profile", "/_admin/profiles"],
-    });
-  case "intelligent-routing":
-    return intelligentRoutingHelp();
-  case "reliability":
-    return simpleHelpTopic({
-      title: "容错与上游节点",
-      description: "普通重试和上游节点切换是两层不同能力：重试规则匹配可恢复错误，备用上游节点只服务于 model=auto 的同模型服务切换。",
-      steps: [
-        "按优先级配置过载规则；状态码和可选正文同时匹配时，第一条规则生效。",
-        "需要同模型多服务地址容错时，在智能路由启用后配置备用上游节点，并保持协议、供应商和凭据范围一致。",
-        "用统一尝试预算限制重试、上游节点切换、模型切换、总调用次数和总截止时间。",
-      ],
-      notes: [
-        "401、403 和不可重试 4xx 属于硬失败，不应通过重试掩盖。",
-        "上游节点耗尽后只有执行计划允许时才切换模型；所有动作仍受统一预算限制。",
-      ],
-      action: ["打开 Profiles", "/_admin/profiles"],
-    });
-  case "statistics":
-    return simpleHelpTopic({
-      title: "统计与诊断",
-      description: "统计分为用量统计、路由轨迹和模型表现，分别回答用了多少、为什么这样选、参与模型实际表现如何。",
-      steps: [
-        "用量统计按 Profile、协议、模型和时间查看 Token 与缓存用量。",
-        "路由轨迹按正常、高风险、分析回退、升级/切换、失败和费用异常分类，并可展开分类依据、候选排除原因和物理调用链。",
-        "模型表现按任务类型、难度、风险和视觉方式查看五维质量、可靠样本、成本及主动升级效果。",
-        "排查慢请求时先比较视觉改写耗时与最终上游主回答耗时，缓存命中不代表主回答会变快。",
-        "需要查看选模细节时以 LOG_LEVEL=debug 启动服务，按 request_trace_id 串联 routing.debug.classification、candidate、attempt_plan、budget_plan、call 和 completed。",
-      ],
-      notes: [
-        "只有所有物理调用都返回完整 usage 且价格已配置时，实际费用才是完整已知。",
-        "持久统计不保存原始提示词、图片、凭据或完整回答。",
-        "Debug 日志只记录结构化判断事实与费用，不记录请求正文、图片、鉴权信息或模型完整回复。",
-      ],
-      action: ["打开统计", "/_admin/stats"],
-    });
   default:
     return overviewHelp();
   }
 }
 
 function overviewHelp() {
-  const page = element("div", "stack routing-help-page");
-  const hero = element("section", "card stack routing-help-hero");
-  hero.append(
-    textElement("h2", "帮助中心"),
-    textElement("p", "按照实际配置顺序查找说明。智能路由只是其中一个主题，其他功能可以独立使用。", "muted"),
+  return helpPage(
+    "快速开始",
+    "后台围绕 Profile 工作。先完成可用连接，再按需开启 model=auto、视觉预处理和容错。",
+    [
+      listSection("推荐操作顺序", [
+        "创建 Profile，选择协议并填写唯一 Upstream。",
+        "验证显式模型请求；这类请求不会进入智能路由。",
+        "录入模型目录，补齐能力、上下文、价格和状态。",
+        "需要 model=auto 时配置并保存线上 Routing Policy。",
+        "按需开启视觉预处理、overload_rules 和 Agent 配置。",
+        "最后从统计页核对路由轨迹、物理调用、费用和失败阶段。",
+      ], true),
+      diagramSection(
+        "system-architecture.svg",
+        "当前 V2 系统架构",
+        "控制面发布新修订，请求面冻结执行快照，证据面记录轨迹和物理调用。",
+      ),
+      noteSection("显式模型与 model=auto", [
+        "调用方指定具体 model 时，代理按当前 Profile 转发，不读取 Routing Policy。",
+        "只有 model=auto 才执行任务分析、候选筛选、Session 复用和执行计划。",
+        "Profile 是永久隔离边界：连接、模型目录、策略、视觉和容错配置都不会跨 Profile 共享。",
+      ]),
+    ],
+    ["打开 Profiles", "/_admin/profiles"],
   );
-  const order = element("section", "card stack routing-help-section");
-  order.append(
-    textElement("h2", "推荐配置顺序"),
-    orderedList([
-      "创建 Profile 并完成连接配置。",
-      "按需录入模型；只做普通转发时可以跳过。",
-      "生成 Agent 配置并验证第一条请求。",
-      "按需启用视觉增强、智能路由和上游节点容错。",
-      "通过统计与路由轨迹检查效果和成本。",
-    ]),
-  );
-  const topics = element("section", "help-topic-grid");
-  for (const [id, label] of helpTopics.slice(1)) {
-    const card = element("article", "card stack help-topic-card");
-    card.append(
-      textElement("h3", label),
-      textElement("p", topicSummary(id), "muted"),
-      linkElement("查看说明", helpHref(id)),
-    );
-    topics.append(card);
-  }
-  page.append(hero, order, topics);
-  return page;
 }
 
-function topicSummary(topic) {
-  return {
-    glossary: "用简单例子理解 Profile、Route、上游节点、强模型基线等术语。",
-    "profiles-models": "配置隔离边界、模型能力、上下文和价格。",
-    agents: "生成 Claude Code、OpenCode、Codex 等客户端示例。",
-    vision: "为不支持图片的主模型补充视觉理解。",
-    "intelligent-routing": "理解 Route、质量门槛、成本选择和策略发布。",
-    reliability: "配置普通重试、备用上游节点和统一尝试预算。",
-    statistics: "查看用量、费用、视觉耗时和智能路由轨迹。",
-  }[topic];
+function profilesModelsHelp() {
+  return helpPage(
+    "Profile 与模型目录",
+    "Profile 固定协议和上游边界；模型目录提供当前运行时可验证的模型事实。",
+    [
+      listSection("主要操作", [
+        "先保存连接配置，再用测试请求验证上游、协议和密钥传递方式。",
+        "录入精确且区分大小写的模型 ID，并补齐能力、上下文、最大输出和价格。",
+        "将模型标记为 available、offline 或 retired；被引用的模型应先解除 Policy 或视觉配置引用。",
+        "只做显式模型透传时可以不建立完整目录；model=auto 必须能解析所需模型事实。",
+      ], true),
+      tableSection("模型目录修订", ["变化", "运行时结果"], [
+        ["保存模型事实或状态", "生成新的模型目录修订；后续请求立即读取新修订。"],
+        ["修改线上 Policy", "生成新的运行时修订，并校验引用的模型目录修订。"],
+        ["更新正在使用的模型", "先处理 Policy、视觉模型和角色引用，避免保存校验失败。"],
+      ]),
+      noteSection("关键边界", [
+        "模型目录是能力和价格事实，不保存模型本身或上游密钥。",
+        "状态为 offline 或 retired 的模型不能继续作为新的在线候选。",
+      ]),
+    ],
+    ["打开 Profiles", "/_admin/profiles"],
+  );
+}
+
+function routingPolicyHelp() {
+  return helpPage(
+    "线上 Routing Policy",
+    "V2 只有一份当前生效的 Policy。智能生成只产生预览；载入、检查并保存后才立即生效。",
+    [
+      noteSection("保存并立即生效", [
+        "保存会校验角色、任务映射、Route、候选、预算和模型目录引用。",
+        "成功后新请求立即使用新运行时修订；在途请求继续使用进入时冻结的快照。",
+        "每次变更会写入不可变历史；回滚会复制旧内容并创建一个新的生效版本。",
+      ]),
+      diagramSection(
+        "online-routing-flow.svg",
+        "model=auto 在线请求链路",
+        "只有 model=auto 进入任务分析、候选筛选和冻结执行计划；显式模型直接透传。",
+      ),
+      tableSection("模型角色", ["角色", "用途"], [
+        ["参与模型", "允许被 Route 引用的模型集合。"],
+        ["任务分析模型", "为 model=auto 判断任务类型、难度、风险和置信度。"],
+        ["强模型基线", "分析回退、高风险或普通候选全部不合格时的安全下限。"],
+      ]),
+      tableSection("任务映射与 Route", ["配置", "作用"], [
+        ["任务映射", "把任务类型与难度映射到 Route；未命中时使用默认 Route。"],
+        ["硬门槛", "先检查能力、生产资格、质量、稳定性和严重错误率。"],
+        ["权重", "只有通过全部硬门槛的候选才比较质量、稳定性、成本效率和性能。"],
+      ]),
+      noteSection("Production 与 Shadow", [
+        "Production 候选有生产资格，通过当前请求硬门槛后可以接收在线流量。",
+        "Shadow 候选只能积累评测或运行证据，不会因价格低而直接接收在线流量。",
+        "启用自动更新后，可靠本地证据可按冷却和确认规则调整生产资格；证据恶化时可以立即撤销。",
+      ]),
+      tableSection("统一尝试预算", ["字段", "限制"], [
+        ["主回答尝试", "首次回答、同模型重试和模型切换共享上限。"],
+        ["辅助调用", "任务分析和未命中缓存的视觉调用共享上限。"],
+        ["总上游调用", "限制本次请求发出的全部物理调用。"],
+        ["总截止时间", "分析、视觉、回答、重试和切换共享同一个截止时间。"],
+        ["最坏费用", "按冻结计划控制最坏预计费用，不假设缓存一定命中。"],
+      ]),
+      noteSection("Session 锁定 Token 阈值", [
+        "默认 100K Token，可由管理员在 Policy 中调整。",
+        "锁定用于保护长会话提示缓存；达到稳定条件后，普通新任务优先保留已锁定模型。",
+        "新用户任务仍重新分析风险；高风险、硬能力不满足或主动升级可以突破普通复用。",
+      ]),
+      elementSection("进一步阅读", [
+        linkElement("先看名词解释", helpHref("glossary")),
+      ]),
+    ],
+    ["打开 Profiles", "/_admin/profiles"],
+  );
+}
+
+function visionHelp() {
+  return helpPage(
+    "视觉预处理",
+    "视觉预处理只负责把图片转成文字上下文；最终回答仍由本次路由选中的回答模型完成。",
+    [
+      listSection("主要操作", [
+        "启用视觉预处理，并从已录入模型中选择识图模型，或手动输入上游支持的模型 ID。",
+        "在模型目录中准确标记回答模型是否原生支持视觉。",
+        "调整客观识图提示词；相同图片和识图配置可复用识图缓存。",
+      ], true),
+      diagramSection(
+        "vision-processing-flow.svg",
+        "视觉预处理决策与调用链路",
+        "回答模型原生支持图片时直接透传；否则先识图，再由原回答模型完成最终任务。",
+      ),
+      noteSection("执行边界", [
+        "回答模型原生支持当前图片请求时直接透传，不发起辅助识图调用。",
+        "回答模型不支持视觉时，系统先调用识图模型，再用识图文本替换图片后调用原回答模型。",
+        "最终回答模型不会自动切成识图模型；视觉调用成功也不代表主回答一定成功。",
+        "缓存命中只省去识图物理调用，主回答仍受统一预算和截止时间限制。",
+      ]),
+    ],
+    ["打开 Profiles", "/_admin/profiles"],
+  );
+}
+
+function reliabilityHelp() {
+  return helpPage(
+    "重试与超时",
+    "重试不是看到失败就自动发生。必须同时满足错误可恢复、规则匹配、预算允许且客户端尚未收到响应。",
+    [
+      tableSection("同模型重试条件", ["条件", "说明"], [
+        ["overload_rules 命中", "按顺序匹配状态码和可选响应正文；没有规则就没有同模型重试。"],
+        ["Policy 仍有重试票据", "单 Upstream 重试上限只是上限，不能替代 overload_rules。"],
+        ["共享截止时间未到", "分析、视觉和回答耗尽总时限后直接返回 504。"],
+        ["ClientCommit 尚未发生", "响应一旦提交客户端，不再安全重试或切换模型。"],
+      ]),
+      diagramSection(
+        "retry-timeout-state-machine.svg",
+        "重试、超时与提交边界状态机",
+        "错误可恢复、规则命中、预算、deadline 和 ClientCommit 边界必须同时允许。",
+      ),
+      noteSection("重试与模型切换", [
+        "401、403 和未配置为可恢复的 4xx 不应通过重试掩盖。",
+        "同模型重试用尽或不可用后，只有冻结执行计划包含候选且切换预算允许时才会换模型。",
+        "本项目只连接一个 Upstream；节点负载均衡、健康检查和熔断由该网关负责。",
+      ]),
+      noteSection("排查 504", [
+        "先查看共享总耗时和各物理调用耗时，再确认是否在进入重试判断前就已达到 deadline。",
+        "路由轨迹中的 0 / network 表示没有有效 HTTP 状态；它仍需满足规则和预算才可能重试。",
+      ]),
+    ],
+    ["打开 Profiles", "/_admin/profiles"],
+  );
+}
+
+function agentsHelp() {
+  return helpPage(
+    "Agent 配置",
+    "后台根据 Profile 协议生成 Claude Code、OpenCode、Codex 或通用客户端示例。",
+    [
+      listSection("主要操作", [
+        "先保存 Profile，再选择客户端和配置作用域。",
+        "填写代理地址和临时密钥占位符，下载或复制生成结果。",
+        "使用 Profile 对应 URL，确保请求落入正确隔离边界。",
+      ], true),
+      noteSection("安全边界", [
+        "生成器不会把输入的临时密钥保存到数据库。",
+        "示例只生成连接和模型映射；调用路径与会话字段仍由客户端协议决定。",
+      ]),
+    ],
+    ["选择 Profile", "/_admin/profiles"],
+  );
+}
+
+function statisticsHelp() {
+  return helpPage(
+    "统计与排障",
+    "用量统计、路由轨迹和模型表现分别回答用了多少、为什么这样选，以及模型实际表现如何。",
+    [
+      listSection("推荐排查顺序", [
+        "先用会话 ID 或 request_trace_id 定位请求，确认最终状态和总耗时。",
+        "查看任务分析、候选筛选、视觉处理、模型回答和请求失败分别在哪一步。",
+        "展开候选排除原因和物理调用，核对实际模型、状态、重试、切换和费用。",
+        "对比相邻请求，确认它们是同一会话的独立请求，不要把后续成功当成本次自动重试。",
+      ], true),
+      tableSection("常见信号", ["信号", "含义"], [
+        ["0 / network", "上游调用没有取得有效 HTTP 状态，常见于连接中断或 deadline。"],
+        ["504", "代理共享截止时间已耗尽；检查分析、视觉和回答累计耗时。"],
+        ["没有视觉物理调用", "可能是原生视觉透传、未启用视觉，或识图缓存命中。"],
+        ["候选被排除", "查看能力、Production 资格、质量、稳定性和严重错误率门槛。"],
+      ]),
+      noteSection("安全 Debug 日志", [
+        "以 LOG_LEVEL=debug 启动服务，用 request_trace_id 串联 classification、candidate、attempt_plan、call 和 completed。",
+        "Debug 仅记录结构化判断事实和费用，不记录请求正文、图片、鉴权信息或完整回复。",
+      ]),
+    ],
+    ["打开统计", "/_admin/stats"],
+  );
 }
 
 function glossaryHelp() {
+  return helpPage(
+    "术语表",
+    "这些词对应当前后台字段和路由轨迹，不代表模型的永久全局评分。",
+    [
+      tableSection("请求与隔离", ["术语", "含义"], [
+        ["Profile", "协议、Upstream、模型目录、Policy、视觉和容错的永久隔离边界。"],
+        ["显式模型", "调用方指定具体 model；不进入智能路由。"],
+        ["model=auto", "由代理分析任务并选择实际回答模型。"],
+        ["Session", "识别同一会话，用于分类复用、模型稳定和提示缓存保护。"],
+      ]),
+      tableSection("分类与候选", ["术语", "含义"], [
+        ["任务类型", "例如 code、research 或 simple，用于选择 Route。"],
+        ["难度", "easy、medium、hard 或 unknown。"],
+        ["风险", "本轮意图和实际操作的安全等级；普通 Shell/Edit 历史不会天然判为高风险。"],
+        ["分类置信度", "任务分析结果的可信程度；不足时按安全回退处理。"],
+        ["Production 候选", "有生产资格并通过本次硬门槛后可以接收在线流量。"],
+        ["Shadow 候选", "只积累证据，不接收在线回答流量。"],
+      ]),
+      tableSection("执行与费用", ["术语", "含义"], [
+        ["统一尝试预算", "共同限制任务分析、视觉、回答、重试、切换、时间和费用。"],
+        ["ClientCommit", "响应已开始发送给客户端；之后不能再安全换一次完整回答。"],
+        ["物理调用", "真正发送到上游的一次请求，包含辅助调用和主回答调用。"],
+        ["完整成本", "任务分析、视觉、回答、重试和切换产生的全部已知费用。"],
+      ]),
+    ],
+  );
+}
+
+function helpPage(title, description, sections, action) {
   const page = element("div", "stack routing-help-page");
   const hero = element("section", "card stack routing-help-hero");
-  hero.append(
-    textElement("h2", "名词解释"),
-    textElement(
-      "p",
-      "这里解释后台和日志中反复出现的词。可以先理解中文含义，再进入对应功能配置。",
-      "muted",
-    ),
-  );
-  page.append(
-    hero,
-    glossarySection("基础配置", [
-      ["Profile", "一套彼此隔离的代理配置。", "例如 /crs 和 /jdcloud 可以连接不同上游并使用不同规则。"],
-      ["Upstream", "Profile 默认连接的上游模型服务地址。", "显式模型请求通常直接转发到这里。"],
-      ["协议", "调用方和上游使用的 API 格式。", "Anthropic Messages、OpenAI Chat Completions 或 Responses。"],
-      ["模型 ID", "请求中 model 字段的原始值。", "claude-glm-5.2 会原样发送，不会被自动改成 GLM-5.2。"],
-      ["模型目录", "当前 Profile 已登记的模型事实。", "记录上下文、视觉、工具、结构化输出和价格，不保存模型或密钥。"],
-      ["Agent 配置", "供客户端连接代理的配置示例。", "可为 Claude Code、OpenCode 或 Codex 生成，但不会保存填写的密钥。"],
-    ]),
-    glossarySection("视觉增强", [
-      ["主模型", "最终回答用户问题的模型。", "主模型不支持图片时仍可以借助视觉增强。"],
-      ["视觉模型", "专门把图片转换为客观文字描述的模型。", "它负责看图，不负责代替主模型完成最终回答。"],
-      ["视觉增强", "先识图，再把描述交给原主模型回答。", "它补充主模型的视觉能力，并不等于直接升级主模型。"],
-      ["视觉缓存", "复用同一图片和同一识图配置产生的描述。", "命中后不再调用视觉模型，但主回答仍需正常请求上游。"],
-    ]),
-    glossarySection("智能路由", [
-      ["model=auto", "让代理代替调用方选择实际模型。", "调用方指定具体模型时不会进入智能路由。"],
-      ["参与模型", "管理员明确允许智能路由选择的模型。", "新录入模型不会自动加入，避免意外产生费用。"],
-      ["任务分析模型", "在本地规则无法确定时判断任务类型、难度和风险的轻量模型。", "例如把请求识别为 simple、coding 或 long_context。"],
-	  ["任务类型", "请求要完成的工作类别。", "例如 code、research 或 simple；用于映射 Route。"],
-	  ["难度", "当前任务预计需要的推理强度。", "easy、medium、hard 或 unknown；可与任务类型一起映射更具体的 Route。"],
-	  ["风险", "当前请求是否涉及明确敏感操作。", "普通 Shell/Edit 和历史工具调用不会天然成为高风险；分析失败显示为未知。"],
-	  ["分类置信度", "任务分析结果的可信程度。", "置信度不足时不强行采用，按安全回退规则处理。"],
-	  ["分析回退", "任务分析失败或置信度不足时使用强模型基线。", "它不等于高风险，也不会产生动态评测样本。"],
-      ["强模型基线", "判断失败、高风险或普通候选都不合格时使用的可靠兜底模型。", "它是质量参照和安全下限，不代表每次请求都调用。"],
-      ["Route", "一类任务的选模规则集合。", "coding Route 可以有自己的候选模型、质量门槛和错误率上限。"],
-      ["候选模型", "某个 Route 允许比较的参与模型。", "候选先过能力和质量门槛，再比较完整成本。"],
-      ["硬能力", "请求必须具备、不能用价格补偿的能力。", "工具调用或结构化输出不满足时，模型直接被排除。"],
-      ["质量估计", "某模型在某个 Route 下完成任务的当前能力估计。", "92% 只表示该 Route 下的估计，不是永久的模型总分。"],
-      ["严重错误率", "可能造成任务失败或错误执行的结果比例。", "超过 Route 上限时，即使价格更低也不会被选择。"],
-      ["策略", "Route、候选、门槛和预算的完整版本。", "发布新策略不会原地改写正在使用的旧版本。"],
-      ["Session 固定模型", "同一会话优先继续使用已经成功的模型。", "减少回答风格和缓存前缀频繁变化；能力升级时仍可换模型。"],
-      ["模型主动升级", "回答模型明确发现能力不足时，请求代理切换到更强模型。", "它受工具能力、模型切换次数和总预算限制。"],
-      ["动态策略优化", "异步比较候选与强基线并积累证据。", "不影响当前回答，也不会自动发布，只生成供管理员审查的新草稿。"],
-      ["贝叶斯保守估计", "把管理员先验和异步评测证据合并成可信区间。", "质量使用保守下界，严重错误率使用保守上界；发布学习草稿后才影响在线路由。"],
-    ]),
-    glossarySection("容错与费用", [
-      ["上游节点", "同一 Profile 内一个实际可调用的模型服务地址。", "主上游节点不可用时，可在同模型的兼容备用节点间切换。"],
-      ["重试", "在可恢复错误发生后再次调用当前上游节点。", "401、403 和不可重试的 4xx 不会重试。"],
-      ["模型切换", "主回答尚未提交客户端时，改用计划内的另一个模型。", "它不同于同模型的上游节点切换，通常也会改变缓存前缀。"],
-      ["统一尝试预算", "一次请求允许消耗的所有调用和时间上限。", "共同限制任务分析、视觉、主回答、重试及各种切换。"],
-      ["完整成本", "完成这次请求产生的全部模型费用。", "包括输入、输出、缓存读写、视觉、任务分析、重试和切换。"],
-      ["路由轨迹", "系统为什么选择、重试或切换模型的过程记录。", "可在统计页查看，不保存原始提示词和完整回答。"],
-    ]),
-  );
+  hero.append(textElement("h2", title), textElement("p", description, "muted"));
+  if (action) hero.append(linkElement(action[0], action[1], "button button-secondary"));
+  page.append(hero, ...sections);
   return page;
 }
 
-function glossarySection(title, rows) {
-  return tableSection(title, ["名词", "简单理解", "例子或边界"], rows);
-}
-
-function simpleHelpTopic({ title, description, steps, notes, action }) {
-  const page = element("div", "stack routing-help-page");
-  const hero = element("section", "card stack routing-help-hero");
-  hero.append(
-    textElement("h2", title),
-    textElement("p", description, "muted"),
-    linkElement(action[0], action[1], "button button-secondary"),
-  );
-  const stepsSection = element("section", "card stack routing-help-section");
-  stepsSection.append(textElement("h2", "主要操作"), orderedList(steps));
-  const notesSection = element("section", "card stack routing-help-section");
-  notesSection.append(textElement("h2", "关键边界"), unorderedList(notes));
-  page.append(hero, stepsSection, notesSection);
-  return page;
-}
-
-function intelligentRoutingHelp() {
-  const page = element("div", "stack routing-help-page");
-  page.append(
-    hero(),
-    conversationFlow(),
-    diagramFigure(
-      "智能路由整体架构",
-      "/_admin/assets/current/intelligent-routing-architecture.svg",
-      "智能路由控制面与请求面架构图：管理后台发布策略快照，Agent 请求经过 Profile、任务判断、Route 规划和统一预算后调用上游模型。",
-      "控制面只负责配置、版本和热加载；请求面在固定 Profile 和策略快照内完成选模、视觉、预算与执行。实线是主流程，虚线是异步反馈，点线是配置或状态依赖。",
-      "architecture",
-    ),
-    diagramFigure(
-      "首次请求与后续追问流程",
-      "/_admin/assets/current/intelligent-routing-flow.svg",
-      "model auto 会话流程图：首次请求通过本地规则或轻量模型分析任务，后续追问复用 Session，并允许回答模型在输出正文前申请升级。",
-      "左侧是首次请求，右侧是有效 Session 下的后续追问。两条路径都先完成每轮硬检查，再汇合到回答与主动升级流程；箭头只沿各自路径连接。",
-      "flow",
-    ),
-    strategyFields(),
-    selectionExample(),
-    bayesianLearning(),
-    diagramFigure(
-      "异步评测与贝叶斯学习流程",
-      "/_admin/assets/current/intelligent-routing-learning-flow.svg",
-      "异步贝叶斯学习流程图：成功请求经过抽样、盲化对比、证据聚合和 Beta 后验更新，达到可靠样本后生成学习草稿，再由管理员决定是否发布。",
-      "虚线是异步证据链，不阻塞当前回答；实线是管理员控制的发布链。贝叶斯结果只有进入新 active 策略后才影响未来请求。",
-      "learning",
-    ),
-    budgetFields(),
-    boundaries(),
-  );
-  return page;
-}
-
-function conversationFlow() {
+function listSection(title, items, ordered = false) {
   const section = element("section", "card stack routing-help-section");
-  section.append(
-    textElement("h2", "首次请求与后续追问"),
-    textElement(
-      "p",
-      "只有 Agent 持续发送同一个有效的 X-LLM-Proxy-Session-ID，系统才能复用会话判断；没有有效 Session 时，每次都按首次请求处理。",
-      "muted",
-    ),
-  );
-  section.append(wrapTable(dataTable(
-    ["阶段", "怎么判断", "如何升级"],
-    [
-      ["首次请求", "先运行本地零成本规则；无法确定时才调用轻量任务分析模型，然后映射 Route 并选模。", "选中的低级模型仍可在回答正文前调用内部升级工具，作为第二层保护。"],
-      ["后续追问", "跳过轻量任务分析，沿用 Session 中的任务类型、Route 和模型；每轮仍检查风险与硬能力。", "当前模型发现任务明显变难时调用内部工具，代理用计划内更强模型重放原始请求。"],
-    ],
-  )));
+  section.append(textElement("h2", title), listElement(ordered ? "ol" : "ul", items));
   return section;
 }
 
-function hero() {
-  const section = element("section", "card stack routing-help-hero");
-  section.append(
-    textElement("h2", "智能路由配置说明"),
-    textElement(
-      "p",
-      "这份帮助对应 Profile 的“智能路由”页面。核心原则是：先过门槛，再比成本；价格不会补偿能力不足、质量不足或严重错误率过高。",
-      "muted",
-    ),
-    linkElement("先看名词解释", helpHref("glossary")),
-    linkElement("返回 Profiles", "/_admin/profiles", "button button-secondary"),
-  );
-  return section;
+function noteSection(title, items) {
+  return listSection(title, items);
 }
 
-function diagramFigure(title, src, alt, caption, variant) {
-  const section = element(
-    "section",
-    `card stack routing-help-section routing-help-diagram routing-help-diagram-${variant}`,
-  );
-  const figure = element("figure", "stack");
-  const image = element("img");
-  image.src = src;
-  image.alt = alt;
-  image.loading = "lazy";
-  figure.append(image, textElement("figcaption", caption, "muted"));
-  section.append(textElement("h2", title), figure);
-  return section;
-}
-
-function strategyFields() {
-  return tableSection(
-    "策略与 Route 字段",
-    ["字段", "怎么填写", "对路由的影响"],
-    [
-      ["策略名称", "唯一版本号，格式为 YYYYMMDD-NNN；保存后不原地修改。", "用于固定、发布和追踪策略版本。"],
-      ["策略别名", "选填，例如“日常均衡”或“质量优先”。", "仅用于后台识别，不参与判断。"],
-      ["默认 Route", "选择一个已添加的 Route。", "任务类型没有显式映射时使用。"],
-      ["Route ID", "策略内唯一的内部标识，例如 simple、coding。", "供任务映射引用，不发送给上游。"],
-      ["最低质量", "该类任务可以接受的最低质量百分比。", "候选质量低于它时直接排除。"],
-      ["最大严重错误率", "该类任务可以接受的严重错误率上限。", "候选超过它时直接排除，价格不能抵消。"],
-      ["候选模型", "从当前 Profile 已勾选的参与模型中选择。", "只在当前 Route 中参与选型。"],
-      ["当前质量估计", "模型在当前 Route 下的初始质量事实。", "与最低质量直接比较；不是模型全局评分。"],
-      ["当前严重错误率", "模型在当前 Route 下的初始严重错误事实。", "与最大严重错误率直接比较。"],
-      ["任务类型", "必须与任务分析模型返回的分类完全一致。", "通过任务映射选择 Route。"],
-      ["任务映射 Route", "为一个任务类型选择 Route。", "决定该类任务使用哪些候选和门槛。"],
-    ],
-  );
-}
-
-function selectionExample() {
+function elementSection(title, children) {
   const section = element("section", "card stack routing-help-section");
-  section.append(
-    textElement("h2", "为什么候选会被排除"),
-    textElement(
-      "p",
-      "假设 simple Route 的最低质量是 90%，最大严重错误率是 1%。",
-      "muted",
-    ),
-  );
-  const layout = element("div", "routing-help-example");
-  const table = dataTable(
-    ["候选", "质量", "严重错误率", "结果"],
-    [
-      ["fast", "92%", "0.5%", "通过门槛，参与成本比较"],
-      ["strong", "99%", "0.1%", "通过门槛，参与成本比较"],
-      ["cheap", "89%", "0.2%", "质量不足，排除"],
-      ["unstable", "95%", "1.2%", "严重错误率过高，排除"],
-    ],
-  );
-  const explanation = element("div", "stack routing-help-note");
-  explanation.append(
-    textElement("strong", "最终结果"),
-    textElement("p", "只有 fast 和 strong 进入价格比较，系统选择预计完整成本更低者。"),
-    textElement("p", "如果所有普通候选都被排除，只尝试满足硬能力要求的强模型基线；强基线也不满足时明确失败。"),
-  );
-  layout.append(wrapTable(table), explanation);
-  section.append(layout);
-  return section;
-}
-
-function bayesianLearning() {
-  const section = element("section", "card stack routing-help-section");
-  section.append(
-    textElement("h2", "贝叶斯算法在哪生效"),
-    textElement(
-      "p",
-      "贝叶斯更新不在当前请求中选模型。它只把异步盲评证据转换为质量保守下界和严重错误率保守上界；管理员生成、灰度并发布学习草稿后，未来请求才使用这些指标。",
-      "muted",
-    ),
-    orderedList([
-      "管理员填写的质量和严重错误率作为 20 个等效样本的 Beta 先验。",
-	  "评审分别返回正确性、完整性、指令遵循、格式与工具安全、任务完成度五个维度的胜、负或平局。",
-	  "五个维度分别按 30 天半衰期累计，再按 40%、20%、20%、10%、10% 汇总。",
-      "系统计算单侧 95% 保守区间；五维有效样本达到 20 后才允许生成学习草稿。",
-      "active 策略不会被后台证据直接修改，也不使用在线 Bandit 探索模型。",
-    ]),
-  );
-  return section;
-}
-
-function budgetFields() {
-  return tableSection(
-    "统一尝试预算",
-    ["字段", "限制什么", "建议理解"],
-    [
-      ["主回答尝试上限", "首次回答、回答重试和模型切换的总次数。", "限制最终回答链路，默认 2。"],
-      ["辅助调用上限", "任务分析和实际未命中缓存的视觉调用总数。", "限制回答前的辅助模型调用，默认 2。"],
-      ["总上游调用上限", "当前请求发出的全部上游调用。", "同时约束主回答与辅助调用，默认 5。"],
-      ["单节点重试上限", "同一上游节点发生可重试故障后的追加次数。", "不会绕过总上游调用上限。"],
-      ["上游节点切换上限", "同一模型最多切换多少个备用上游节点。", "0 表示不切换。"],
-      ["模型切换上限", "回答提交客户端前最多切换多少次主模型。", "模型主动升级至少需要 1。"],
-      ["请求总截止时间", "任务分析、视觉、回答、重试共享的总时限。", "例如 2m；不是每次调用各有 2m。"],
-      ["最坏费用上限", "冻结执行计划时允许的最坏预计费用。", "0 表示不限制；不会假设缓存一定命中。"],
-    ],
-  );
-}
-
-function boundaries() {
-  const section = element("section", "card stack routing-help-section");
-  section.append(textElement("h2", "容易误解的边界"));
-  const list = element("ul", "stack");
-  for (const text of [
-    "质量和严重错误率描述的是“某模型在某个 Route 下”的表现，不是一个永久的全局模型分数。",
-    "动态策略优化不会直接修改 active 策略；它只能根据异步评测证据生成新的策略草稿。",
-    "高风险请求优先使用强模型基线，不会因为低成本候选的配置分数较高而降级。",
-    "显式 model 请求不进入智能路由；只有 model=auto 才读取这些配置。",
-    "Session 会优先保持同一 Route 已成功的模型，但能力或质量要求升级时仍可切换。",
-    "轻量任务分析主要服务首次请求；后续追问依靠 Session、每轮硬检查和模型主动升级工具。",
-	"会话历史里的 shell_exec 或 edit 只说明之前做过什么；只有本轮最新文本或强制操作明确命中敏感规则时才进入高风险。",
-  ]) {
-    list.append(textElement("li", text));
-  }
-  section.append(list);
+  section.append(textElement("h2", title), ...children);
   return section;
 }
 
 function tableSection(title, headings, rows) {
   const section = element("section", "card stack routing-help-section");
-  section.append(textElement("h2", title), wrapTable(dataTable(headings, rows)));
-  return section;
-}
-
-function dataTable(headings, rows) {
+  const wrapper = element("div", "table-wrap");
   const table = element("table");
   const head = element("thead");
   const headRow = element("tr");
@@ -448,25 +317,26 @@ function dataTable(headings, rows) {
   const body = element("tbody");
   for (const row of rows) {
     const tableRow = element("tr");
-    for (const cell of row) tableRow.append(textElement("td", cell));
+    for (const value of row) tableRow.append(textElement("td", value));
     body.append(tableRow);
   }
   table.append(head, body);
-  return table;
-}
-
-function wrapTable(table) {
-  const wrapper = element("div", "table-wrap");
   wrapper.append(table);
-  return wrapper;
+  section.append(textElement("h2", title), wrapper);
+  return section;
 }
 
-function orderedList(items) {
-  return listElement("ol", items);
-}
-
-function unorderedList(items) {
-  return listElement("ul", items);
+function diagramSection(filename, alt, caption) {
+  const section = element("section", "card stack routing-help-section routing-help-diagram");
+  const figure = element("figure", "stack");
+  const image = element("img");
+  image.setAttribute("src", `/_admin/assets/current/${filename}`);
+  image.setAttribute("alt", alt);
+  image.setAttribute("loading", "lazy");
+  image.setAttribute("decoding", "async");
+  figure.append(image, textElement("figcaption", caption, "muted"));
+  section.append(figure);
+  return section;
 }
 
 function listElement(tagName, items) {

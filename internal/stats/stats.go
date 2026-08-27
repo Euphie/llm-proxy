@@ -15,11 +15,12 @@ const usageTimeFormat = "2006-01-02T15:04:05.000000000Z"
 
 // DB wraps a SQLite database for async usage recording.
 type DB struct {
-	db             *sql.DB
-	afterWrite     func()
-	launchWorker   func(func())
-	closingStarted chan struct{}
-	beginQueryTx   func(context.Context) (queryTx, error)
+	db                     *sql.DB
+	afterWrite             func()
+	launchWorker           func(func())
+	closingStarted         chan struct{}
+	beginQueryTx           func(context.Context) (queryTx, error)
+	onRoutingTraceRecorded func(context.Context, int64) error
 
 	mu        sync.Mutex
 	closing   bool
@@ -38,6 +39,7 @@ type RequestMeta struct {
 type RoutingTrace struct {
 	CreatedAt                     time.Time
 	CorrelationID                 string
+	SessionKey                    []byte
 	ProfileID                     int64
 	ProfileSlug                   string
 	Protocol                      string
@@ -49,14 +51,17 @@ type RoutingTrace struct {
 	Risk                          string
 	ClassificationSource          string
 	ClassificationConfidenceBPS   int
+	TaskTypeConfidenceBPS         int
+	DifficultyConfidenceBPS       int
+	RiskConfidenceBPS             int
+	ClassificationUnderspecified  bool
+	ComplexitySignals             map[string]bool
 	ClassificationReasonCodes     []string
 	EstimatedInputTokens          int
 	RequestedOutputTokens         int
 	DecisionReason                string
 	InitialModel                  string
 	FinalModel                    string
-	InitialTarget                 string
-	FinalTarget                   string
 	VisionMode                    string
 	StatusCode                    int
 	ClientCommitted               bool
@@ -66,13 +71,15 @@ type RoutingTrace struct {
 	ModelSwitches                 int
 	SelfEscalations               int
 	SelfEscalationReason          string
-	TargetSwitches                int
 	PlannedWorstCaseCostMicroUSD  int64
 	ConsumedEstimatedCostMicroUSD int64
 	HeldCostMicroUSD              int64
 	KnownActualCostMicroUSD       int64
 	AllActualCostsKnown           bool
 	ElapsedMilliseconds           int64
+	RuntimeRevision               int64
+	PolicyVersionID               int64
+	ModelCatalogRevision          int64
 }
 
 type CandidateDecision struct {
@@ -80,23 +87,25 @@ type CandidateDecision struct {
 	Decision                string
 	ReasonCode              string
 	QualityScoreBPS         int
+	StabilityScoreBPS       int
 	SevereErrorRateBPS      int
+	ExpectedLatencyMS       int64
+	CostEfficiencyScoreBPS  int
+	PerformanceScoreBPS     int
+	RoutingScoreBPS         int
 	ExpectedCostMicroUSD    int64
 	AnswerWorstCostMicroUSD int64
 	VisionCallCostMicroUSD  int64
 	VisionMode              string
-	UpstreamNodes           []string
 }
 
 type PhysicalCall struct {
 	Sequence           int
 	Kind               string
 	Model              string
-	Target             string
 	ImageIndex         int
 	RetryIndex         int
 	ModelSwitchIndex   int
-	TargetSwitchIndex  int
 	EstimatedMicroUSD  int64
 	ActualCostKnown    bool
 	ActualMicroUSD     int64
@@ -183,6 +192,8 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 	calls []PhysicalCall,
 	candidates []CandidateDecision,
 ) {
+	trace.SessionKey = append([]byte(nil), trace.SessionKey...)
+	trace.ComplexitySignals = cloneBoolMap(trace.ComplexitySignals)
 	calls = append([]PhysicalCall(nil), calls...)
 	candidates = cloneCandidateDecisions(candidates)
 	createdAt := trace.CreatedAt.UTC()
@@ -191,6 +202,10 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 	}
 	createdAtText := createdAt.Format(usageTimeFormat)
 	s.recordAsync(func() {
+		if len(trace.SessionKey) != 0 && len(trace.SessionKey) != 32 {
+			slog.Warn("routing trace: session key is invalid")
+			return
+		}
 		if (len(calls) > 0 || len(candidates) > 0) && strings.TrimSpace(trace.CorrelationID) == "" {
 			slog.Warn("routing trace: child correlation is empty")
 			return
@@ -210,6 +225,11 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 			slog.Warn("routing trace: classification reason codes are invalid")
 			return
 		}
+		complexitySignals, ok := controlledBoolMapJSON(trace.ComplexitySignals)
+		if !ok {
+			slog.Warn("routing trace: complexity signals are invalid")
+			return
+		}
 		tx, err := s.db.Begin()
 		if err != nil {
 			slog.Warn("routing trace: begin failed", "err", err)
@@ -218,9 +238,12 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 		defer tx.Rollback()
 		result, err := tx.Exec(
 			`INSERT INTO routing_traces (
-				created_at, correlation_id, profile_id, profile_slug, protocol, path,
+				created_at, correlation_id, session_key, profile_id, profile_slug, protocol, path,
 				strategy_name, route_id, task_type, difficulty, risk, classification_source,
-				classification_confidence_bps, classification_reason_codes,
+				classification_confidence_bps, task_type_confidence_bps,
+				difficulty_confidence_bps, risk_confidence_bps,
+				classification_underspecified, complexity_signals,
+				classification_reason_codes,
 				estimated_input_tokens, requested_output_tokens, decision_reason,
 				initial_model, final_model, initial_target, final_target,
 				vision_mode, status_code,
@@ -230,10 +253,12 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 				planned_worst_case_cost_micro_usd, consumed_estimated_cost_micro_usd,
 				held_cost_micro_usd, known_actual_cost_micro_usd,
 				all_actual_costs_known, elapsed_ms
+				,runtime_revision, policy_version_id, model_catalog_revision
 			) VALUES (
-				?, ?, (SELECT id FROM profiles WHERE id = ?), ?, ?, ?,
+				?, ?, ?, (SELECT id FROM profiles WHERE id = ?), ?, ?, ?,
 				?, ?, ?, ?, ?, ?,
-				?, ?, ?, ?, ?,
+				?, ?, ?, ?, ?, ?, ?,
+				?, ?, ?,
 				?, ?, ?, ?,
 				?, ?,
 				?, ?, ?,
@@ -241,10 +266,11 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 				?, ?,
 				?, ?,
 				?, ?,
-				?, ?
+				?, ?, ?, ?, ?
 			)`,
 			createdAtText,
 			trace.CorrelationID,
+			nullableSessionKey(trace.SessionKey),
 			trace.ProfileID,
 			trace.ProfileSlug,
 			trace.Protocol,
@@ -256,14 +282,19 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 			trace.Risk,
 			trace.ClassificationSource,
 			trace.ClassificationConfidenceBPS,
+			trace.TaskTypeConfidenceBPS,
+			trace.DifficultyConfidenceBPS,
+			trace.RiskConfidenceBPS,
+			boolInt(trace.ClassificationUnderspecified),
+			complexitySignals,
 			reasonCodes,
 			trace.EstimatedInputTokens,
 			trace.RequestedOutputTokens,
 			trace.DecisionReason,
 			trace.InitialModel,
 			trace.FinalModel,
-			trace.InitialTarget,
-			trace.FinalTarget,
+			"primary",
+			"primary",
 			trace.VisionMode,
 			trace.StatusCode,
 			boolInt(trace.ClientCommitted),
@@ -271,7 +302,7 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 			trace.AuxiliaryCalls,
 			trace.TotalOutboundCalls,
 			trace.ModelSwitches,
-			trace.TargetSwitches,
+			0,
 			trace.SelfEscalations,
 			trace.SelfEscalationReason,
 			trace.PlannedWorstCaseCostMicroUSD,
@@ -280,6 +311,9 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 			trace.KnownActualCostMicroUSD,
 			boolInt(trace.AllActualCostsKnown),
 			trace.ElapsedMilliseconds,
+			trace.RuntimeRevision,
+			trace.PolicyVersionID,
+			trace.ModelCatalogRevision,
 		)
 		if err != nil {
 			slog.Warn("routing trace: write failed", "err", err)
@@ -301,8 +335,8 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 				status_code, outcome
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				createdAtText, traceID, trace.CorrelationID, call.Sequence, call.Kind,
-				call.Model, call.Target, call.ImageIndex, call.RetryIndex,
-				call.ModelSwitchIndex, call.TargetSwitchIndex,
+				call.Model, "primary", call.ImageIndex, call.RetryIndex,
+				call.ModelSwitchIndex, 0,
 				call.EstimatedMicroUSD, boolInt(call.ActualCostKnown),
 				call.ActualMicroUSD, boolInt(call.UsagePresent), call.InputTokens,
 				call.OutputTokens, call.CacheReadTokens, call.CacheWriteTokens,
@@ -314,17 +348,20 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 			}
 		}
 		for index, candidate := range candidates {
-			upstreamNodes, _ := controlledStringListJSON(candidate.UpstreamNodes)
 			_, err = tx.Exec(`INSERT INTO routing_candidate_decisions (
 				trace_id, ordinal, model, decision, reason_code,
-				quality_score_bps, severe_error_rate_bps,
+				quality_score_bps, stability_score_bps, severe_error_rate_bps,
+				expected_latency_ms, cost_efficiency_score_bps,
+				performance_score_bps, routing_score_bps,
 				expected_cost_micro_usd, answer_worst_cost_micro_usd,
 				vision_call_cost_micro_usd, vision_mode, upstream_nodes
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				traceID, index+1, candidate.Model, candidate.Decision, candidate.ReasonCode,
-				candidate.QualityScoreBPS, candidate.SevereErrorRateBPS,
+				candidate.QualityScoreBPS, candidate.StabilityScoreBPS, candidate.SevereErrorRateBPS,
+				candidate.ExpectedLatencyMS, candidate.CostEfficiencyScoreBPS,
+				candidate.PerformanceScoreBPS, candidate.RoutingScoreBPS,
 				candidate.ExpectedCostMicroUSD, candidate.AnswerWorstCostMicroUSD,
-				candidate.VisionCallCostMicroUSD, candidate.VisionMode, upstreamNodes,
+				candidate.VisionCallCostMicroUSD, candidate.VisionMode, "[]",
 			)
 			if err != nil {
 				slog.Warn("routing candidate: write failed", "err", err)
@@ -333,14 +370,55 @@ func (s *DB) RecordRoutingTraceWithCallsAndCandidatesAsync(
 		}
 		if err := tx.Commit(); err != nil {
 			slog.Warn("routing trace: commit failed", "err", err)
+			return
 		}
+		s.notifyRoutingTraceRecorded(trace.ProfileID)
 	})
 }
 
+func (s *DB) SetRoutingTraceRecordedHook(hook func(context.Context, int64) error) {
+	s.mu.Lock()
+	s.onRoutingTraceRecorded = hook
+	s.mu.Unlock()
+}
+
+func (s *DB) notifyRoutingTraceRecorded(profileID int64) {
+	s.mu.Lock()
+	hook := s.onRoutingTraceRecorded
+	s.mu.Unlock()
+	if hook == nil || profileID <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Warn("routing.trace.evidence_hook_panicked", "profile_id", profileID)
+		}
+	}()
+	if err := hook(ctx, profileID); err != nil {
+		slog.Warn("routing.trace.evidence_hook_failed", "profile_id", profileID, "error", err)
+	}
+}
+
+func nullableSessionKey(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
 func cloneCandidateDecisions(source []CandidateDecision) []CandidateDecision {
-	cloned := append([]CandidateDecision(nil), source...)
-	for index := range cloned {
-		cloned[index].UpstreamNodes = append([]string(nil), cloned[index].UpstreamNodes...)
+	return append([]CandidateDecision(nil), source...)
+}
+
+func cloneBoolMap(source map[string]bool) map[string]bool {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]bool, len(source))
+	for key, value := range source {
+		cloned[key] = value
 	}
 	return cloned
 }
@@ -350,12 +428,14 @@ func validCandidateDecisions(candidates []CandidateDecision) bool {
 		if strings.TrimSpace(candidate.Model) == "" || strings.TrimSpace(candidate.ReasonCode) == "" ||
 			(candidate.Decision != "selected" && candidate.Decision != "eligible" && candidate.Decision != "rejected") ||
 			candidate.QualityScoreBPS < 0 || candidate.QualityScoreBPS > 10_000 ||
+			candidate.StabilityScoreBPS < 0 || candidate.StabilityScoreBPS > 10_000 ||
 			candidate.SevereErrorRateBPS < 0 || candidate.SevereErrorRateBPS > 10_000 ||
+			candidate.ExpectedLatencyMS < 0 ||
+			candidate.CostEfficiencyScoreBPS < 0 || candidate.CostEfficiencyScoreBPS > 10_000 ||
+			candidate.PerformanceScoreBPS < 0 || candidate.PerformanceScoreBPS > 10_000 ||
+			candidate.RoutingScoreBPS < 0 || candidate.RoutingScoreBPS > 10_000 ||
 			candidate.ExpectedCostMicroUSD < 0 || candidate.AnswerWorstCostMicroUSD < 0 ||
 			candidate.VisionCallCostMicroUSD < 0 {
-			return false
-		}
-		if _, ok := controlledStringListJSON(candidate.UpstreamNodes); !ok {
 			return false
 		}
 	}
@@ -365,6 +445,19 @@ func validCandidateDecisions(candidates []CandidateDecision) bool {
 func controlledStringListJSON(values []string) (string, bool) {
 	for _, value := range values {
 		if value == "" || strings.TrimSpace(value) != value || len(value) > 128 {
+			return "", false
+		}
+	}
+	body, err := json.Marshal(values)
+	return string(body), err == nil
+}
+
+func controlledBoolMapJSON(values map[string]bool) (string, bool) {
+	if len(values) > 32 {
+		return "", false
+	}
+	for key := range values {
+		if key == "" || strings.TrimSpace(key) != key || len(key) > 64 {
 			return "", false
 		}
 	}

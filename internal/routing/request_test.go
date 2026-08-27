@@ -18,15 +18,6 @@ func TestParseAutoRequestUsesSanitizedCanonicalEnvelopeForTokenEstimate(t *testi
 	if request.Facts.EstimatedInputTokens > 500 {
 		t.Fatalf("image estimate=%d", request.Facts.EstimatedInputTokens)
 	}
-	runtime := routingRuntime(t, false)
-	if classification, matched := ClassifyLocal(
-		request,
-		runtime.Models["strong"],
-		runtime.AutoRouting.RiskPolicy,
-	); matched && classification.Risk == RiskHigh {
-		t.Fatalf("base64 image caused high-risk context routing: %+v", classification)
-	}
-
 	lookalike := `{"model":"auto","max_tokens":1000,"metadata":{"data":"` + large + `"},"messages":[{"role":"user","content":"hello"}]}`
 	request = autoAnthropicRequest(t, lookalike)
 	if request.Facts.EstimatedInputTokens < (3<<20)/4 {
@@ -56,6 +47,54 @@ func TestTokenEstimateKeepsOrdinaryToolSchemaBytes(t *testing.T) {
 	request := autoAnthropicRequest(t, body)
 	if request.Facts.EstimatedInputTokens < len(largeDescription)/4 {
 		t.Fatalf("tool schema estimate=%d", request.Facts.EstimatedInputTokens)
+	}
+}
+
+func TestParseAutoRequestDetectsAgentWorkflow(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol profile.Protocol
+		path     string
+		body     string
+		want     bool
+	}{
+		{
+			name: "claude code agent context", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","max_tokens":1000,"system":"Available user-invocable skills (invoke with Skill tool):","tools":[{"name":"Skill"}],"messages":[{"role":"user","content":"这个项目是不是用 JS 写的"}]}`,
+			want: true,
+		},
+		{
+			name: "claude code system message context", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","max_tokens":1000,"tools":[{"name":"Skill"}],"messages":[{"role":"system","content":"SessionStart hook additional context: private Agent instructions"},{"role":"user","content":"这个项目是不是用 JS 写的"}]}`,
+			want: true,
+		},
+		{
+			name: "codex agent context", protocol: profile.ProtocolOpenAI, path: "/v1/responses",
+			body: `{"model":"auto","instructions":"You are Codex, a coding agent. # AGENTS.md instructions","tools":[{"type":"function","name":"exec_command"}],"input":"inspect this project"}`,
+			want: true,
+		},
+		{
+			name: "ordinary tool request", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","max_tokens":1000,"tools":[{"name":"weather"}],"messages":[{"role":"user","content":"查天气"}]}`,
+			want: false,
+		},
+		{
+			name: "agent marker without tools", protocol: profile.ProtocolAnthropic, path: "/v1/messages",
+			body: `{"model":"auto","max_tokens":1000,"system":"You are Codex","messages":[{"role":"user","content":"hello"}]}`,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request, err := ParseAutoRequest(tt.protocol, http.MethodPost, tt.path, "application/json", []byte(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if request.Facts.RequiresAgentWorkflow != tt.want {
+				t.Fatalf("requires agent workflow=%v, want %v", request.Facts.RequiresAgentWorkflow, tt.want)
+			}
+		})
 	}
 }
 
@@ -588,5 +627,115 @@ func TestResponsesDirectAndMessageInputTextRemainAvailableForTaskAnalysis(t *tes
 	}
 	if got := request.EvaluationText(); got != "direct question\nmessage context" {
 		t.Fatalf("EvaluationText()=%q", got)
+	}
+}
+
+func TestTaskFingerprintStaysStableAcrossToolResultsAndChangesForNewUserTask(t *testing.T) {
+	key := SessionKey{1, 2, 3}
+	first := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[{"role":"user","content":"修复登录错误"}]
+	}`)
+	toolRound := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[
+			{"role":"user","content":"修复登录错误"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"read_file","input":{}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"package auth"}]}
+		]
+	}`)
+	next := autoAnthropicRequest(t, `{
+		"model":"auto","max_tokens":1000,
+		"messages":[
+			{"role":"user","content":"修复登录错误"},
+			{"role":"assistant","content":[{"type":"text","text":"完成"}]},
+			{"role":"user","content":"再增加密码重置功能"}
+		]
+	}`)
+	firstFingerprint, ok := first.TaskFingerprint(key)
+	if !ok {
+		t.Fatal("first task has no fingerprint")
+	}
+	toolFingerprint, ok := toolRound.TaskFingerprint(key)
+	if !ok || toolFingerprint != firstFingerprint {
+		t.Fatalf("tool round fingerprint=%x first=%x ok=%v", toolFingerprint, firstFingerprint, ok)
+	}
+	nextFingerprint, ok := next.TaskFingerprint(key)
+	if !ok || nextFingerprint == firstFingerprint {
+		t.Fatalf("new task fingerprint=%x first=%x ok=%v", nextFingerprint, firstFingerprint, ok)
+	}
+}
+
+func TestConversationTokenEstimateExcludesSystemPromptSkillsAndToolDefinitions(t *testing.T) {
+	body, err := json.Marshal(map[string]any{
+		"model":      "auto",
+		"max_tokens": 1000,
+		"system":     strings.Repeat("system skill instructions ", 3000),
+		"tools": []map[string]any{{
+			"name": "large_tool", "description": strings.Repeat("tool documentation ", 3000),
+			"input_schema": map[string]any{"type": "object"},
+		}},
+		"messages": []map[string]string{{"role": "user", "content": "short task"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := ParseAutoRequest(
+		profile.ProtocolAnthropic, http.MethodPost, "/v1/messages", "application/json", body,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Facts.EstimatedInputTokens < 10_000 || request.Facts.ConversationTokens > 100 {
+		t.Fatalf("facts=%+v", request.Facts)
+	}
+}
+
+func TestConversationTokenEstimateExcludesOpenAIFixedPromptMessages(t *testing.T) {
+	large := strings.Repeat("fixed skill instructions ", 3000)
+	tests := []struct {
+		name string
+		path string
+		body map[string]any
+	}{
+		{
+			name: "chat completions", path: "/v1/chat/completions",
+			body: map[string]any{
+				"model": "auto", "max_tokens": 1000,
+				"messages": []map[string]string{
+					{"role": "system", "content": large},
+					{"role": "developer", "content": large},
+					{"role": "user", "content": "short task"},
+				},
+			},
+		},
+		{
+			name: "responses", path: "/v1/responses",
+			body: map[string]any{
+				"model": "auto", "max_output_tokens": 1000, "instructions": large,
+				"input": []map[string]string{
+					{"role": "system", "content": large},
+					{"role": "developer", "content": large},
+					{"role": "user", "content": "short task"},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(test.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := ParseAutoRequest(
+				profile.ProtocolOpenAI, http.MethodPost, test.path, "application/json", body,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if request.Facts.EstimatedInputTokens < 10_000 || request.Facts.ConversationTokens > 100 {
+				t.Fatalf("facts=%+v", request.Facts)
+			}
+		})
 	}
 }

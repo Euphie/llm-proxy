@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import vinext from "vinext";
 import { defineConfig } from "vite";
 import type { Plugin } from "vite";
-import { sites } from "./build/sites-vite-plugin";
+import { sites } from "./build/sites-vite-plugin.ts";
 
 const localBindingConfig = {
   main: "./worker/index.ts",

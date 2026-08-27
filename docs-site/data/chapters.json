@@ -2,8 +2,8 @@
   "chapters": [
     {
       "slug": "overview",
-      "title": "智能路由概览",
-      "summary": "用一个简单流程说明 auto 如何在单个 Profile 内选模型、控成本并守住质量。",
+      "title": "系统概览",
+      "summary": "说明显式模型与 model=auto 的边界，以及当前系统实际负责什么。",
       "group": "理解方案",
       "icon": "compass",
       "accent": "blue",
@@ -11,29 +11,9 @@
       "evidence_level": "本项目源码与测试验证"
     },
     {
-      "slug": "source-baseline",
-      "title": "当前能力与目标",
-      "summary": "区分当前已实现能力与智能路由的待实现目标。",
-      "group": "理解方案",
-      "icon": "layers",
-      "accent": "cyan",
-      "implementation_status": "本版目标",
-      "evidence_level": "本项目源码验证"
-    },
-    {
-      "slug": "competitor-evidence",
-      "title": "参考方案与取舍",
-      "summary": "提炼竞品中值得采用的机制，并明确不照搬的复杂设计。",
-      "group": "理解方案",
-      "icon": "activity",
-      "accent": "orange",
-      "implementation_status": "本版目标",
-      "evidence_level": "竞品源码验证"
-    },
-    {
-      "slug": "core-model",
-      "title": "Profile 配置与模型角色",
-      "summary": "说明启用 auto 所需配置，以及 ModelCard、Target 和模型角色。",
+      "slug": "admin-workflow",
+      "title": "后台操作流程",
+      "summary": "按照当前管理后台页面完成 Profile、模型、策略和 Agent 配置。",
       "group": "理解方案",
       "icon": "sliders",
       "accent": "indigo",
@@ -41,69 +21,19 @@
       "evidence_level": "本项目源码与测试验证"
     },
     {
-      "slug": "profile-isolation",
-      "title": "Profile 隔离边界",
-      "summary": "URL 选定 Profile 后，路由、视觉、重试和评测始终留在该边界内。",
-      "group": "运行时",
-      "icon": "shield",
-      "accent": "red",
+      "slug": "profiles-models",
+      "title": "Profile 与模型目录",
+      "summary": "说明连接配置、模型事实、状态和运行时修订如何立即生效。",
+      "group": "理解方案",
+      "icon": "layers",
+      "accent": "cyan",
       "implementation_status": "已实现",
       "evidence_level": "本项目源码与测试验证"
     },
     {
-      "slug": "online-routing",
-      "title": "在线路由",
-      "summary": "规则先判断，拿不准时调用轻量任务分析器，再生成不可变执行计划。",
-      "group": "运行时",
-      "icon": "route",
-      "accent": "green",
-      "implementation_status": "已实现",
-      "evidence_level": "本项目源码与测试验证"
-    },
-    {
-      "slug": "quality-and-cost",
-      "title": "质量与成本",
-      "summary": "先满足 Route 质量门槛，再选择完整成本更低的模型。",
-      "group": "运行时",
-      "icon": "scale",
-      "accent": "yellow",
-      "implementation_status": "已实现",
-      "evidence_level": "本项目源码与测试验证"
-    },
-    {
-      "slug": "target-reliability",
-      "title": "Target 与容错",
-      "summary": "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。",
-      "group": "运行时",
-      "icon": "activity",
-      "accent": "teal",
-      "implementation_status": "已实现",
-      "evidence_level": "本项目源码与测试验证"
-    },
-    {
-      "slug": "runtime-reliability",
-      "title": "视觉、重试与 Session",
-      "summary": "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。",
-      "group": "运行时",
-      "icon": "shield",
-      "accent": "slate",
-      "implementation_status": "已实现",
-      "evidence_level": "本项目源码与测试验证"
-    },
-    {
-      "slug": "evaluation-feedback",
-      "title": "异步评测与策略优化",
-      "summary": "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。",
-      "group": "控制面",
-      "icon": "activity",
-      "accent": "orange",
-      "implementation_status": "已实现",
-      "evidence_level": "本项目源码与测试验证"
-    },
-    {
-      "slug": "strategy-lifecycle",
-      "title": "策略生命周期",
-      "summary": "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。",
+      "slug": "routing-policy",
+      "title": "Routing Policy",
+      "summary": "说明策略生成、编辑、生产资格、立即生效和历史回滚。",
       "group": "控制面",
       "icon": "git-branch",
       "accent": "indigo",
@@ -111,12 +41,62 @@
       "evidence_level": "本项目源码与测试验证"
     },
     {
-      "slug": "engineering-and-delivery",
-      "title": "实施范围与交付",
-      "summary": "明确 v1 范围、实施阶段和验收条件。",
+      "slug": "online-routing",
+      "title": "在线请求链路",
+      "summary": "从任务分析、候选门槛到执行计划解释一次 model=auto 请求。",
+      "group": "运行时",
+      "icon": "route",
+      "accent": "green",
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
+    },
+    {
+      "slug": "vision",
+      "title": "视觉预处理",
+      "summary": "解释原生视觉与复合视觉、识图缓存以及失败边界。",
+      "group": "运行时",
+      "icon": "activity",
+      "accent": "teal",
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
+    },
+    {
+      "slug": "reliability",
+      "title": "重试、超时与 Session",
+      "summary": "解释 overload_rules、统一预算、ClientCommit 和 Session 锁定。",
+      "group": "运行时",
+      "icon": "shield",
+      "accent": "slate",
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
+    },
+    {
+      "slug": "evaluation",
+      "title": "评测与自动校准",
+      "summary": "说明公开评测、本地证据、Shadow 和自动生产资格更新。",
+      "group": "控制面",
+      "icon": "activity",
+      "accent": "orange",
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
+    },
+    {
+      "slug": "observability",
+      "title": "统计与故障排查",
+      "summary": "使用路由轨迹、物理调用和模型表现定位请求问题。",
       "group": "交付",
       "icon": "database",
-      "accent": "slate",
+      "accent": "yellow",
+      "implementation_status": "已实现",
+      "evidence_level": "本项目源码与测试验证"
+    },
+    {
+      "slug": "operations",
+      "title": "运行边界与上线检查",
+      "summary": "汇总 Profile 隔离、网关职责、热更新和上线验收边界。",
+      "group": "交付",
+      "icon": "shield",
+      "accent": "red",
       "implementation_status": "已实现",
       "evidence_level": "本项目源码与测试验证"
     }

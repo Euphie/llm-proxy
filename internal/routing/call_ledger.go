@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
@@ -17,13 +18,14 @@ type CallLedgerEntry struct {
 	ImageIndex        int
 	RetryIndex        int
 	ModelSwitchIndex  int
-	TargetSwitchIndex int
 	EstimatedMicroUSD int64
 	ActualCostKnown   bool
 	ActualMicroUSD    int64
 	Usage             CallUsage
 	StatusCode        int
 	Outcome           string
+	ElapsedMS         int64
+	startedAt         time.Time
 }
 
 type CallLedger struct {
@@ -69,7 +71,6 @@ func NewCallLedger(correlationID string) *CallLedger {
 func (l *CallLedger) Begin(
 	ticket CallTicket,
 	modelSwitchIndex int,
-	targetSwitchIndex int,
 ) int {
 	if l == nil {
 		return 0
@@ -81,8 +82,9 @@ func (l *CallLedger) Begin(
 		CorrelationID: l.correlationID, Sequence: sequence,
 		Kind: ticket.Kind, Model: ticket.Model, Target: ticket.Target,
 		ImageIndex: ticket.ImageIndex, RetryIndex: ticket.RetryIndex,
-		ModelSwitchIndex: modelSwitchIndex, TargetSwitchIndex: targetSwitchIndex,
+		ModelSwitchIndex:  modelSwitchIndex,
 		EstimatedMicroUSD: ticket.EstimatedMicroUSD,
+		startedAt:         time.Now(),
 	})
 	return sequence
 }
@@ -112,6 +114,7 @@ func (l *CallLedger) CompleteWithUsage(
 	entry.Outcome = outcome
 	entry.Usage = usage
 	entry.ActualCostKnown = known
+	entry.completeTiming()
 	if known {
 		entry.ActualMicroUSD = actual
 	}
@@ -136,9 +139,17 @@ func (l *CallLedger) CompleteWithActual(
 	entry.StatusCode = statusCode
 	entry.Outcome = outcome
 	entry.ActualCostKnown = actualKnown
+	entry.completeTiming()
 	if actualKnown {
 		entry.ActualMicroUSD = actualMicroUSD
 	}
+}
+
+func (e *CallLedgerEntry) completeTiming() {
+	if e.ElapsedMS > 0 || e.startedAt.IsZero() {
+		return
+	}
+	e.ElapsedMS = max(int64(0), time.Since(e.startedAt).Milliseconds())
 }
 
 func (l *CallLedger) Snapshot() []CallLedgerEntry {

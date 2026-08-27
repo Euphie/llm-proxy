@@ -58,7 +58,7 @@ test("Profile overview summarizes capabilities without mounting the legacy form"
   assert.ok(linkByText(root, "编辑连接"));
 });
 
-test("reliability keeps ordinary retries editable while Auto upstream failover is unavailable", (t) => {
+test("reliability keeps ordinary retries editable without upstream failover controls", (t) => {
   const root = installFakeDOM(t);
   renderProfileEditor(root, profileFixture(), {
     section: "reliability",
@@ -68,8 +68,7 @@ test("reliability keeps ordinary retries editable while Auto upstream failover i
 
   assert.ok(findText(root, "容错规则"));
   assert.equal(findText(root, "上游节点容错"), undefined);
-  assert.ok(findTextIncludes(root, "备用上游节点"));
-  assert.equal(linkByText(root, "配置智能路由").getAttribute("href"), "/_admin/profiles/7/routing");
+  assert.equal(findTextIncludes(root, "备用上游节点"), undefined);
 });
 
 test("Profile section navigation protects unsaved changes", async (t) => {
@@ -92,11 +91,170 @@ test("Profile section navigation protects unsaved changes", async (t) => {
   assert.equal(event.defaultPrevented, true);
 });
 
+test("routing section preserves strategy and evaluation catalog view state", (t) => {
+  const root = installFakeDOM(t);
+  const profile = profileFixture();
+  profile.strategy_overview = { snapshot: { revision: 3 } };
+  profile.strategy_editing_id = 11;
+  profile.strategy_configuration_mode = "manual";
+  profile.strategy_generation_notice = "推荐草稿已生成，可以直接调整后保存。";
+  profile.evaluation_catalog = {
+    revision: "catalog-revision",
+    sources: [{ id: "livebench", name: "LiveBench" }],
+    results: [],
+  };
+  let renderedDraft;
+  let renderedActions;
+
+  renderProfileEditor(root, profile, {
+    section: "routing",
+    defaultProfileID: 7,
+    renderLegacy: (mount, draft, actions) => {
+      renderedDraft = draft;
+      renderedActions = actions;
+      legacySectionFixture(mount);
+    },
+  });
+
+  assert.deepEqual(renderedDraft.strategy_overview, profile.strategy_overview);
+  assert.equal(renderedDraft.strategy_editing_id, 11);
+  assert.equal(renderedDraft.strategy_configuration_mode, "manual");
+  assert.equal(
+    renderedDraft.strategy_generation_notice,
+    "推荐草稿已生成，可以直接调整后保存。",
+  );
+  assert.deepEqual(renderedDraft.evaluation_catalog, profile.evaluation_catalog);
+  assert.equal(renderedActions.editorSection, "routing");
+});
+
+test("v2 sections preserve the live Policy and model directory overviews", async (t) => {
+  const profile = profileFixture();
+  profile.config.version = 2;
+  profile.config.models = [];
+  profile.routing_policy_overview = {
+    runtime_state: { revision: 12, model_catalog_revision: 4 },
+    active: {
+      id: 31,
+      policy: {
+        name: "policy-31",
+        roles: {
+          participants: ["deepseek"],
+          strong_baseline_model: "deepseek",
+          task_analyzer_model: "deepseek",
+        },
+        dynamic_optimization: {
+          enabled: true,
+          auto_update_policy: true,
+          sample_rate_bps: 1000,
+          daily_budget_micro_usd: 100000,
+          reviewer_model: "deepseek",
+          max_concurrency: 1,
+          queue_capacity: 16,
+          task_timeout: "1m",
+        },
+        routes: [{ id: "general", candidates: [{ model: "deepseek" }] }],
+      },
+    },
+    history: [],
+    automatic_update: {
+      profile_id: 7,
+      dirty: false,
+      confirmation_count: 1,
+      last_outcome: "waiting_confirmation",
+      last_reason: "等待第 2/2 次一致证据窗口。",
+    },
+  };
+  profile.model_directory_overview = {
+    runtime_state: { revision: 12, model_catalog_revision: 4 },
+    models: [{
+      model_id: "deepseek",
+      status: "available",
+      status_reason: "",
+      capability: { id: "deepseek" },
+    }],
+  };
+
+  const routingRoot = installFakeDOM(t);
+  let appliedPolicy = null;
+  renderProfileEditor(routingRoot, profile, {
+    section: "routing",
+    defaultProfileID: 7,
+    applyRoutingPolicy: async (_revision, policy) => { appliedPolicy = policy; },
+  });
+  assert.ok(findText(routingRoot, "当前策略概览"));
+  assert.ok(findText(routingRoot, "policy-31"));
+  assert.ok(findText(routingRoot, "#12"));
+  assert.ok(findText(routingRoot, "困难任务基线"));
+  assert.ok(findText(routingRoot, "智能生成策略"));
+  assert.ok(findText(routingRoot, "手动调整"));
+  assert.ok(findText(routingRoot, "等待第 2 次一致证据"));
+  assert.equal(findText(routingRoot, "基本设置"), undefined);
+  assert.equal(
+    descendants(routingRoot).some((element) => element.className === "policy-json-editor"),
+    false,
+  );
+
+  await findText(routingRoot, "手动调整").dispatch("click");
+  assert.ok(findText(routingRoot, "1 模型与角色"));
+  assert.ok(findText(routingRoot, "2 任务映射"));
+  assert.ok(findText(routingRoot, "3 Route 与模型"));
+  assert.ok(findText(routingRoot, "高级设置"));
+  assert.ok(findText(routingRoot, "4 确认生效"));
+  assert.ok(findText(routingRoot, "模型角色"));
+  assert.equal(findText(routingRoot, "任务映射"), undefined);
+
+  await findText(routingRoot, "2 任务映射").dispatch("click");
+  assert.ok(findText(routingRoot, "任务映射"));
+  assert.equal(findText(routingRoot, "模型角色"), undefined);
+
+  await findText(routingRoot, "高级设置").dispatch("click");
+  assert.ok(findText(routingRoot, "策略与分析"));
+  assert.ok(findText(routingRoot, "Route 门槛与评分"));
+  assert.ok(findText(routingRoot, "调用预算"));
+  assert.ok(findText(routingRoot, "异步评测与风险"));
+  const automaticUpdateLabel = findText(routingRoot, "评测可靠后自动更新线上策略");
+  assert.ok(automaticUpdateLabel);
+  assert.ok(findTextIncludes(routingRoot, "连续两次一致确认"));
+  assert.ok(findTextIncludes(routingRoot, "证据缺失、不可靠或跌破门槛会立即撤销生产资格"));
+  assert.ok(findText(routingRoot, "高级：查看原始 JSON"));
+  const automaticUpdate = automaticUpdateLabel.parentNode.children[0];
+  automaticUpdate.checked = true;
+  await automaticUpdate.dispatch("change");
+  await findText(routingRoot, "4 确认生效").dispatch("click");
+  await findText(routingRoot, "保存并立即生效").dispatch("click");
+  assert.equal(appliedPolicy.dynamic_optimization.auto_update_policy, true);
+
+  const modelsRoot = new FakeElement("main");
+  renderProfileEditor(modelsRoot, profile, { section: "models", defaultProfileID: 7 });
+  assert.ok(findText(modelsRoot, "deepseek"));
+  assert.ok(findText(modelsRoot, "修订 #4"));
+  assert.ok(findText(modelsRoot, "当前线上用途：参与模型、困难任务基线、任务分析、Route general"));
+  assert.ok(findText(modelsRoot, "批量录入模型"));
+  assert.ok(findText(modelsRoot, "预览批量导入"));
+  const batchInput = descendants(modelsRoot).find(
+    (element) => element.name === "model_batch_ids",
+  );
+  assert.ok(batchInput);
+  batchInput.value = "unknown-batch-model";
+  await findText(modelsRoot, "预览批量导入").dispatch("click");
+  assert.ok(findText(modelsRoot, "确认导入 1 个模型"));
+  assert.ok(findText(modelsRoot, "没有可靠模板，请手动补充能力参数。"));
+  assert.ok(findText(modelsRoot, "上下文窗口"));
+  assert.ok(findText(modelsRoot, "支持工具调用"));
+  assert.ok(findText(modelsRoot, "支持 Agent 工作流"));
+  assert.ok(findText(modelsRoot, "输入价格（美元/百万 Token）"));
+  assert.equal(
+    descendants(modelsRoot).some(
+      (element) => element.tagName === "TEXTAREA" && String(element.value).includes('"id"'),
+    ),
+    false,
+  );
+});
+
 function legacySectionFixture(root) {
   const form = document.createElement("form");
   for (const heading of [
     "基础配置",
-    "上游节点容错",
     "模型能力",
     "智能路由",
     "视觉增强",
@@ -137,7 +295,6 @@ function profileFixture() {
       }],
       auto_routing: { enabled: false },
       vision: { enabled: false, model: "strong" },
-      targets: [],
       overload_rules: [],
     },
   };

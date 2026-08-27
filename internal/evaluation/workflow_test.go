@@ -12,6 +12,7 @@ func TestWorkflowGeneratesOnlyMissingReferenceAndBlindlyMapsReviewerWinner(t *te
 	generated := ""
 	reviewed := false
 	task := comparisonTask()
+	task.Context = "observed tool trajectory"
 	task.Candidate = &ModelOutput{Text: "candidate answer", CostMicroUSD: 10, LatencyMS: 20}
 	task.Generate = func(_ context.Context, model string) (ModelOutput, error) {
 		generated = model
@@ -19,6 +20,9 @@ func TestWorkflowGeneratesOnlyMissingReferenceAndBlindlyMapsReviewerWinner(t *te
 	}
 	task.Review = func(_ context.Context, input ReviewInput) (ReviewVerdict, error) {
 		reviewed = true
+		if input.Context != "observed tool trajectory" {
+			t.Fatalf("review context=%q", input.Context)
+		}
 		if input.A != "reference answer" || input.B != "candidate answer" {
 			t.Fatalf("blind input=%+v", input)
 		}

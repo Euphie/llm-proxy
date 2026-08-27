@@ -14,7 +14,6 @@ type AttemptReservation struct {
 	AnswerCalls            int
 	AnswerCallCostMicroUSD int64
 	ModelSwitch            bool
-	TargetSwitch           bool
 }
 
 type CallTicket struct {
@@ -53,8 +52,7 @@ func (b *AttemptBudget) ReserveAttempt(
 		answerCalls = 1
 	}
 	if !ok || answerCalls < 1 || reservation.VisionCallCostMicroUSD < 0 ||
-		reservation.AnswerCallCostMicroUSD < 0 ||
-		reservation.ModelSwitch && reservation.TargetSwitch {
+		reservation.AnswerCallCostMicroUSD < 0 {
 		return nil, fmt.Errorf("%w: invalid attempt reservation", ErrAttemptBudgetExceeded)
 	}
 	visionCost := multiplyCost(reservation.VisionCallCostMicroUSD, visionCalls)
@@ -72,9 +70,6 @@ func (b *AttemptBudget) ReserveAttempt(
 	if reservation.ModelSwitch && b.used.ModelSwitches >= b.limits.MaxModelSwitches {
 		return nil, fmt.Errorf("%w: model switches", ErrAttemptBudgetExceeded)
 	}
-	if reservation.TargetSwitch && b.used.TargetSwitches >= b.limits.MaxTargetSwitches {
-		return nil, fmt.Errorf("%w: target switches", ErrAttemptBudgetExceeded)
-	}
 	requested := budgetCapacity{
 		answerAttempts: 1,
 		auxiliaryCalls: visionCalls,
@@ -90,9 +85,6 @@ func (b *AttemptBudget) ReserveAttempt(
 	b.held.costMicroUSD = addCost(b.held.costMicroUSD, totalCost)
 	if reservation.ModelSwitch {
 		b.used.ModelSwitches++
-	}
-	if reservation.TargetSwitch {
-		b.used.TargetSwitches++
 	}
 	return &AttemptLease{
 		budget: b, model: reservation.Model, target: reservation.Target,

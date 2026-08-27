@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/modeldirectory"
 	"github.com/Euphie/llm-proxy/internal/provider"
 )
 
@@ -25,6 +26,7 @@ type Protocol string
 const (
 	ProtocolAnthropic Protocol = "anthropic"
 	ProtocolOpenAI    Protocol = "openai"
+	PrimaryTargetID            = "primary"
 )
 
 type VisionTransport string
@@ -57,16 +59,13 @@ type RetryRule struct {
 }
 
 type Config struct {
-	Version         int                     `json:"version"`
-	Protocol        Protocol                `json:"protocol"`
-	Upstream        string                  `json:"upstream"`
-	ProviderID      string                  `json:"provider_id,omitempty"`
-	CredentialScope string                  `json:"credential_scope,omitempty"`
-	Targets         []TargetConfig          `json:"targets,omitempty"`
-	Models          []ModelCapabilityConfig `json:"models,omitempty"`
-	AutoRouting     AutoRoutingConfig       `json:"auto_routing,omitempty"`
-	Vision          VisionConfig            `json:"vision"`
-	OverloadRules   []RetryRule             `json:"overload_rules"`
+	Version       int                     `json:"version"`
+	Protocol      Protocol                `json:"protocol"`
+	Upstream      string                  `json:"upstream"`
+	Models        []ModelCapabilityConfig `json:"models,omitempty"`
+	AutoRouting   AutoRoutingConfig       `json:"auto_routing,omitempty"`
+	Vision        VisionConfig            `json:"vision"`
+	OverloadRules []RetryRule             `json:"overload_rules"`
 }
 
 type Record struct {
@@ -93,17 +92,20 @@ type VisionRuntime struct {
 }
 
 type Runtime struct {
-	ID            int64
-	Slug          string
-	DisplayName   string
-	Enabled       bool
-	Protocol      Protocol
-	Upstream      string
-	Targets       []TargetRuntime
-	Models        ModelCatalog
-	AutoRouting   AutoRoutingRuntime
-	Vision        VisionRuntime
-	OverloadRules []provider.Rule
+	ID                    int64
+	Slug                  string
+	DisplayName           string
+	Enabled               bool
+	Protocol              Protocol
+	Upstream              string
+	Models                ModelCatalog
+	ModelStatuses         map[string]modeldirectory.Status
+	AutoRouting           AutoRoutingRuntime
+	Vision                VisionRuntime
+	OverloadRules         []provider.Rule
+	RuntimeRevision       int64
+	ActivePolicyVersionID int64
+	ModelCatalogRevision  int64
 }
 
 func NewConfig(protocol Protocol, upstream string) Config {
@@ -154,16 +156,6 @@ func (r Record) Resolve() (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
-	targets, err := resolveTargets(
-		upstream,
-		r.Config.ProviderID,
-		r.Config.CredentialScope,
-		r.Config.Targets,
-		models,
-	)
-	if err != nil {
-		return Runtime{}, err
-	}
 	autoRouting, err := resolveAutoRouting(r.Config.AutoRouting, models, vision)
 	if err != nil {
 		return Runtime{}, err
@@ -180,7 +172,6 @@ func (r Record) Resolve() (Runtime, error) {
 		Enabled:       r.Enabled,
 		Protocol:      r.Config.Protocol,
 		Upstream:      upstream,
-		Targets:       targets,
 		Models:        models,
 		AutoRouting:   autoRouting,
 		Vision:        vision,

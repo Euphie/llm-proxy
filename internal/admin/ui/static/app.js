@@ -7,6 +7,7 @@ import {
 import { createWindowFrame } from "./chrome.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderOnboarding } from "./onboarding.js";
+import { renderProfileCreationWizard } from "./profile-create-wizard.js";
 import { installModelCatalog } from "./model-catalog.js";
 import {
   defaultProfileDraft,
@@ -15,11 +16,49 @@ import {
   renderProfileEditor as renderLegacyProfileEditor,
   renderProfileList,
 } from "./profiles.js";
+import { runEvaluationCatalogUpdate } from "./evaluation-catalog.js";
 import { renderProfileEditor as renderProfileSectionEditor } from "./profile-editor.js";
 import { renderHelpPage } from "./routing-guide.js";
 import { renderStatsPage } from "./stats.js";
 import { renderSystemPage } from "./system.js";
 import { parseAdminRoute, profileSectionHref } from "./routes.js";
+
+function policyToAutoRouting(policy, enabled) {
+  const roles = policy?.roles || {};
+  return {
+    enabled,
+    participants: [...(roles.participants || [])],
+    strong_baseline_model: roles.strong_baseline_model || "",
+    task_analyzer_model: roles.task_analyzer_model || "",
+    analyzer_timeout: policy?.analyzer_timeout || "",
+    analyzer_min_confidence_bps: policy?.analyzer_min_confidence_bps || 0,
+    session_ttl: policy?.session_ttl || "",
+    session_lock_token_threshold: Number(policy?.session_lock_token_threshold || 100000),
+    self_escalation: structuredClone(policy?.self_escalation || {}),
+    dynamic_optimization: {
+      ...structuredClone(policy?.dynamic_optimization || {}),
+      reviewer_model: roles.reviewer_model || policy?.dynamic_optimization?.reviewer_model || "",
+    },
+    strategy: structuredClone(policy),
+  };
+}
+
+function autoRoutingToPolicy(auto) {
+  const policy = structuredClone(auto?.strategy || {});
+  policy.roles = {
+    participants: [...(auto?.participants || [])],
+    strong_baseline_model: auto?.strong_baseline_model || "",
+    task_analyzer_model: auto?.task_analyzer_model || "",
+    reviewer_model: auto?.dynamic_optimization?.reviewer_model || "",
+  };
+  policy.analyzer_timeout = auto?.analyzer_timeout || "";
+  policy.analyzer_min_confidence_bps = Number(auto?.analyzer_min_confidence_bps || 0);
+  policy.session_ttl = auto?.session_ttl || "";
+  policy.session_lock_token_threshold = Number(auto?.session_lock_token_threshold || 100000);
+  policy.self_escalation = structuredClone(auto?.self_escalation || {});
+  policy.dynamic_optimization = structuredClone(auto?.dynamic_optimization || {});
+  return policy;
+}
 
 export async function bootstrap({
   root = document.querySelector("#app"),
@@ -192,9 +231,18 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
   const workspace = document.createElement("div");
   workspace.className = "profile-workspace";
   headingGroup.append(heading);
-  content.append(headingGroup, alert, workspace);
+  content.append(headingGroup, workspace);
+  let flashTimeoutID = null;
+
+  function clearFlashTimeout() {
+    if (flashTimeoutID !== null) {
+      clearTimeout(flashTimeoutID);
+      flashTimeoutID = null;
+    }
+  }
 
   function showAppError(error) {
+    clearFlashTimeout();
     alert.className = "app-flash error-banner";
     alert.setAttribute("role", "alert");
     alert.textContent = error?.message || "请求失败，请重试。";
@@ -202,10 +250,44 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
   }
 
   function showAppSuccess(message) {
+    clearFlashTimeout();
     alert.className = "app-flash success-banner";
     alert.setAttribute("role", "status");
     alert.textContent = message;
     alert.hidden = false;
+    flashTimeoutID = setTimeout(() => {
+      alert.hidden = true;
+      alert.textContent = "";
+      flashTimeoutID = null;
+    }, 4000);
+  }
+
+  async function performEvaluationCatalogUpdate(onProgress) {
+    try {
+      const job = await runEvaluationCatalogUpdate({
+        start: () => client.startEvaluationCatalogUpdate(),
+        status: () => client.evaluationCatalogUpdateStatus(),
+        onProgress,
+      });
+      const catalog = await client.evaluationCatalog();
+      return { ...job, catalog };
+    } catch (error) {
+      return {
+        ...(error?.job || {}),
+        state: error?.job?.state || "failed",
+        error: error?.message || "公开评测更新失败，仍在使用之前的数据。",
+      };
+    }
+  }
+
+  function notifyEvaluationCatalogUpdate(job) {
+    if (job?.state === "succeeded") {
+      showAppSuccess(
+        job.changed ? "公开评测更新完成。" : "公开评测已是最新版本。",
+      );
+      return;
+    }
+    showAppError(new Error("公开评测更新失败，仍在使用之前的数据。"));
   }
 
   async function runMutation(mutation, after = showList) {
@@ -221,42 +303,38 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
     }
   }
 
-  async function showEditor(draft, editingStrategyID = 0) {
+  async function showEditor(draft) {
     alert.hidden = true;
     alert.textContent = "";
-    let strategyOverview = null;
-    if (
-      draft.id &&
-      draft.config?.auto_routing?.enabled &&
-      typeof client.listStrategies === "function"
-    ) {
-      strategyOverview = await client.listStrategies(draft.id);
-      if (editingStrategyID) {
-        const editing = (strategyOverview.strategies || []).find(
-          (version) => Number(version.id) === Number(editingStrategyID),
-        );
-        if (editing) {
-          draft.config.auto_routing.strategy = structuredClone(editing.config);
-        } else {
-          editingStrategyID = 0;
-        }
-      }
+		let routingPolicyOverview = null;
+		let modelDirectoryOverview = null;
+		if (draft.id && Number(draft.config?.version) === 2) {
+			[routingPolicyOverview, modelDirectoryOverview] = await Promise.all([
+				client.routingPolicy(draft.id),
+				client.profileModels(draft.id),
+			]);
+			draft.config.models = (modelDirectoryOverview.models || []).map((model) =>
+				structuredClone(model.capability));
+			const policy = routingPolicyOverview.active?.policy || null;
+			if (policy) {
+				draft.config.auto_routing = policyToAutoRouting(
+					policy,
+					Boolean(draft.config.auto_routing?.enabled),
+				);
+			}
     }
-    draft.strategy_overview = strategyOverview;
-    draft.strategy_editing_id = editingStrategyID;
-
-    async function reloadStrategyEditor(nextEditingID = 0) {
-      const profile = await client.getProfile(draft.id);
-      await showEditor(
-        profileDraft(profile, draft.make_default ? profile.id : 0),
-        nextEditingID,
-      );
-    }
+		draft.routing_policy_overview = routingPolicyOverview;
+		draft.model_directory_overview = modelDirectoryOverview;
 
     const editorActions = {
       save: async (payload) => {
         await runMutation(async () => {
           if (draft.id) {
+			if (Number(draft.config?.version) === 2) {
+				payload.expected_runtime_revision = Number(
+					draft.routing_policy_overview?.runtime_state?.revision || 0,
+				);
+			}
             await client.updateProfile(draft.id, payload);
             return;
           }
@@ -268,43 +346,56 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
         void showList();
       },
       generate: generateProfile,
-      createStrategy: async (config) => {
-        const version = await client.createStrategy(draft.id, config);
-        await reloadStrategyEditor(version.id);
-      },
-      updateStrategy: async (strategyID, config) => {
-        await client.updateStrategy(draft.id, strategyID, config);
-        await reloadStrategyEditor(strategyID);
-      },
-      editStrategy: (strategyID) => reloadStrategyEditor(strategyID),
-      advanceStrategy: async (strategyID, from, to) => {
-        await client.advanceStrategy(draft.id, strategyID, from, to);
-        await reloadStrategyEditor(to === "evaluating" ? strategyID : 0);
-      },
-      startStrategyCanary: async (strategyID, canaryBps, revision) => {
-        await client.startStrategyCanary(
-          draft.id,
-          strategyID,
-          canaryBps,
-          revision,
-        );
-        await reloadStrategyEditor();
-      },
-      cancelStrategyCanary: async (revision) => {
-        await client.cancelStrategyCanary(draft.id, revision);
-        await reloadStrategyEditor();
-      },
-      promoteStrategy: async (revision) => {
-        await client.promoteStrategy(draft.id, revision);
-        await reloadStrategyEditor();
-      },
-      rollbackStrategy: async (revision) => {
-        await client.rollbackStrategy(draft.id, revision);
-        await reloadStrategyEditor();
-      },
-		generateStrategyCandidate: async () => {
-			const version = await client.generateStrategyCandidate(draft.id);
-			await reloadStrategyEditor(version.id);
+		applyRoutingPolicy: async (revision, policy, reason) => {
+			await client.applyRoutingPolicy(draft.id, revision, policy, reason);
+			showAppSuccess("策略已保存并立即生效。");
+			await showProfileRoute();
+		},
+		generateRoutingPolicy: (intent) => client.generateRoutingPolicy(draft.id, intent),
+		rollbackRoutingPolicy: async (revision, versionID, reason) => {
+			await client.rollbackRoutingPolicy(draft.id, revision, versionID, reason);
+			showAppSuccess("历史策略已复制为新版本并立即生效。");
+			await showProfileRoute();
+		},
+		addProfileModel: async (revision, modelID, capability, reason) => {
+			await client.addProfileModel(draft.id, revision, modelID, capability, reason);
+			showAppSuccess("模型已加入目录并立即生效。");
+			await showProfileRoute();
+		},
+		addProfileModels: async (revision, capabilities, reason) => {
+			let currentRevision = Number(revision || 0);
+			for (const capability of capabilities) {
+				const directory = await client.addProfileModel(
+					draft.id,
+					currentRevision,
+					capability.id,
+					capability,
+					reason,
+				);
+				currentRevision = Number(directory.runtime_state?.revision || currentRevision);
+			}
+			showAppSuccess(`已导入 ${capabilities.length} 个模型并立即生效。`);
+			await showProfileRoute();
+		},
+		updateProfileModel: async (revision, modelID, capability, reason) => {
+			await client.updateProfileModel(draft.id, revision, modelID, capability, reason);
+			showAppSuccess("模型能力已更新并立即生效。");
+			await showProfileRoute();
+		},
+		offlineProfileModel: async (body) => {
+			await client.offlineProfileModel(draft.id, body);
+			showAppSuccess("模型已紧急下线，新策略已立即生效。");
+			await showProfileRoute();
+		},
+		restoreProfileModel: async (revision, modelID, reason) => {
+			await client.restoreProfileModel(draft.id, revision, modelID, reason);
+			showAppSuccess("模型已恢复并立即生效。");
+			await showProfileRoute();
+		},
+		retireProfileModel: async (revision, modelID, reason) => {
+			await client.retireProfileModel(draft.id, revision, modelID, reason);
+			showAppSuccess("模型已退役；该 ID 将保留为不可复用记录。");
+			await showProfileRoute();
 		},
     };
     if (route.page === "profile") {
@@ -318,9 +409,67 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
     renderLegacyProfileEditor(workspace, draft, editorActions);
   }
 
-  async function openEditor(draft, editingStrategyID = 0) {
+  async function openCreationWizard(draft) {
     try {
-      await showEditor(draft, editingStrategyID);
+      await renderProfileCreationWizard(workspace, draft, {
+        createProfile: (payload) => client.createProfile(payload),
+        updateProfile: async (profileID, payload) => {
+          let directory = await client.profileModels(profileID);
+          let revision = Number(directory.runtime_state?.revision || 0);
+          const current = new Map((directory.models || []).map((model) => [model.model_id, model]));
+          for (const capability of payload.config?.models || []) {
+            const model = current.get(capability.id);
+            if (!model) {
+              directory = await client.addProfileModel(
+                profileID, revision, capability.id, capability, "Profile 创建向导添加模型",
+              );
+              revision = Number(directory.runtime_state?.revision || 0);
+              continue;
+            }
+            if (JSON.stringify(model.capability) !== JSON.stringify(capability)) {
+              directory = await client.updateProfileModel(
+                profileID, revision, capability.id, capability, "Profile 创建向导更新模型",
+              );
+              revision = Number(directory.runtime_state?.revision || 0);
+            }
+          }
+          const auto = payload.config?.auto_routing || {};
+          if (auto.enabled) {
+            const overview = await client.routingPolicy(profileID);
+            const applied = await client.applyRoutingPolicy(
+              profileID,
+              Number(overview.runtime_state?.revision || revision),
+              autoRoutingToPolicy(auto),
+              "Profile 创建向导启用智能路由",
+            );
+            revision = Number(applied.runtime_state?.revision || revision);
+          }
+          payload.expected_runtime_revision = revision;
+          const updated = await client.updateProfile(profileID, payload);
+          return {
+            ...updated,
+            config: { ...structuredClone(payload.config), version: 2 },
+          };
+        },
+        loadEvaluationCatalog: typeof client.evaluationCatalog === "function"
+          ? () => client.evaluationCatalog()
+          : undefined,
+		updateEvaluationCatalog:
+			typeof client.startEvaluationCatalogUpdate === "function" &&
+			typeof client.evaluationCatalogUpdateStatus === "function"
+			? async (onProgress) => {
+				const job = await performEvaluationCatalogUpdate(onProgress);
+				notifyEvaluationCatalogUpdate(job);
+				return job;
+			}
+			: undefined,
+        onSaved: (message) => showAppSuccess(message),
+        cancel: () => { void showList(); },
+        complete: (profile) => {
+          showAppSuccess("Profile 创建完成。");
+          navigateTo(profileSectionHref(profile.id, "overview"));
+        },
+      });
     } catch (error) {
       if (isUnauthorized(error)) {
         renderLoginScreen(root, client, generateProfile, path);
@@ -342,7 +491,7 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
         create: () => {
           const draft = defaultProfileDraft();
           draft.make_default = data.profiles.length === 0;
-          void openEditor(draft);
+          void openCreationWizard(draft);
         },
         edit: (profile) =>
           navigateTo(profileSectionHref(profile.id, "overview")),
@@ -356,8 +505,13 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
         toggle: async (profile) => {
           const draft = profileDraft(profile, data.default_profile_id);
           draft.enabled = !draft.enabled;
+		  const payload = profilePayload(draft);
+		  if (Number(draft.config?.version) === 2) {
+			const overview = await client.routingPolicy(profile.id);
+			payload.expected_runtime_revision = Number(overview.runtime_state?.revision || 0);
+		  }
           await runMutation(() =>
-            client.updateProfile(profile.id, profilePayload(draft)),
+			client.updateProfile(profile.id, payload),
           );
         },
         delete: async (profile, replacementDefaultID) => {
@@ -486,10 +640,32 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
 		  typeof client.routingTrace === "function"
 			? client.routingTrace(id)
 			: Promise.resolve({ trace: {}, candidates: [], calls: [] }),
+		loadRoutingSessionFlow: (id) =>
+		  typeof client.routingSessionFlow === "function"
+			? client.routingSessionFlow(id)
+			: Promise.resolve({
+				scope: "request", selected_trace_id: Number(id), truncated: false, requests: [],
+			}),
 		loadModelPerformance: (filters) =>
 		  typeof client.modelPerformance === "function"
 			? client.modelPerformance(filters)
 			: Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_pages: 0, summary: {} }),
+		loadEvaluationCatalog: () =>
+		  typeof client.evaluationCatalog === "function"
+			? client.evaluationCatalog()
+			: Promise.resolve(null),
+		loadAgentTrajectories: (filters) =>
+		  typeof client.agentTrajectories === "function"
+			? client.agentTrajectories(filters)
+			: Promise.resolve({ items: [], page: 1, page_size: 25, total: 0, total_pages: 0, summary: {} }),
+		loadAgentTrajectory: (id) =>
+		  typeof client.agentTrajectory === "function"
+			? client.agentTrajectory(id)
+			: Promise.reject(new Error("轨迹详情不可用。")),
+		deleteAgentTrajectory: (id) =>
+		  typeof client.deleteAgentTrajectory === "function"
+			? client.deleteAgentTrajectory(id)
+			: Promise.reject(new Error("轨迹删除功能不可用。")),
         onUnauthorized: () =>
           renderLoginScreen(root, client, generateProfile, path),
       });
@@ -547,6 +723,7 @@ async function renderAuthenticated(root, client, session, generateProfile, path)
       bodyClassName: "app-window-body",
       children: [sidebar, content],
     }),
+    alert,
   );
   root.replaceChildren(stage);
   if (route.page === "overview") {

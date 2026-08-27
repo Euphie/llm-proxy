@@ -1,4 +1,4 @@
-export const STATUS_DIRECTIVE_KINDS = ["CURRENT", "TARGET", "FUTURE", "EVIDENCE"] as const;
+export const STATUS_DIRECTIVE_KINDS = ["CURRENT", "EVIDENCE"] as const;
 
 export type StatusDirectiveKind = (typeof STATUS_DIRECTIVE_KINDS)[number];
 
@@ -44,7 +44,7 @@ export function getStatusCalloutMatch(node: unknown): StatusCalloutMatch | undef
   if (!isHastText(firstChild)) {
     return undefined;
   }
-  const match = /^\[!(CURRENT|TARGET|FUTURE|EVIDENCE)\](?=\s|$)/.exec(firstChild.value);
+  const match = /^\[!(CURRENT|EVIDENCE)\](?=\s|$)/.exec(firstChild.value);
   if (!match) {
     return undefined;
   }

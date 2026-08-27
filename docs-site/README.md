@@ -1,28 +1,25 @@
-# Mesotes 智能路由设计站
+# Mesotes 智能路由文档站
 
-这是 [llm-proxy 智能路由](../docs/intelligent-routing.md)的可浏览版本。它同时说明 Phase 1 已实现
-能力与后续 Profile-local 路线图，页面中的状态标记用于区分两者。
+这是当前 V2 管理后台和运行时的可浏览说明，只记录已经实现的行为。后台内置帮助用于快速操作，
+本站补充请求链路、控制面、证据和上线边界。
 
 ## 内容
 
-站点把方案拆成 12 个可独立访问的章节：
+站点包含 10 个独立章节：
 
-- `/docs/overview`：智能路由概览
-- `/docs/source-baseline`：当前能力与目标
-- `/docs/competitor-evidence`：参考方案与取舍
-- `/docs/core-model`：Profile 配置与模型角色
-- `/docs/profile-isolation`：Profile 隔离边界
-- `/docs/online-routing`：在线路由
-- `/docs/quality-and-cost`：质量与成本
-- `/docs/target-reliability`：Target 与容错
-- `/docs/runtime-reliability`：视觉、重试与 Session
-- `/docs/evaluation-feedback`：异步评测与策略优化
-- `/docs/strategy-lifecycle`：策略生命周期
-- `/docs/engineering-and-delivery`：实施范围与交付
+- `/docs/overview`：系统概览
+- `/docs/admin-workflow`：后台操作流程
+- `/docs/profiles-models`：Profile 与模型目录
+- `/docs/routing-policy`：Routing Policy
+- `/docs/online-routing`：在线请求链路
+- `/docs/vision`：视觉预处理
+- `/docs/reliability`：重试、超时与 Session
+- `/docs/evaluation`：评测与自动校准
+- `/docs/observability`：统计与故障排查
+- `/docs/operations`：运行边界与上线检查
 
-标题可以使用 `/docs/<slug>#<heading>` 直接访问。源码事实和竞品证据固定到明确版本；页面会
-区分“当前已实现”“目标设计”和“后续方向”。正式设计以
-[`docs/intelligent-routing.md`](../docs/intelligent-routing.md) 为准。
+标题可通过 `/docs/<slug>#<heading>` 直接访问。旧站的目标态、竞品、草稿、灰度和路线图章节已移除；
+旧 slug 不提供兼容跳转。
 
 ## 验证
 
@@ -34,8 +31,8 @@ make docs-e2e
 ```
 
 两个命令都在临时 Docker 容器中安装依赖和运行测试，不会在宿主工作区生成 `node_modules`
-或构建产物。`docs-verify` 检查内容契约、代码质量、类型、生产构建和 12 个 SSR 页面；
-`docs-e2e` 使用固定版本的 Playwright Chromium 验证导航、搜索、主题、移动端和图表交互。
+或构建产物。`docs-verify` 检查内容契约、代码质量、类型、生产构建和 10 个 SSR 页面；
+`docs-e2e` 使用固定版本的 Playwright Chromium 验证导航、搜索、主题、移动端和代码块交互。
 
 交互预览：
 

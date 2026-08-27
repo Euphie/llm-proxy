@@ -120,6 +120,7 @@ var routingTraceQueryParameters = []string{
 	"source",
 	"status",
 	"vision",
+	"group",
 }
 
 func (a *API) getRoutingTraces(w http.ResponseWriter, r *http.Request) {
@@ -225,8 +226,18 @@ func (a *API) getRoutingTraces(w http.ResponseWriter, r *http.Request) {
 		a.writeRequestError(w, r, invalidRequestField("vision", "Unsupported vision mode."))
 		return
 	}
+	group := values["group"]
+	if group != "" && group != "session" {
+		a.writeRequestError(w, r, invalidRequestField("group", "Must be session when provided."))
+		return
+	}
 
-	page, err := a.stats.QueryRoutingTracePage(r.Context(), filter)
+	var page any
+	if group == "session" {
+		page, err = a.stats.QueryRoutingTraceGroupPage(r.Context(), filter)
+	} else {
+		page, err = a.stats.QueryRoutingTracePage(r.Context(), filter)
+	}
 	if err != nil {
 		a.writeInternalError(w, r, err)
 		return
@@ -267,6 +278,28 @@ func (a *API) getRoutingTraceDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (a *API) getRoutingSessionFlow(w http.ResponseWriter, r *http.Request) {
+	if err := rejectUnknownQuery(r); err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		a.writeRequestError(w, r, invalidRequestField("id", "Must be a positive integer."))
+		return
+	}
+	flow, err := a.stats.QueryRoutingSessionFlow(r.Context(), id)
+	if errors.Is(err, stats.ErrRoutingTraceNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "Routing trace not found.", nil)
+		return
+	}
+	if err != nil {
+		a.writeInternalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, flow)
 }
 
 var routingCallQueryParameters = []string{"trace_id", "correlation_id", "limit"}

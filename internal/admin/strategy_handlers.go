@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/strategy"
+	"github.com/Euphie/llm-proxy/internal/strategycompiler"
 )
 
 type strategyConfigRequest struct {
@@ -64,6 +66,56 @@ func (a *API) generateStrategyCandidate(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, version)
 }
 
+func (a *API) generateStrategy(w http.ResponseWriter, r *http.Request) {
+	profileID, err := profileIDFromPath(r)
+	if err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	var intent strategycompiler.Intent
+	if err := decodeJSON(w, r, &intent); err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	generated, err := a.strategies.GenerateStrategy(r.Context(), profileID, intent)
+	if err != nil {
+		a.writeDomainError(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	if generated.Version != nil {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, generated)
+}
+
+func (a *API) restoreGeneratedRecommendation(w http.ResponseWriter, r *http.Request) {
+	profileID, strategyID, err := strategyPathIDs(r)
+	if err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	var request struct {
+		Path string `json:"path"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	if request.Path == "" || !strings.HasPrefix(request.Path, "/") || len(request.Path) > 512 {
+		a.writeRequestError(w, r, invalidRequestField("path", "Path must be a JSON Pointer of at most 512 bytes."))
+		return
+	}
+	generated, err := a.strategies.RestoreGeneratedRecommendation(
+		r.Context(), profileID, strategyID, request.Path,
+	)
+	if err != nil {
+		a.writeDomainError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, generated)
+}
+
 func (a *API) updateStrategy(w http.ResponseWriter, r *http.Request) {
 	profileID, strategyID, err := strategyPathIDs(r)
 	if err != nil {
@@ -98,6 +150,25 @@ func (a *API) advanceStrategy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version, err := a.strategies.Advance(r.Context(), profileID, strategyID, request.From, request.To)
+	if err != nil {
+		a.writeDomainError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, version)
+}
+
+func (a *API) archiveStrategy(w http.ResponseWriter, r *http.Request) {
+	profileID, strategyID, err := strategyPathIDs(r)
+	if err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	var request struct{}
+	if err := decodeJSON(w, r, &request); err != nil {
+		a.writeRequestError(w, r, err)
+		return
+	}
+	version, err := a.strategies.Archive(r.Context(), profileID, strategyID)
 	if err != nil {
 		a.writeDomainError(w, r, err)
 		return

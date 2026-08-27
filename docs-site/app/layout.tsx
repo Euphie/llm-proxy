@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
-const title = "Mesotes · 智能路由设计";
+const title = "Mesotes · 智能路由文档";
 const description =
-  "Mesotes 智能路由文档：Phase 1 运行时、固定源码证据与后续路线图。";
+  "Mesotes 当前 V2 后台操作、在线链路、评测、排障与上线边界。";
 const themeBootstrap = `(() => {
   let theme = "light";
   try {
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     type: "website",
   },
   twitter: {
-    card: "summary_large_image",
+    card: "summary",
     title,
     description,
   },

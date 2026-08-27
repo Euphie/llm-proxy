@@ -13,7 +13,6 @@ type Engine struct {
 	planner  *Planner
 	analyzer *Analyzer
 	auto     profile.AutoRoutingRuntime
-	baseline profile.ModelCapability
 }
 
 func NewEngine(runtime profile.Runtime, client *http.Client) (*Engine, error) {
@@ -23,8 +22,7 @@ func NewEngine(runtime profile.Runtime, client *http.Client) (*Engine, error) {
 	}
 	return &Engine{
 		planner: planner, analyzer: newAnalyzer(runtime, client),
-		auto:     runtime.AutoRouting,
-		baseline: runtime.Models[runtime.AutoRouting.StrongBaselineModel],
+		auto: runtime.AutoRouting,
 	}, nil
 }
 
@@ -68,23 +66,18 @@ func (e *Engine) RouteWithPreference(
 	preference SessionPreference,
 ) (ExecutionPlan, Classification, error) {
 	cachePreference := SessionPreference{CacheMetrics: preference.CacheMetrics}
-	fallbackReason := ""
-	if classification, matched := ClassifyHardRisk(request, e.baseline, e.auto.RiskPolicy); matched {
-		if session, ok := e.sessionClassification(preference); ok {
-			classification.TaskType = session.TaskType
-			classification.Difficulty = session.Difficulty
-			classification.ReasonCodes = append(classification.ReasonCodes, "session_context_preserved")
+	planningPreference := cachePreference
+	if preference.ModelLocked {
+		if _, ok := e.sessionPreferenceClassification(preference); ok {
+			planningPreference = preference
 		}
-		plan, err := e.plan(request, classification, preference, budget)
-		return plan, classification, err
 	}
-	if classification, ok := e.sessionClassification(preference); ok {
-		plan, err := e.plan(request, classification, preference, budget)
-		return plan, classification, err
-	}
-	if classification, matched := classifySimple(request); matched {
-		plan, err := e.plan(request, classification, cachePreference, budget)
-		return plan, classification, err
+	fallbackReason := ""
+	if preference.TaskContinuation {
+		if classification, ok := e.sessionClassification(preference); ok {
+			plan, err := e.plan(request, classification, preference, budget)
+			return plan, classification, err
+		}
 	}
 
 	classification, err := e.analyzer.Analyze(ctx, headers, request, budget)
@@ -105,43 +98,92 @@ func (e *Engine) RouteWithPreference(
 			provider.FailureUnknownTransport,
 			provider.FailureMalformedResponse:
 			fallbackReason = "task_analyzer_" + string(class)
+			if code := analyzerResultErrorCode(err); class == provider.FailureMalformedResponse && code != "" {
+				fallbackReason += "_" + code
+			}
+		case provider.FailureRequestProtocolCapability:
+			status := provider.FailureStatus(err)
+			if status < http.StatusBadRequest || status >= http.StatusInternalServerError {
+				return ExecutionPlan{}, Classification{}, err
+			}
+			fallbackReason = "task_analyzer_" + string(class)
 		default:
 			return ExecutionPlan{}, Classification{}, err
 		}
 	}
-	if err != nil || classification.ConfidenceBPS < e.auto.AnalyzerMinConfidenceBPS {
-		confidence := 0
-		if err == nil {
-			fallbackReason = "task_analyzer_low_confidence"
-			confidence = classification.ConfidenceBPS
-		}
+	if err != nil {
 		fallback := Classification{
 			TaskType: "unknown", Difficulty: DifficultyUnknown, Risk: RiskUnknown,
-			ConfidenceBPS: confidence, Source: ClassificationSourceFallback,
+			Source:      ClassificationSourceFallback,
 			ReasonCodes: []string{fallbackReason},
+		}
+		if retained, ok := e.sessionPreferenceClassification(preference); ok {
+			plan, retainErr := e.plan(request, retained, preference, budget)
+			if retainErr == nil && plan.Model() == preference.Model {
+				fallback.ReasonCodes = append(
+					fallback.ReasonCodes,
+					ClassificationReasonSessionModelRetained,
+				)
+				plan.reason = "analyzer failure; retained Session model"
+				plan.candidateDecisions = markSelectedCandidate(
+					plan.candidateDecisions,
+					plan.Model(),
+					plan.reason,
+				)
+				return plan, fallback, nil
+			}
+			if errors.Is(retainErr, ErrAttemptBudgetExceeded) {
+				return plan, fallback, retainErr
+			}
 		}
 		plan, planErr := e.plan(request, fallback, cachePreference, budget)
 		return plan, fallback, planErr
 	}
-	plan, err := e.plan(request, classification, cachePreference, budget)
+	classification = applyClassificationConfidencePolicy(
+		classification,
+		e.auto.AnalyzerMinConfidenceBPS,
+	)
+	plan, err := e.plan(request, classification, planningPreference, budget)
 	return plan, classification, err
 }
 
 func (e *Engine) sessionClassification(preference SessionPreference) (Classification, bool) {
+	classification, ok := e.sessionPreferenceClassification(preference)
+	if !ok {
+		return Classification{}, false
+	}
+	reason := "session_reuse"
+	switch {
+	case preference.Model == e.auto.StrongBaselineModel && preference.ModelLocked:
+		reason = "session_highest_model_locked"
+	case preference.TaskContinuation:
+		reason = "session_task_continuation"
+	case preference.ModelLocked:
+		reason = "session_model_locked"
+	default:
+		return Classification{}, false
+	}
+	classification.ReasonCodes = []string{reason}
+	return classification, true
+}
+
+func (e *Engine) sessionPreferenceClassification(preference SessionPreference) (Classification, bool) {
 	if preference.TaskType == "" || preference.RouteID == "" || preference.Model == "" ||
+		preference.TaskType == "unknown" || preference.Difficulty == DifficultyUnknown ||
 		preference.Strategy != e.auto.Strategy.Name || preference.MinQualityScoreBPS < 0 ||
 		preference.MinQualityScoreBPS > 10_000 {
 		return Classification{}, false
 	}
 	classification := Classification{
 		TaskType: preference.TaskType, Difficulty: preference.Difficulty, Risk: RiskNormal,
-		ConfidenceBPS: 10_000, Source: ClassificationSourceSession,
-		ReasonCodes: []string{"session_reuse"},
+		ConfidenceBPS: 10_000, TaskTypeConfidenceBPS: 10_000,
+		DifficultyConfidenceBPS: 10_000, RiskConfidenceBPS: 10_000,
+		Source: ClassificationSourceSession,
 	}
 	if classification.Difficulty == "" {
 		classification.Difficulty = DifficultyUnknown
 	}
-	if e.planner.RouteID(classification) != preference.RouteID {
+	if e.planner.RouteID(classification) != preference.RouteID && !preference.ModelLocked {
 		return Classification{}, false
 	}
 	return classification, true

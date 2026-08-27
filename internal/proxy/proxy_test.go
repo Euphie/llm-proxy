@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/modeldirectory"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/provider"
 	"github.com/Euphie/llm-proxy/internal/stats"
@@ -28,12 +29,138 @@ const (
 	responsesImageBody = `{"model":"main-model","stream":true,"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="},{"type":"input_text","text":"What is shown?"}]}]}`
 )
 
+func TestSingleSessionIDRecognizesNativeAgentHeaders(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		header string
+	}{
+		{name: "proxy", header: "X-LLM-Proxy-Session-ID"},
+		{name: "Claude Code", header: "X-Claude-Code-Session-Id"},
+		{name: "Codex session", header: "Session-Id"},
+		{name: "Codex thread fallback", header: "Thread-Id"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := make(http.Header)
+			headers.Set(tt.header, "agent-session-42")
+			if got := singleSessionID(headers); got != "agent-session-42" {
+				t.Fatalf("session ID=%q", got)
+			}
+		})
+	}
+}
+
 type visionUpstream struct {
 	server      *httptest.Server
 	visionCalls atomic.Int32
 	mainCalls   atomic.Int32
 	mainBodies  chan []byte
 	mainURIs    chan string
+}
+
+func TestProxyRejectsDeclaredOversizedRequestBeforeUpstream(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	handler := New(
+		resolvedRuntime(t, 4, "coding", profile.ProtocolAnthropic, upstream.URL),
+		upstream.Client(),
+		nil,
+	)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+	request.ContentLength = maxClientRequestBodyBytes + 1
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge || calls.Load() != 0 {
+		t.Fatalf("status=%d upstream_calls=%d body=%q", response.Code, calls.Load(), response.Body.String())
+	}
+}
+
+func TestProxyRejectsExplicitOfflineOrRetiredModelBeforeUpstream(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	for _, status := range []modeldirectory.Status{
+		modeldirectory.StatusOffline,
+		modeldirectory.StatusRetired,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			runtime := resolvedRuntime(t, 4, "coding", profile.ProtocolAnthropic, upstream.URL)
+			runtime.ModelStatuses = map[string]modeldirectory.Status{"blocked-model": status}
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/messages",
+				strings.NewReader(`{"model":"blocked-model","messages":[]}`),
+			)
+			response := httptest.NewRecorder()
+
+			New(runtime, upstream.Client(), nil).ServeHTTP(response, request)
+
+			if response.Code != http.StatusServiceUnavailable ||
+				!strings.Contains(response.Body.String(), `"code":"model_offline"`) {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("upstream calls=%d", calls.Load())
+	}
+}
+
+func TestReadBodyWithLimitRejectsUnknownLengthOverflow(t *testing.T) {
+	body, err := readBodyWithLimit(strings.NewReader("12345"), -1, 4)
+	if !errors.Is(err, errBodyTooLarge) || body != nil {
+		t.Fatalf("body=%q err=%v", body, err)
+	}
+}
+
+func TestStreamForwardsBodyAfterCaptureLimit(t *testing.T) {
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("0123456789")),
+	}
+	recorder := httptest.NewRecorder()
+
+	captured := streamWithCaptureLimit(recorder, response, 4)
+
+	if recorder.Body.String() != "0123456789" || string(captured) != "0123" {
+		t.Fatalf("forwarded=%q captured=%q", recorder.Body.String(), captured)
+	}
+}
+
+func TestProxyRejectsOversizedUpstreamErrorBeforeForwarding(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusInternalServerError,
+			Status:        "500 Internal Server Error",
+			Header:        http.Header{"X-Upstream": {"must-not-forward"}},
+			Body:          io.NopCloser(strings.NewReader("small placeholder")),
+			ContentLength: maxBufferedUpstreamResponseBytes + 1,
+			Request:       request,
+		}, nil
+	})}
+	handler := New(
+		resolvedRuntime(t, 4, "coding", profile.ProtocolAnthropic, "https://upstream.test"),
+		client,
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+
+	if response.Code != http.StatusBadGateway || response.Header().Get("X-Upstream") != "" {
+		t.Fatalf("status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
+	}
 }
 
 func TestProxyPreservesEscapedPathQueryAndFiltersHopHeaders(t *testing.T) {

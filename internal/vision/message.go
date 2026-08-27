@@ -184,20 +184,3 @@ func writeUint64(dst hash.Hash, value uint64) {
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = dst.Write(encoded[:])
 }
-
-func requiredString(fields map[string]json.RawMessage, name string) (string, bool, error) {
-	raw, ok := fields[name]
-	if !ok {
-		return "", false, nil
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", true, fmt.Errorf("%s must be a string", name)
-	}
-	return value, true, nil
-}
-
-func isJSONType(raw json.RawMessage, first byte) bool {
-	raw = json.RawMessage(strings.TrimSpace(string(raw)))
-	return len(raw) > 0 && raw[0] == first
-}

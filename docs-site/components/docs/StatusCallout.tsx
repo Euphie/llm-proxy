@@ -2,8 +2,6 @@ import type { ReactNode } from "react";
 
 export const STATUS_CALLOUTS = {
   CURRENT: "当前已实现",
-  TARGET: "本版目标",
-  FUTURE: "后续方向",
   EVIDENCE: "证据边界",
 } as const;
 

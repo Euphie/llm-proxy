@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 var (
@@ -13,7 +12,13 @@ var (
 	routingIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 )
 
+var StandardRoutingTaskTypes = []string{
+	"simple", "general", "reasoning", "math", "coding", "tool_use", "vision",
+}
+
 const defaultRoutingSessionTTL = 24 * time.Hour
+
+const DefaultSessionLockTokenThreshold = 100_000
 
 const (
 	VisionImagePromptReserveTokens        = 4096
@@ -23,44 +28,18 @@ const (
 
 const maxDynamicOptimizationTaskTimeout = 10 * time.Minute
 
-const (
-	defaultLongContextThresholdBPS = 7500
-	maxRiskPatterns                = 64
-	maxRiskPatternRunes            = 128
-	RiskPolicyVersion2             = 2
-)
-
-var defaultSensitiveTextPatterns = []string{
-	"delete production", "drop table", "deploy to production", "rotate credential",
-	"删除生产", "清空数据库", "部署到生产", "修改密钥", "转账", "付款",
-}
-
-var defaultSensitiveToolPatterns = []string{
-	"delete_production", "deploy_production", "rotate_credential", "rotate_secret",
-	"payment", "transfer",
-	"database_mutation", "database_write", "database_delete", "db_write", "db_delete",
-}
-
 type AutoRoutingConfig struct {
-	Enabled                  bool                      `json:"enabled"`
-	Participants             []string                  `json:"participants,omitempty"`
-	StrongBaselineModel      string                    `json:"strong_baseline_model,omitempty"`
-	TaskAnalyzerModel        string                    `json:"task_analyzer_model,omitempty"`
-	AnalyzerTimeout          string                    `json:"analyzer_timeout,omitempty"`
-	AnalyzerMinConfidenceBPS int                       `json:"analyzer_min_confidence_bps,omitempty"`
-	SessionTTL               string                    `json:"session_ttl,omitempty"`
-	RiskPolicy               RiskPolicyConfig          `json:"risk_policy,omitempty"`
-	SelfEscalation           SelfEscalationConfig      `json:"self_escalation,omitempty"`
-	DynamicOptimization      DynamicOptimizationConfig `json:"dynamic_optimization,omitempty"`
-	Strategy                 RoutingStrategyConfig     `json:"strategy,omitempty"`
-}
-
-type RiskPolicyConfig struct {
-	Version                  int      `json:"version,omitempty"`
-	SensitiveTextPatterns    []string `json:"sensitive_text_patterns"`
-	SensitiveToolPatterns    []string `json:"sensitive_tool_patterns"`
-	StructuredOutputHighRisk bool     `json:"structured_output_high_risk"`
-	LongContextThresholdBPS  int      `json:"long_context_threshold_bps"`
+	Enabled                   bool                      `json:"enabled"`
+	Participants              []string                  `json:"participants,omitempty"`
+	StrongBaselineModel       string                    `json:"strong_baseline_model,omitempty"`
+	TaskAnalyzerModel         string                    `json:"task_analyzer_model,omitempty"`
+	AnalyzerTimeout           string                    `json:"analyzer_timeout,omitempty"`
+	AnalyzerMinConfidenceBPS  int                       `json:"analyzer_min_confidence_bps,omitempty"`
+	SessionTTL                string                    `json:"session_ttl,omitempty"`
+	SessionLockTokenThreshold int                       `json:"session_lock_token_threshold,omitempty"`
+	SelfEscalation            SelfEscalationConfig      `json:"self_escalation,omitempty"`
+	DynamicOptimization       DynamicOptimizationConfig `json:"dynamic_optimization,omitempty"`
+	Strategy                  RoutingStrategyConfig     `json:"strategy,omitempty"`
 }
 
 type SelfEscalationConfig struct {
@@ -69,6 +48,7 @@ type SelfEscalationConfig struct {
 
 type DynamicOptimizationConfig struct {
 	Enabled             bool   `json:"enabled"`
+	AutoUpdatePolicy    bool   `json:"auto_update_policy,omitempty"`
 	SampleRateBPS       int    `json:"sample_rate_bps,omitempty"`
 	DailyBudgetMicroUSD int64  `json:"daily_budget_micro_usd,omitempty"`
 	ReviewerModel       string `json:"reviewer_model,omitempty"`
@@ -78,12 +58,43 @@ type DynamicOptimizationConfig struct {
 }
 
 type RoutingStrategyConfig struct {
-	Name         string              `json:"name"`
-	Alias        string              `json:"alias,omitempty"`
-	DefaultRoute string              `json:"default_route"`
-	TaskRoutes   []TaskRouteConfig   `json:"task_routes,omitempty"`
-	Routes       []RouteConfig       `json:"routes"`
-	Budget       AttemptBudgetConfig `json:"budget"`
+	Name             string                      `json:"name"`
+	Alias            string                      `json:"alias,omitempty"`
+	Roles            *RoutingStrategyRolesConfig `json:"roles,omitempty"`
+	DefaultRoute     string                      `json:"default_route"`
+	MinNetSavingsBPS int                         `json:"min_net_savings_bps,omitempty"`
+	LatencyTargetMS  int64                       `json:"latency_target_ms,omitempty"`
+	TaskRoutes       []TaskRouteConfig           `json:"task_routes,omitempty"`
+	Routes           []RouteConfig               `json:"routes"`
+	Budget           AttemptBudgetConfig         `json:"budget"`
+}
+
+type RoutingStrategyRolesConfig struct {
+	Participants        []string `json:"participants"`
+	StrongBaselineModel string   `json:"strong_baseline_model"`
+	TaskAnalyzerModel   string   `json:"task_analyzer_model"`
+	ReviewerModel       string   `json:"reviewer_model,omitempty"`
+}
+
+func ApplyRoutingStrategyRoles(auto *AutoRoutingConfig, strategy RoutingStrategyConfig) {
+	if auto == nil || strategy.Roles == nil {
+		return
+	}
+	auto.Participants = append([]string(nil), strategy.Roles.Participants...)
+	auto.StrongBaselineModel = strategy.Roles.StrongBaselineModel
+	auto.TaskAnalyzerModel = strategy.Roles.TaskAnalyzerModel
+	if strategy.Roles.ReviewerModel != "" {
+		auto.DynamicOptimization.ReviewerModel = strategy.Roles.ReviewerModel
+	}
+}
+
+func RoutingStrategyRoles(auto AutoRoutingConfig) *RoutingStrategyRolesConfig {
+	return &RoutingStrategyRolesConfig{
+		Participants:        append([]string(nil), auto.Participants...),
+		StrongBaselineModel: auto.StrongBaselineModel,
+		TaskAnalyzerModel:   auto.TaskAnalyzerModel,
+		ReviewerModel:       auto.DynamicOptimization.ReviewerModel,
+	}
 }
 
 type TaskRouteConfig struct {
@@ -95,14 +106,26 @@ type TaskRouteConfig struct {
 type RouteConfig struct {
 	ID                    string                 `json:"id"`
 	MinQualityBPS         int                    `json:"min_quality_bps"`
+	MinStabilityBPS       int                    `json:"min_stability_bps"`
 	MaxSevereErrorRateBPS int                    `json:"max_severe_error_rate_bps"`
+	Weights               RoutingWeightsConfig   `json:"weights"`
 	Candidates            []RouteCandidateConfig `json:"candidates"`
+}
+
+type RoutingWeightsConfig struct {
+	QualityBPS     int `json:"quality_bps"`
+	StabilityBPS   int `json:"stability_bps"`
+	CostBPS        int `json:"cost_bps"`
+	PerformanceBPS int `json:"performance_bps"`
 }
 
 type RouteCandidateConfig struct {
 	Model              string `json:"model"`
+	ProductionEligible bool   `json:"production_eligible"`
 	QualityScoreBPS    int    `json:"quality_score_bps"`
+	StabilityScoreBPS  int    `json:"stability_score_bps"`
 	SevereErrorRateBPS int    `json:"severe_error_rate_bps"`
+	ExpectedLatencyMS  int64  `json:"expected_latency_ms"`
 }
 
 type AttemptBudgetConfig struct {
@@ -110,34 +133,25 @@ type AttemptBudgetConfig struct {
 	MaxAuxiliaryCalls        int    `json:"max_auxiliary_calls"`
 	MaxTotalOutboundCalls    int    `json:"max_total_outbound_calls"`
 	MaxRetriesPerTarget      int    `json:"max_retries_per_target"`
-	MaxTargetSwitches        int    `json:"max_target_switches"`
 	MaxModelSwitches         int    `json:"max_model_switches"`
 	Deadline                 string `json:"deadline"`
 	MaxWorstCaseCostMicroUSD int64  `json:"max_worst_case_cost_micro_usd"`
 }
 
 type AutoRoutingRuntime struct {
-	Enabled                  bool
-	Participants             []string
-	StrongBaselineModel      string
-	TaskAnalyzerModel        string
-	AnalyzerTimeout          time.Duration
-	AnalyzerMinConfidenceBPS int
-	SessionTTL               time.Duration
-	RiskPolicy               RiskPolicyRuntime
-	SelfEscalation           SelfEscalationRuntime
-	DynamicOptimization      DynamicOptimizationRuntime
-	Strategy                 RoutingStrategyRuntime
+	Enabled                   bool
+	Participants              []string
+	StrongBaselineModel       string
+	TaskAnalyzerModel         string
+	AnalyzerTimeout           time.Duration
+	AnalyzerMinConfidenceBPS  int
+	SessionTTL                time.Duration
+	SessionLockTokenThreshold int
+	SelfEscalation            SelfEscalationRuntime
+	DynamicOptimization       DynamicOptimizationRuntime
+	Strategy                  RoutingStrategyRuntime
 
 	participantSet map[string]struct{}
-}
-
-type RiskPolicyRuntime struct {
-	Version                  int
-	SensitiveTextPatterns    []string
-	SensitiveToolPatterns    []string
-	StructuredOutputHighRisk bool
-	LongContextThresholdBPS  int
 }
 
 type SelfEscalationRuntime struct {
@@ -146,6 +160,7 @@ type SelfEscalationRuntime struct {
 
 type DynamicOptimizationRuntime struct {
 	Enabled             bool
+	AutoUpdatePolicy    bool
 	SampleRateBPS       int
 	DailyBudgetMicroUSD int64
 	ReviewerModel       string
@@ -155,12 +170,14 @@ type DynamicOptimizationRuntime struct {
 }
 
 type RoutingStrategyRuntime struct {
-	Name         string
-	Alias        string
-	DefaultRoute string
-	TaskRoutes   map[TaskRouteKey]string
-	Routes       map[string]RouteRuntime
-	Budget       AttemptBudgetRuntime
+	Name             string
+	Alias            string
+	DefaultRoute     string
+	MinNetSavingsBPS int
+	LatencyTargetMS  int64
+	TaskRoutes       map[TaskRouteKey]string
+	Routes           map[string]RouteRuntime
+	Budget           AttemptBudgetRuntime
 }
 
 type TaskRouteKey struct {
@@ -190,14 +207,26 @@ func (r RoutingStrategyRuntime) RouteFor(taskType, difficulty string) (string, b
 type RouteRuntime struct {
 	ID                    string
 	MinQualityBPS         int
+	MinStabilityBPS       int
 	MaxSevereErrorRateBPS int
+	Weights               RoutingWeightsRuntime
 	Candidates            []RouteCandidateRuntime
+}
+
+type RoutingWeightsRuntime struct {
+	QualityBPS     int
+	StabilityBPS   int
+	CostBPS        int
+	PerformanceBPS int
 }
 
 type RouteCandidateRuntime struct {
 	Model              string
+	ProductionEligible bool
 	QualityScoreBPS    int
+	StabilityScoreBPS  int
 	SevereErrorRateBPS int
+	ExpectedLatencyMS  int64
 }
 
 type AttemptBudgetRuntime struct {
@@ -205,7 +234,6 @@ type AttemptBudgetRuntime struct {
 	MaxAuxiliaryCalls        int
 	MaxTotalOutboundCalls    int
 	MaxRetriesPerTarget      int
-	MaxTargetSwitches        int
 	MaxModelSwitches         int
 	Deadline                 time.Duration
 	MaxWorstCaseCostMicroUSD int64
@@ -302,11 +330,13 @@ func resolveAutoRouting(
 			return AutoRoutingRuntime{}, invalidAuto("Session TTL must be between 5m and 720h")
 		}
 	}
-	riskPolicy, err := resolveRiskPolicy(config.RiskPolicy)
-	if err != nil {
-		return AutoRoutingRuntime{}, err
+	sessionLockTokenThreshold := config.SessionLockTokenThreshold
+	if sessionLockTokenThreshold == 0 {
+		sessionLockTokenThreshold = DefaultSessionLockTokenThreshold
 	}
-
+	if sessionLockTokenThreshold < 0 {
+		return AutoRoutingRuntime{}, invalidAuto("Session lock token threshold must be positive")
+	}
 	strategy, err := resolveRoutingStrategy(config.Strategy, participantSet)
 	if err != nil {
 		return AutoRoutingRuntime{}, err
@@ -340,86 +370,19 @@ func resolveAutoRouting(
 	}
 
 	return AutoRoutingRuntime{
-		Enabled:                  true,
-		Participants:             participants,
-		StrongBaselineModel:      baseline,
-		TaskAnalyzerModel:        analyzer,
-		AnalyzerTimeout:          analyzerTimeout,
-		AnalyzerMinConfidenceBPS: config.AnalyzerMinConfidenceBPS,
-		SessionTTL:               sessionTTL,
-		RiskPolicy:               riskPolicy,
-		SelfEscalation:           SelfEscalationRuntime{Enabled: config.SelfEscalation.Enabled},
-		DynamicOptimization:      dynamicOptimization,
-		Strategy:                 strategy,
-		participantSet:           participantSet,
+		Enabled:                   true,
+		Participants:              participants,
+		StrongBaselineModel:       baseline,
+		TaskAnalyzerModel:         analyzer,
+		AnalyzerTimeout:           analyzerTimeout,
+		AnalyzerMinConfidenceBPS:  config.AnalyzerMinConfidenceBPS,
+		SessionTTL:                sessionTTL,
+		SessionLockTokenThreshold: sessionLockTokenThreshold,
+		SelfEscalation:            SelfEscalationRuntime{Enabled: config.SelfEscalation.Enabled},
+		DynamicOptimization:       dynamicOptimization,
+		Strategy:                  strategy,
+		participantSet:            participantSet,
 	}, nil
-}
-
-func resolveRiskPolicy(config RiskPolicyConfig) (RiskPolicyRuntime, error) {
-	if config.Version != 0 && config.Version != RiskPolicyVersion2 {
-		return RiskPolicyRuntime{}, invalidAuto("risk policy version must be %d", RiskPolicyVersion2)
-	}
-	if config.Version == 0 {
-		config = RiskPolicyConfig{Version: RiskPolicyVersion2}
-	}
-	textPatterns, err := resolveRiskPatterns(
-		config.SensitiveTextPatterns,
-		defaultSensitiveTextPatterns,
-		"sensitive text",
-	)
-	if err != nil {
-		return RiskPolicyRuntime{}, err
-	}
-	toolPatterns, err := resolveRiskPatterns(
-		config.SensitiveToolPatterns,
-		defaultSensitiveToolPatterns,
-		"sensitive tool",
-	)
-	if err != nil {
-		return RiskPolicyRuntime{}, err
-	}
-	threshold := config.LongContextThresholdBPS
-	if threshold == 0 {
-		threshold = defaultLongContextThresholdBPS
-	}
-	if threshold < 1 || threshold > 10_000 {
-		return RiskPolicyRuntime{}, invalidAuto(
-			"long-context threshold must be between 1 and 10000 basis points",
-		)
-	}
-	return RiskPolicyRuntime{
-		Version:                  RiskPolicyVersion2,
-		SensitiveTextPatterns:    textPatterns,
-		SensitiveToolPatterns:    toolPatterns,
-		StructuredOutputHighRisk: config.StructuredOutputHighRisk,
-		LongContextThresholdBPS:  threshold,
-	}, nil
-}
-
-func resolveRiskPatterns(configured, defaults []string, label string) ([]string, error) {
-	if configured == nil {
-		return append([]string(nil), defaults...), nil
-	}
-	if len(configured) > maxRiskPatterns {
-		return nil, invalidAuto("%s patterns must contain at most %d entries", label, maxRiskPatterns)
-	}
-	resolved := make([]string, len(configured))
-	seen := make(map[string]struct{}, len(configured))
-	for index, pattern := range configured {
-		if pattern == "" || strings.TrimSpace(pattern) != pattern {
-			return nil, invalidAuto("%s pattern %d must be non-empty without surrounding whitespace", label, index+1)
-		}
-		if utf8.RuneCountInString(pattern) > maxRiskPatternRunes {
-			return nil, invalidAuto("%s pattern %d must contain at most %d characters", label, index+1, maxRiskPatternRunes)
-		}
-		key := strings.ToLower(pattern)
-		if _, ok := seen[key]; ok {
-			return nil, invalidAuto("%s pattern %d is a duplicate ignoring case", label, index+1)
-		}
-		seen[key] = struct{}{}
-		resolved[index] = pattern
-	}
-	return resolved, nil
 }
 
 func resolveDynamicOptimization(
@@ -427,6 +390,11 @@ func resolveDynamicOptimization(
 	models ModelCatalog,
 ) (DynamicOptimizationRuntime, error) {
 	if !config.Enabled {
+		if config.AutoUpdatePolicy {
+			return DynamicOptimizationRuntime{}, invalidAuto(
+				"automatic Policy updates require dynamic evaluation",
+			)
+		}
 		return DynamicOptimizationRuntime{}, nil
 	}
 	reviewer := strings.TrimSpace(config.ReviewerModel)
@@ -479,6 +447,7 @@ func resolveDynamicOptimization(
 	}
 	return DynamicOptimizationRuntime{
 		Enabled:             true,
+		AutoUpdatePolicy:    config.AutoUpdatePolicy,
 		SampleRateBPS:       config.SampleRateBPS,
 		DailyBudgetMicroUSD: config.DailyBudgetMicroUSD,
 		ReviewerModel:       reviewer,
@@ -529,6 +498,12 @@ func resolveRoutingStrategy(
 	if len(config.Routes) == 0 {
 		return RoutingStrategyRuntime{}, invalidAuto("strategy requires at least one route")
 	}
+	if config.MinNetSavingsBPS < 0 || config.MinNetSavingsBPS > 10_000 {
+		return RoutingStrategyRuntime{}, invalidAuto("strategy minimum net savings must be between 0 and 10000")
+	}
+	if config.LatencyTargetMS < 0 {
+		return RoutingStrategyRuntime{}, invalidAuto("strategy latency target cannot be negative")
+	}
 
 	routes := make(map[string]RouteRuntime, len(config.Routes))
 	for _, configured := range config.Routes {
@@ -547,7 +522,7 @@ func resolveRoutingStrategy(
 
 	taskRoutes := make(map[TaskRouteKey]string, len(config.TaskRoutes))
 	for _, configured := range config.TaskRoutes {
-		if configured.TaskType != "" && !routingIDPattern.MatchString(configured.TaskType) {
+		if configured.TaskType != "" && !validRoutingTaskType(configured.TaskType) {
 			return RoutingStrategyRuntime{}, invalidAuto("task type %q is invalid", configured.TaskType)
 		}
 		if !validTaskRouteDifficulty(configured.Difficulty) {
@@ -576,13 +551,24 @@ func resolveRoutingStrategy(
 		return RoutingStrategyRuntime{}, err
 	}
 	return RoutingStrategyRuntime{
-		Name:         config.Name,
-		Alias:        config.Alias,
-		DefaultRoute: config.DefaultRoute,
-		TaskRoutes:   taskRoutes,
-		Routes:       routes,
-		Budget:       budget,
+		Name:             config.Name,
+		Alias:            config.Alias,
+		DefaultRoute:     config.DefaultRoute,
+		MinNetSavingsBPS: config.MinNetSavingsBPS,
+		LatencyTargetMS:  config.LatencyTargetMS,
+		TaskRoutes:       taskRoutes,
+		Routes:           routes,
+		Budget:           budget,
 	}, nil
+}
+
+func validRoutingTaskType(value string) bool {
+	for _, taskType := range StandardRoutingTaskTypes {
+		if value == taskType {
+			return true
+		}
+	}
+	return false
 }
 
 func validTaskRouteDifficulty(value string) bool {
@@ -604,8 +590,15 @@ func resolveRoute(
 	if config.MinQualityBPS < 0 || config.MinQualityBPS > 10_000 {
 		return RouteRuntime{}, invalidAuto("route %q minimum quality must be between 0 and 10000", config.ID)
 	}
+	if config.MinStabilityBPS < 0 || config.MinStabilityBPS > 10_000 {
+		return RouteRuntime{}, invalidAuto("route %q minimum stability must be between 0 and 10000", config.ID)
+	}
 	if config.MaxSevereErrorRateBPS < 0 || config.MaxSevereErrorRateBPS > 10_000 {
 		return RouteRuntime{}, invalidAuto("route %q maximum severe error rate must be between 0 and 10000", config.ID)
+	}
+	weights, err := resolveRoutingWeights(config.ID, config.Weights)
+	if err != nil {
+		return RouteRuntime{}, err
 	}
 	if len(config.Candidates) == 0 {
 		return RouteRuntime{}, invalidAuto("route %q requires at least one candidate", config.ID)
@@ -621,8 +614,12 @@ func resolveRoute(
 			return RouteRuntime{}, invalidAuto("route %q candidate %q is duplicated", config.ID, candidate.Model)
 		}
 		if candidate.QualityScoreBPS < 0 || candidate.QualityScoreBPS > 10_000 ||
+			candidate.StabilityScoreBPS < 0 || candidate.StabilityScoreBPS > 10_000 ||
 			candidate.SevereErrorRateBPS < 0 || candidate.SevereErrorRateBPS > 10_000 {
 			return RouteRuntime{}, invalidAuto("route %q candidate %q quality metrics must be between 0 and 10000", config.ID, candidate.Model)
+		}
+		if candidate.ExpectedLatencyMS < 0 {
+			return RouteRuntime{}, invalidAuto("route %q candidate %q expected latency cannot be negative", config.ID, candidate.Model)
 		}
 		seen[candidate.Model] = struct{}{}
 		candidates = append(candidates, RouteCandidateRuntime(candidate))
@@ -630,9 +627,30 @@ func resolveRoute(
 	return RouteRuntime{
 		ID:                    config.ID,
 		MinQualityBPS:         config.MinQualityBPS,
+		MinStabilityBPS:       config.MinStabilityBPS,
 		MaxSevereErrorRateBPS: config.MaxSevereErrorRateBPS,
+		Weights:               weights,
 		Candidates:            candidates,
 	}, nil
+}
+
+func resolveRoutingWeights(routeID string, config RoutingWeightsConfig) (RoutingWeightsRuntime, error) {
+	values := []int{config.QualityBPS, config.StabilityBPS, config.CostBPS, config.PerformanceBPS}
+	total := 0
+	for _, value := range values {
+		if value < 0 || value > 10_000 {
+			return RoutingWeightsRuntime{}, invalidAuto(
+				"route %q routing weights must be between 0 and 10000", routeID,
+			)
+		}
+		total += value
+	}
+	if total != 10_000 {
+		return RoutingWeightsRuntime{}, invalidAuto(
+			"route %q routing weights must sum to 10000", routeID,
+		)
+	}
+	return RoutingWeightsRuntime(config), nil
 }
 
 func resolveAttemptBudget(config AttemptBudgetConfig) (AttemptBudgetRuntime, error) {
@@ -644,8 +662,8 @@ func resolveAttemptBudget(config AttemptBudgetConfig) (AttemptBudgetRuntime, err
 		config.MaxTotalOutboundCalls < 2 {
 		return AttemptBudgetRuntime{}, invalidAuto("strategy call limits must allow an analyzer and an answer")
 	}
-	if config.MaxRetriesPerTarget < 0 || config.MaxTargetSwitches < 0 ||
-		config.MaxModelSwitches < 0 || config.MaxWorstCaseCostMicroUSD < 0 {
+	if config.MaxRetriesPerTarget < 0 || config.MaxModelSwitches < 0 ||
+		config.MaxWorstCaseCostMicroUSD < 0 {
 		return AttemptBudgetRuntime{}, invalidAuto("strategy retry, switch, and cost limits cannot be negative")
 	}
 	if config.MaxWorstCaseCostMicroUSD > maxBrowserSafeInteger {
@@ -656,7 +674,6 @@ func resolveAttemptBudget(config AttemptBudgetConfig) (AttemptBudgetRuntime, err
 		MaxAuxiliaryCalls:        config.MaxAuxiliaryCalls,
 		MaxTotalOutboundCalls:    config.MaxTotalOutboundCalls,
 		MaxRetriesPerTarget:      config.MaxRetriesPerTarget,
-		MaxTargetSwitches:        config.MaxTargetSwitches,
 		MaxModelSwitches:         config.MaxModelSwitches,
 		Deadline:                 deadline,
 		MaxWorstCaseCostMicroUSD: config.MaxWorstCaseCostMicroUSD,

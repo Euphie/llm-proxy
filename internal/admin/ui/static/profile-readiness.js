@@ -107,14 +107,6 @@ export function modelReferences(draft, modelID) {
       candidate.model,
     ));
   });
-  (config.targets || []).forEach((target, targetIndex) => {
-    (target.models || []).forEach((value, modelIndex) => add(
-      "reliability",
-      `上游节点 ${target.id || targetIndex + 1}`,
-      `config.targets[${targetIndex}].models[${modelIndex}]`,
-      value,
-    ));
-  });
   return references;
 }
 

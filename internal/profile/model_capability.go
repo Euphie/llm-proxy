@@ -7,10 +7,12 @@ import (
 
 type ModelCapabilityConfig struct {
 	ID                                string `json:"id"`
+	CanonicalModelID                  string `json:"canonical_model_id,omitempty"`
 	ContextWindow                     *int   `json:"context_window,omitempty"`
 	MaxOutputTokens                   *int   `json:"max_output_tokens,omitempty"`
 	SupportsVision                    *bool  `json:"supports_vision"`
 	SupportsTools                     *bool  `json:"supports_tools,omitempty"`
+	SupportsAgentWorkflow             *bool  `json:"supports_agent_workflow,omitempty"`
 	SupportsStructuredOutput          *bool  `json:"supports_structured_output,omitempty"`
 	InputPriceMicroUSDPerMillion      *int64 `json:"input_price_micro_usd_per_million,omitempty"`
 	OutputPriceMicroUSDPerMillion     *int64 `json:"output_price_micro_usd_per_million,omitempty"`
@@ -20,6 +22,7 @@ type ModelCapabilityConfig struct {
 
 type ModelCapability struct {
 	ID                                string
+	CanonicalModelID                  string
 	ContextWindow                     int
 	HasContextWindow                  bool
 	MaxOutputTokens                   int
@@ -27,6 +30,8 @@ type ModelCapability struct {
 	SupportsVision                    bool
 	SupportsTools                     bool
 	HasSupportsTools                  bool
+	SupportsAgentWorkflow             bool
+	HasSupportsAgentWorkflow          bool
 	SupportsStructuredOutput          bool
 	HasSupportsStructuredOutput       bool
 	InputPriceMicroUSDPerMillion      int64
@@ -58,6 +63,9 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 		if _, exists := catalog[config.ID]; exists {
 			return nil, fmt.Errorf("%w: duplicate model capability ID %q", ErrInvalidConfig, config.ID)
 		}
+		if config.CanonicalModelID != "" && !canonicalModelID(config.CanonicalModelID) {
+			return nil, fmt.Errorf("%w: model capability %q canonical_model_id must be provider/model", ErrInvalidConfig, config.ID)
+		}
 		if config.SupportsVision == nil {
 			return nil, fmt.Errorf("%w: model capability %q supports_vision is required", ErrInvalidConfig, config.ID)
 		}
@@ -77,6 +85,10 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 			*config.MaxOutputTokens >= *config.ContextWindow {
 			return nil, fmt.Errorf("%w: model capability %q max output tokens must be less than context window", ErrInvalidConfig, config.ID)
 		}
+		if config.SupportsAgentWorkflow != nil && *config.SupportsAgentWorkflow &&
+			(config.SupportsTools == nil || !*config.SupportsTools) {
+			return nil, fmt.Errorf("%w: model capability %q supports_agent_workflow requires supports_tools", ErrInvalidConfig, config.ID)
+		}
 		if err := validatePrice(config.ID, "input", config.InputPriceMicroUSDPerMillion); err != nil {
 			return nil, err
 		}
@@ -91,8 +103,9 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 		}
 
 		capability := ModelCapability{
-			ID:             config.ID,
-			SupportsVision: *config.SupportsVision,
+			ID:               config.ID,
+			CanonicalModelID: config.CanonicalModelID,
+			SupportsVision:   *config.SupportsVision,
 		}
 		if config.ContextWindow != nil {
 			capability.ContextWindow = *config.ContextWindow
@@ -105,6 +118,10 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 		if config.SupportsTools != nil {
 			capability.SupportsTools = *config.SupportsTools
 			capability.HasSupportsTools = true
+		}
+		if config.SupportsAgentWorkflow != nil {
+			capability.SupportsAgentWorkflow = *config.SupportsAgentWorkflow
+			capability.HasSupportsAgentWorkflow = true
 		}
 		if config.SupportsStructuredOutput != nil {
 			capability.SupportsStructuredOutput = *config.SupportsStructuredOutput
@@ -129,6 +146,14 @@ func resolveModelCatalog(configs []ModelCapabilityConfig) (ModelCatalog, error) 
 		catalog[config.ID] = capability
 	}
 	return catalog, nil
+}
+
+func canonicalModelID(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, " \t\r\n") {
+		return false
+	}
+	parts := strings.Split(value, "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
 
 func validatePrice(modelID, kind string, price *int64) error {

@@ -8,13 +8,22 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/Euphie/llm-proxy/internal/evaluation"
+	"github.com/Euphie/llm-proxy/internal/gateway"
+	"github.com/Euphie/llm-proxy/internal/modeldirectory"
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/runtimeconfig"
 	"github.com/Euphie/llm-proxy/internal/strategy"
+	"github.com/Euphie/llm-proxy/internal/strategycompiler"
 )
 
-var errModelCatalogUnavailable = errors.New("model catalog service is unavailable")
+var (
+	errModelCatalogUnavailable       = errors.New("model catalog service is unavailable")
+	errEvaluationCatalogUnavailable  = errors.New("evaluation catalog service is unavailable")
+	errStrategyGenerationUnavailable = errors.New("strategy generation service is unavailable")
+)
 
 type errorResponse struct {
 	Error struct {
@@ -159,6 +168,15 @@ func (a *API) writeDomainError(w http.ResponseWriter, r *http.Request, err error
 		writeError(w, http.StatusNotFound, "profile_not_found", "Profile not found.", nil)
 	case errors.Is(err, profile.ErrSlugConflict):
 		writeError(w, http.StatusConflict, "profile_slug_conflict", "Profile slug already exists.", nil)
+	case errors.Is(err, profile.ErrInvalidConfig) &&
+		(strings.Contains(r.URL.Path, "/routing-policy") || strings.Contains(r.URL.Path, "/models")):
+		writeError(
+			w,
+			http.StatusUnprocessableEntity,
+			"policy_invalid",
+			"The runtime configuration is not valid with the current Policy and model directory.",
+			map[string]string{"policy": err.Error()},
+		)
 	case errors.Is(err, profile.ErrInvalidConfig),
 		errors.Is(err, profile.ErrInvalidSlug),
 		errors.Is(err, profile.ErrInvalidProtocol):
@@ -182,6 +200,22 @@ func (a *API) writeDomainError(w http.ResponseWriter, r *http.Request, err error
 		writeError(w, http.StatusNotFound, "strategy_not_found", "Routing strategy not found.", nil)
 	case errors.Is(err, strategy.ErrConflict):
 		writeError(w, http.StatusConflict, "strategy_conflict", "Routing strategy changed; refresh and try again.", nil)
+	case errors.Is(err, runtimeconfig.ErrRevisionConflict):
+		writeError(w, http.StatusConflict, "runtime_revision_conflict", "Runtime configuration changed; refresh and try again.", nil)
+	case errors.Is(err, runtimeconfig.ErrRollbackIncompatible):
+		writeError(w, http.StatusConflict, "rollback_incompatible", "This Policy cannot be restored with the current model directory.", nil)
+	case errors.Is(err, runtimeconfig.ErrNotFound):
+		writeError(w, http.StatusNotFound, "routing_policy_not_found", "Routing Policy not found.", nil)
+	case errors.Is(err, modeldirectory.ErrNotFound):
+		writeError(w, http.StatusNotFound, "profile_model_not_found", "Profile model not found.", nil)
+	case errors.Is(err, runtimeconfig.ErrModelConflict):
+		writeError(w, http.StatusConflict, "profile_model_conflict", "This model ID already exists and retired IDs cannot be reused.", nil)
+	case errors.Is(err, runtimeconfig.ErrModelTransition):
+		writeError(w, http.StatusConflict, "profile_model_transition_invalid", "This model state transition is not allowed.", nil)
+	case errors.Is(err, runtimeconfig.ErrModelStillInUse):
+		writeError(w, http.StatusConflict, "model_still_in_use", "This model is still referenced by the active runtime. Use emergency offline with explicit replacements first.", nil)
+	case errors.Is(err, gateway.ErrRuntimeSync):
+		writeError(w, http.StatusServiceUnavailable, "runtime_prepare_failed", "The new runtime could not be prepared; the current runtime is unchanged.", nil)
 	case errors.Is(err, strategy.ErrImmutable):
 		writeError(w, http.StatusConflict, "strategy_immutable", "Only draft strategies can be edited.", nil)
 	case errors.Is(err, strategy.ErrInvalidTransition):
@@ -190,6 +224,12 @@ func (a *API) writeDomainError(w http.ResponseWriter, r *http.Request, err error
 		writeError(w, http.StatusConflict, "strategy_lkg_unavailable", "No last-known-good strategy is available.", nil)
 	case errors.Is(err, evaluation.ErrInsufficientEvidence):
 		writeError(w, http.StatusConflict, "evaluation_evidence_insufficient", "Reliable quality evidence is not available yet.", nil)
+	case errors.Is(err, strategycompiler.ErrInvalidIntent),
+		errors.Is(err, strategycompiler.ErrInsufficientParticipants):
+		writeError(
+			w, http.StatusUnprocessableEntity, "strategy_generation_invalid",
+			"Strategy generation intent is invalid.", nil,
+		)
 	default:
 		a.writeInternalError(w, r, fmt.Errorf("handle admin API request: %w", err))
 	}

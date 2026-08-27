@@ -41,7 +41,11 @@ export function previewBatchModels(
         status: "ready",
         candidates,
         selectedMatch: candidates[0],
-        model: applyModelSuggestion({ id }, candidates[0]),
+        model: {
+          ...applyModelSuggestion({ id }, candidates[0]),
+          canonical_model_id:
+            candidates[0].entry.canonicalId || candidates[0].entry.id,
+        },
       });
       continue;
     }

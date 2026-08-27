@@ -42,7 +42,7 @@ function assertExplorerHasNoSecrets(html) {
   assert.doesNotMatch(html, /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{8,}|https?:\/\/[^\s"'<]+)/i);
 }
 
-test("server-renders every canonical chapter in the intelligent-routing documentation shell", async () => {
+test("server-renders every current chapter in the intelligent-routing documentation shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -51,7 +51,7 @@ test("server-renders every canonical chapter in the intelligent-routing document
   assert.ok(Buffer.byteLength(html) < 220_000, "The initial document must not serialize every chapter body.");
   assert.doesNotMatch(html, /三个实施阶段/);
   assert.match(html, /<html[^>]*lang="zh-CN"/i);
-  assert.match(html, /<title>智能路由概览 · Mesotes<\/title>/i);
+  assert.match(html, /<title>系统概览 · Mesotes<\/title>/i);
   assert.match(html, /MESOTES/);
   assert.match(html, /<img[^>]+src="\/brand\/mesotes-mark-256\.png"/);
   assert.doesNotMatch(html, /\/_vinext\/image\?url=%2Fbrand/i);
@@ -64,9 +64,9 @@ test("server-renders every canonical chapter in the intelligent-routing document
     access(new URL("public/brand/mesotes-mark-256.png", siteRoot)),
   ]);
   const requiredChapterTitles = [
-    "智能路由概览", "当前能力与目标", "参考方案与取舍", "Profile 配置与模型角色",
-    "Profile 隔离边界", "在线路由", "质量与成本", "Target 与容错",
-    "视觉、重试与 Session", "异步评测与策略优化", "策略生命周期", "实施范围与交付",
+    "系统概览", "后台操作流程", "Profile 与模型目录", "Routing Policy",
+    "在线请求链路", "视觉预处理", "重试、超时与 Session", "评测与自动校准",
+    "统计与故障排查", "运行边界与上线检查",
   ];
   const missing = requiredChapterTitles.filter((title) => !html.includes(title));
   assert.deepEqual(missing, [], `Rendered documentation is missing canonical chapters: ${missing.join("、")}`);
@@ -78,31 +78,56 @@ test("ignores malformed request hosts in favor of the configured public origin",
   const response = await render("/docs/overview", "localhost:99999");
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /<title>智能路由概览 · Mesotes<\/title>/i);
-  assert.match(html, /https:\/\/docs\.example\.test\/og-routing-design\.png/i);
+  assert.match(html, /<title>系统概览 · Mesotes<\/title>/i);
+  assert.doesNotMatch(html, /og-routing-design\.png/i);
 });
 
 test("server-renders directive callouts with their accessible labels", async () => {
   const pages = await Promise.all([
     render("/docs/online-routing"),
-    render("/docs/competitor-evidence"),
+    render("/docs/evaluation"),
+    render("/docs/operations"),
   ]);
   const html = (await Promise.all(pages.map((response) => response.text()))).join("\n");
 
-  for (const label of ["当前已实现", "本版目标", "后续方向", "证据边界"]) {
+  for (const label of ["当前已实现", "证据边界"]) {
     assert.match(html, new RegExp(`<aside[^>]*role=\\"note\\"[^>]*><p class=\\"status-callout-label\\">${label}`));
   }
   const renderedArticles = [...html.matchAll(/<article\b[\s\S]*?<\/article>/g)].map(([article]) => article).join("\n");
   assert.doesNotMatch(renderedArticles, /\[!(?:CURRENT|TARGET|FUTURE|EVIDENCE)\]/);
 });
 
-test("server-renders language-labelled code and accessible diagram openers", async () => {
+test("server-renders language-labelled code blocks", async () => {
   const response = await render("/docs/online-routing");
   const html = await response.text();
 
   assert.match(html, /class=\"code-language\">text</);
   assert.match(html, /aria-live=\"polite\"/);
-  assert.match(html, /aria-label=\"放大查看：在线路由流程\"/);
+});
+
+test("server-renders every flow diagram as an accessible zoom control", async () => {
+  const pages = await Promise.all([
+    render("/docs/overview"),
+    render("/docs/online-routing"),
+    render("/docs/vision"),
+    render("/docs/reliability"),
+    render("/docs/evaluation"),
+    render("/docs/observability"),
+  ]);
+  const html = (await Promise.all(pages.map((response) => response.text()))).join("\n");
+
+  for (const [name, alt] of [
+    ["system-architecture", "当前 V2 系统架构"],
+    ["online-routing-flow", "model=auto 在线请求链路"],
+    ["vision-processing-flow", "视觉预处理决策与调用链路"],
+    ["retry-timeout-state-machine", "重试、超时与提交边界状态机"],
+    ["session-lock-lifecycle", "Session 锁定生命周期"],
+    ["policy-calibration-loop", "Routing Policy 自动校准闭环"],
+    ["observability-troubleshooting", "一次请求的统计与排障链路"],
+  ]) {
+    assert.match(html, new RegExp(`aria-label=\\"放大查看：${alt}\\"`));
+    assert.match(html, new RegExp(`src=\\"/diagrams/${name}\\.svg\\"`));
+  }
 });
 
 test("server-renders one bounded precomputed route trace without secrets", async () => {
@@ -111,22 +136,20 @@ test("server-renders one bounded precomputed route trace without secrets", async
   const explorer = explorerSubtree(html);
 
   for (const value of [
-    "静态设计示例",
+    "当前字段示例",
     "路由轨迹示例",
-    "profile_acme_primary",
-    "20260801-001",
-    "代码助手-均衡版",
-    "model_economy",
-    "缺少所需工具能力",
-    "model_balanced",
-    "target_balanced_primary",
+    "profile_demo",
+    "20260818-001",
+    "日常均衡",
+    "model_shadow",
+    "没有 Production 资格",
+    "model_primary",
     "retryable_pre_commit_failure",
     "ClientCommit",
     "回答尝试",
     "辅助调用",
     "总出站调用",
-    "单 Target 重试",
-    "Target 切换",
+    "单 Upstream 重试",
     "模型切换",
     "deadline",
     "最坏成本",
@@ -134,7 +157,7 @@ test("server-renders one bounded precomputed route trace without secrets", async
   ]) {
     assert.ok(explorer.includes(value), `Rendered trace is missing ${value}.`);
   }
-  assert.match(explorer, /当前 Profile 与策略/);
+  assert.match(explorer, /当前 Profile 与 Policy/);
   assert.doesNotMatch(explorer, /sha256:/);
   assertExplorerHasNoSecrets(explorer);
   assert.throws(() => assertExplorerHasNoSecrets('<dt>endpoint</dt><dd>https://internal.example/v1</dd>'));

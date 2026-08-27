@@ -18,6 +18,7 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/admin"
 	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
@@ -118,6 +119,69 @@ func TestNewStartsUnconfiguredAndServesAdminAPI(t *testing.T) {
 	}
 }
 
+func TestCompletedEvaluationMarksRoutingPolicyReconciliationDirty(t *testing.T) {
+	application, err := New(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := application.Close(); err != nil {
+			t.Errorf("close application: %v", err)
+		}
+	})
+
+	result, err := application.db.Exec(`
+		INSERT INTO profiles (slug, display_name, enabled, config_json, created_at, updated_at)
+		VALUES ('evaluation-reconcile', 'Evaluation Reconcile', 1, '{}', 'now', 'now')
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dimensions := make(map[evaluation.Dimension]evaluation.Outcome, len(evaluation.ReviewDimensions))
+	for _, dimension := range evaluation.ReviewDimensions {
+		dimensions[dimension] = evaluation.OutcomeCandidateWin
+	}
+	terminal := make(chan evaluation.TerminalResult, 1)
+	if got := application.evaluation.Submit(evaluation.Job{
+		ProfileID: profileID, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100,
+		EstimatedCostMicroUSD: 10, MaxConcurrency: 1, QueueCapacity: 1,
+		Timeout: time.Minute, ExpiresAt: time.Now().Add(time.Minute),
+		Run: func(context.Context) (evaluation.Result, error) {
+			return evaluation.Result{SpentMicroUSD: 10, Evidence: &evaluation.Evidence{
+				ProfileID: profileID, Strategy: "active", Route: "general",
+				TaskType: "general", Difficulty: "simple", Risk: "normal", VisionMode: "none",
+				CandidateModel: "fast", ReferenceModel: "strong", ReviewerModel: "reviewer",
+				Outcome: evaluation.OutcomeCandidateWin, Dimensions: dimensions,
+			}}, nil
+		},
+		OnTerminal: func(result evaluation.TerminalResult) { terminal <- result },
+	}); got != evaluation.SubmitAccepted {
+		t.Fatalf("Submit()=%q", got)
+	}
+	select {
+	case result := <-terminal:
+		if result.Status != evaluation.TerminalCompleted || !result.EvidenceRecorded {
+			t.Fatalf("terminal=%+v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("evaluation did not finish")
+	}
+
+	var dirtyAt string
+	if err := application.db.QueryRow(`
+		SELECT dirty_at FROM routing_policy_reconcile_state WHERE profile_id = ?
+	`, profileID).Scan(&dirtyAt); err != nil {
+		t.Fatalf("evaluation evidence did not schedule Policy reconciliation: %v", err)
+	}
+	if strings.TrimSpace(dirtyAt) == "" {
+		t.Fatal("Policy reconciliation was not marked dirty")
+	}
+}
+
 func TestSystemAPIUsesConfiguredDataDirectoryAndVersion(t *testing.T) {
 	dataDir := t.TempDir()
 	application, err := New(Options{
@@ -172,7 +236,7 @@ func TestSystemAPIUsesConfiguredDataDirectoryAndVersion(t *testing.T) {
 		body["data_dir"] != dataDir ||
 		body["database_file"] != "llm-proxy.db" ||
 		body["database_bytes"] != float64(databaseInfo.Size()) ||
-		body["schema_version"] != float64(15) ||
+		body["schema_version"] != float64(27) ||
 		body["default_profile_id"] != float64(0) ||
 		body["password_must_change"] != false {
 		t.Fatalf("system=%+v", body)
@@ -484,6 +548,142 @@ func TestChangingBootstrapPasswordActivatesPersistedDefaultProfile(t *testing.T)
 	}
 }
 
+func TestNewValidatesPersistedV2ProfileFromActivePolicy(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := database.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := profile.NewConfig(profile.ProtocolAnthropic, "https://example.com")
+	config.Version = 2
+	config.Models = nil
+	config.AutoRouting = profile.AutoRoutingConfig{Enabled: true}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := appPolicyTestConfig()
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO profiles (id, slug, display_name, enabled, config_json, created_at, updated_at)
+		VALUES (3, 'policy-v2', 'Policy V2', 1, ?, '2026-08-13T00:00:00Z', '2026-08-13T00:00:00Z');
+		UPDATE app_settings SET default_profile_id = 3 WHERE id = 1;
+		INSERT INTO routing_policy_versions (
+		  id, profile_id, policy_sequence, policy_json, source_version_id,
+		  change_kind, change_reason, created_by, created_at
+		) VALUES (4, 3, 1, ?, NULL, 'migration', '', 'system', '2026-08-13T00:00:00Z');
+		INSERT INTO profile_runtime_state (
+		  profile_id, revision, active_policy_version_id, model_catalog_revision, updated_at
+		) VALUES (3, 1, 4, 1, '2026-08-13T00:00:00Z');
+	`, string(configJSON), string(policyJSON)); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	for _, id := range []string{"fast", "strong"} {
+		capabilityJSON := appModelCapabilityJSON(t, id)
+		if _, err := db.Exec(`
+			INSERT INTO profile_models (
+			  profile_id, model_id, capability_json, status, status_reason,
+			  created_at, updated_at, retired_at
+			) VALUES (3, ?, ?, 'available', '',
+			  '2026-08-13T00:00:00Z', '2026-08-13T00:00:00Z', NULL)
+		`, id, capabilityJSON); err != nil {
+			_ = db.Close()
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`UPDATE routing_policy_versions SET policy_json = ? WHERE id = 4`, string(policyJSON)); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	var participants int
+	if err := db.QueryRow(`
+		SELECT json_array_length(policy_json, '$.roles.participants')
+		FROM routing_policy_versions WHERE id = 4
+	`).Scan(&participants); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if participants != 2 {
+		_ = db.Close()
+		t.Fatalf("persisted participants=%d", participants)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	application, err := New(Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+
+	login := request(application, http.MethodPost, "/_admin/api/login",
+		`{"username":"admin","password":"admin"}`, nil, "")
+	cookies := login.Result().Cookies()
+	csrf := findCookie(t, cookies, admin.CSRFCookieName).Value
+	changed := request(application, http.MethodPost, "/_admin/api/password",
+		`{"current_password":"admin","new_password":"strong-admin-password"}`,
+		cookies, csrf)
+	if changed.Code != http.StatusOK {
+		t.Fatalf("password status=%d body=%s", changed.Code, changed.Body.String())
+	}
+	policyResponse := request(application, http.MethodGet,
+		"/_admin/api/profiles/3/routing-policy", "", changed.Result().Cookies(), "")
+	if policyResponse.Code != http.StatusOK ||
+		!strings.Contains(policyResponse.Body.String(), `"active_policy_version_id":4`) {
+		t.Fatalf("policy status=%d body=%s", policyResponse.Code, policyResponse.Body.String())
+	}
+}
+
+func appPolicyTestConfig() profile.RoutingPolicyConfig {
+	return profile.RoutingPolicyConfig{
+		RoutingStrategyConfig: profile.RoutingStrategyConfig{
+			Name: "20260813-001", DefaultRoute: "general",
+			Roles: &profile.RoutingStrategyRolesConfig{
+				Participants: []string{"fast", "strong"}, StrongBaselineModel: "strong",
+				TaskAnalyzerModel: "fast", ReviewerModel: "strong",
+			},
+			Routes: []profile.RouteConfig{{
+				ID: "general", MinQualityBPS: 8_000, MinStabilityBPS: 8_000,
+				MaxSevereErrorRateBPS: 500,
+				Weights: profile.RoutingWeightsConfig{
+					QualityBPS: 4_000, StabilityBPS: 2_500, CostBPS: 2_500, PerformanceBPS: 1_000,
+				},
+				Candidates: []profile.RouteCandidateConfig{
+					{Model: "fast", QualityScoreBPS: 8_000, StabilityScoreBPS: 8_000, SevereErrorRateBPS: 500},
+					{Model: "strong", QualityScoreBPS: 10_000, StabilityScoreBPS: 10_000},
+				},
+			}},
+			Budget: profile.AttemptBudgetConfig{
+				MaxAnswerAttempts: 2, MaxAuxiliaryCalls: 2, MaxTotalOutboundCalls: 5,
+				MaxRetriesPerTarget: 1, MaxModelSwitches: 1, Deadline: "2m",
+				MaxWorstCaseCostMicroUSD: 10_000_000,
+			},
+		},
+		AnalyzerTimeout: "15s", AnalyzerMinConfidenceBPS: 7_000, SessionTTL: "24h",
+	}
+}
+
+func appModelCapabilityJSON(t *testing.T, id string) string {
+	t.Helper()
+	contextWindow, maxOutput := 200_000, 32_000
+	vision, tools, structured := false, true, true
+	inputPrice, outputPrice := int64(1_000_000), int64(5_000_000)
+	payload, err := json.Marshal(profile.ModelCapabilityConfig{
+		ID: id, ContextWindow: &contextWindow, MaxOutputTokens: &maxOutput,
+		SupportsVision: &vision, SupportsTools: &tools, SupportsStructuredOutput: &structured,
+		InputPriceMicroUSDPerMillion: &inputPrice, OutputPriceMicroUSDPerMillion: &outputPrice,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
+}
+
 // Break caught: reporting ready after a committed password change when failed runtime activation was never retried.
 func TestLoginRecoversRuntimeAfterCommittedPasswordActivationFailure(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -769,18 +969,30 @@ func TestCloseStopsRequestsThenDrainsUsageBeforeClosingDatabase(t *testing.T) {
 	waitForSignal(t, parserEntered, "usage parser")
 
 	usageCloseStarted := make(chan struct{})
+	agentMaintenanceCloseStarted := make(chan struct{})
+	evaluationCatalogCloseStarted := make(chan struct{})
 	evaluationCloseStarted := make(chan struct{})
 	databaseCloseStarted := make(chan struct{})
+	closeAgentMaintenance := application.closeAgentTrajectoryMaintenance
 	closeEvaluation := application.closeEvaluation
+	closeEvaluationCatalog := application.closeEvaluationCatalog
 	closeUsage := application.closeUsage
 	closeDatabase := application.closeDatabase
 	application.closeUsage = func() error {
 		close(usageCloseStarted)
 		return closeUsage()
 	}
+	application.closeAgentTrajectoryMaintenance = func() error {
+		close(agentMaintenanceCloseStarted)
+		return closeAgentMaintenance()
+	}
 	application.closeEvaluation = func() error {
 		close(evaluationCloseStarted)
 		return closeEvaluation()
+	}
+	application.closeEvaluationCatalog = func() error {
+		close(evaluationCatalogCloseStarted)
+		return closeEvaluationCatalog()
 	}
 	application.closeDatabase = func() error {
 		close(databaseCloseStarted)
@@ -792,6 +1004,8 @@ func TestCloseStopsRequestsThenDrainsUsageBeforeClosingDatabase(t *testing.T) {
 		closeResult <- application.Close()
 	}()
 	waitForSignal(t, evaluationCloseStarted, "evaluation shutdown")
+	waitForSignal(t, evaluationCatalogCloseStarted, "evaluation catalog updater shutdown")
+	waitForSignal(t, agentMaintenanceCloseStarted, "Agent trajectory maintenance shutdown")
 	waitForSignal(t, usageCloseStarted, "usage drain")
 
 	login := request(application, http.MethodPost, "/_admin/api/login",

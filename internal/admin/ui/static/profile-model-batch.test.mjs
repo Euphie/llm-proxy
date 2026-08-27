@@ -27,6 +27,7 @@ test("batch preview preserves order while marking duplicates and existing exact 
     ["unknown-model", "unknown"],
   ]);
   assert.equal(rows[0].model.context_window, 128000);
+  assert.equal(rows[0].model.canonical_model_id, "acme/alpha-fast");
   assert.deepEqual(rows[3].model, { id: "unknown-model" });
 });
 

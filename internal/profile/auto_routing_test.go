@@ -3,133 +3,85 @@ package profile
 import (
 	"encoding/json"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestResolveRiskPolicyDefaultsAndExplicitEmptyLists(t *testing.T) {
+func TestLegacyTargetSwitchBudgetIsDiscarded(t *testing.T) {
+	var budget AttemptBudgetConfig
+	if err := json.Unmarshal([]byte(`{
+		"max_answer_attempts":2,
+		"max_auxiliary_calls":2,
+		"max_total_outbound_calls":5,
+		"max_retries_per_target":1,
+		"max_target_switches":3,
+		"max_model_switches":1,
+		"deadline":"2m",
+		"max_worst_case_cost_micro_usd":500000
+	}`), &budget); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := json.Marshal(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(contents, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := persisted["max_target_switches"]; exists {
+		t.Fatalf("removed target-switch budget survived round trip: %s", contents)
+	}
+}
+
+func TestResolveAutoRoutingSessionLockTokenThreshold(t *testing.T) {
 	record := validAutoRoutingRecord()
 	runtime, err := record.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns, defaultSensitiveTextPatterns) ||
-		!reflect.DeepEqual(runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns, defaultSensitiveToolPatterns) ||
-		runtime.AutoRouting.RiskPolicy.LongContextThresholdBPS != 7500 {
-		t.Fatalf("default risk policy=%+v", runtime.AutoRouting.RiskPolicy)
+	if runtime.AutoRouting.SessionLockTokenThreshold != 100_000 {
+		t.Fatalf("default threshold=%d", runtime.AutoRouting.SessionLockTokenThreshold)
 	}
 
-	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
-		Version:                 RiskPolicyVersion2,
-		SensitiveTextPatterns:   []string{},
-		SensitiveToolPatterns:   []string{},
-		LongContextThresholdBPS: 6200,
-	}
+	record.Config.AutoRouting.SessionLockTokenThreshold = 250_000
 	runtime, err = record.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns == nil ||
-		runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns == nil ||
-		len(runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns) != 0 ||
-		len(runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns) != 0 ||
-		runtime.AutoRouting.RiskPolicy.LongContextThresholdBPS != 6200 {
-		t.Fatalf("explicit empty risk policy=%+v", runtime.AutoRouting.RiskPolicy)
+	if runtime.AutoRouting.SessionLockTokenThreshold != 250_000 {
+		t.Fatalf("configured threshold=%d", runtime.AutoRouting.SessionLockTokenThreshold)
 	}
 }
 
-func TestRiskPolicyV2DefaultsIgnoreUnversionedLegacyRules(t *testing.T) {
+func TestResolveAutoRoutingRejectsNegativeSessionLockTokenThreshold(t *testing.T) {
 	record := validAutoRoutingRecord()
-	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
-		SensitiveTextPatterns: []string{"edit the file", "shell"},
-		SensitiveToolPatterns: []string{"exec", "apply_patch"},
+	record.Config.AutoRouting.SessionLockTokenThreshold = -1
+
+	_, err := record.Resolve()
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "Session lock token threshold") {
+		t.Fatalf("Resolve() error=%v", err)
 	}
+}
+
+func TestResolveAutoRoutingPreservesCandidateProductionEligibility(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.Strategy.Routes[0].Candidates[0].ProductionEligible = true
+
 	runtime, err := record.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.AutoRouting.RiskPolicy.Version != 2 {
-		t.Fatalf("risk version=%d", runtime.AutoRouting.RiskPolicy.Version)
-	}
-	for _, pattern := range append(
-		append([]string(nil), runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns...),
-		runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns...,
-	) {
-		if pattern == "edit the file" || pattern == "shell" || pattern == "exec" || pattern == "apply_patch" {
-			t.Fatalf("legacy broad pattern remained active: %q", pattern)
-		}
-	}
-}
-
-func TestRiskPolicyConfigJSONPreservesExplicitEmptyListsAndOrder(t *testing.T) {
-	want := RiskPolicyConfig{
-		Version:                  RiskPolicyVersion2,
-		SensitiveTextPatterns:    []string{"second", "first"},
-		SensitiveToolPatterns:    []string{},
-		StructuredOutputHighRisk: true,
-		LongContextThresholdBPS:  8125,
-	}
-	body, err := json.Marshal(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got RiskPolicyConfig
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, want) || got.SensitiveToolPatterns == nil {
-		t.Fatalf("round trip=%+v JSON=%s", got, body)
-	}
-}
-
-func TestResolveRiskPolicyClonesConfiguredSlices(t *testing.T) {
-	record := validAutoRoutingRecord()
-	record.Config.AutoRouting.RiskPolicy = RiskPolicyConfig{
-		Version:               RiskPolicyVersion2,
-		SensitiveTextPatterns: []string{"original text"},
-		SensitiveToolPatterns: []string{"original_tool"},
-	}
-	runtime, err := record.Resolve()
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Config.AutoRouting.RiskPolicy.SensitiveTextPatterns[0] = "mutated text"
-	record.Config.AutoRouting.RiskPolicy.SensitiveToolPatterns[0] = "mutated_tool"
-	if runtime.AutoRouting.RiskPolicy.SensitiveTextPatterns[0] != "original text" ||
-		runtime.AutoRouting.RiskPolicy.SensitiveToolPatterns[0] != "original_tool" {
-		t.Fatalf("runtime followed config mutation: %+v", runtime.AutoRouting.RiskPolicy)
-	}
-}
-
-func TestResolveRiskPolicyRejectsActionableInvalidSettings(t *testing.T) {
-	tests := []struct {
-		name   string
-		policy RiskPolicyConfig
-		want   string
-	}{
-		{name: "blank text pattern", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveTextPatterns: []string{" "}}, want: "sensitive text pattern 1"},
-		{name: "untrimmed tool pattern", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveToolPatterns: []string{" exec"}}, want: "sensitive tool pattern 1"},
-		{name: "duplicate ignoring case", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveTextPatterns: []string{"Deploy", "deploy"}}, want: "duplicate"},
-		{name: "too many patterns", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveToolPatterns: make([]string, maxRiskPatterns+1)}, want: "at most"},
-		{name: "pattern too long", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, SensitiveTextPatterns: []string{strings.Repeat("x", maxRiskPatternRunes+1)}}, want: "at most"},
-		{name: "threshold above maximum", policy: RiskPolicyConfig{Version: RiskPolicyVersion2, LongContextThresholdBPS: 10001}, want: "between 1 and 10000"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			record := validAutoRoutingRecord()
-			record.Config.AutoRouting.RiskPolicy = tt.policy
-			_, err := record.Resolve()
-			if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Resolve() error=%v, want ErrInvalidConfig containing %q", err, tt.want)
-			}
-		})
+	if !runtime.AutoRouting.Strategy.Routes["balanced"].Candidates[0].ProductionEligible {
+		t.Fatal("candidate production eligibility was lost")
 	}
 }
 
 func TestResolveAutoRoutingContract(t *testing.T) {
 	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.Strategy.MinNetSavingsBPS = 1_000
+	record.Config.AutoRouting.Strategy.LatencyTargetMS = 600
 
 	runtime, err := record.Resolve()
 	if err != nil {
@@ -149,15 +101,39 @@ func TestResolveAutoRoutingContract(t *testing.T) {
 		t.Fatalf("analyzer settings=%+v", runtime.AutoRouting)
 	}
 	if runtime.AutoRouting.Strategy.Name != "20260802-001" ||
-		runtime.AutoRouting.Strategy.DefaultRoute != "balanced" {
+		runtime.AutoRouting.Strategy.DefaultRoute != "balanced" ||
+		runtime.AutoRouting.Strategy.MinNetSavingsBPS != 1_000 ||
+		runtime.AutoRouting.Strategy.LatencyTargetMS != 600 {
 		t.Fatalf("strategy=%+v", runtime.AutoRouting.Strategy)
 	}
 	if got := runtime.Models["fast"].InputPriceMicroUSDPerMillion; got != 100_000 {
 		t.Fatalf("input price=%d", got)
 	}
 	if !runtime.Models["strong"].HasSupportsTools ||
-		!runtime.Models["strong"].SupportsTools {
+		!runtime.Models["strong"].SupportsTools ||
+		!runtime.Models["strong"].HasSupportsAgentWorkflow ||
+		!runtime.Models["strong"].SupportsAgentWorkflow {
 		t.Fatalf("tool capability=%+v", runtime.Models["strong"])
+	}
+}
+
+func TestResolveAutoRoutingRejectsInvalidStrategyGuardrails(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*RoutingStrategyConfig)
+	}{
+		{name: "negative savings", mutate: func(strategy *RoutingStrategyConfig) { strategy.MinNetSavingsBPS = -1 }},
+		{name: "savings above maximum", mutate: func(strategy *RoutingStrategyConfig) { strategy.MinNetSavingsBPS = 10_001 }},
+		{name: "negative latency", mutate: func(strategy *RoutingStrategyConfig) { strategy.LatencyTargetMS = -1 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := validAutoRoutingRecord()
+			tt.mutate(&record.Config.AutoRouting.Strategy)
+			if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Resolve() error=%v, want ErrInvalidConfig", err)
+			}
+		})
 	}
 }
 
@@ -185,6 +161,7 @@ func TestResolveSelfEscalationRequiresToolSupportForNonBaselineCandidates(t *tes
 	record.Config.AutoRouting.TaskAnalyzerModel = "strong"
 	unsupported := false
 	record.Config.Models[0].SupportsTools = &unsupported
+	record.Config.Models[0].SupportsAgentWorkflow = &unsupported
 
 	_, err := record.Resolve()
 	if !errors.Is(err, ErrInvalidConfig) ||
@@ -203,10 +180,23 @@ func TestResolveAutoRoutingRequiresTaskAnalyzerToolSupport(t *testing.T) {
 	record := validAutoRoutingRecord()
 	unsupported := false
 	record.Config.Models[0].SupportsTools = &unsupported
+	record.Config.Models[0].SupportsAgentWorkflow = &unsupported
 
 	_, err := record.Resolve()
 	if !errors.Is(err, ErrInvalidConfig) ||
 		!strings.Contains(err.Error(), `task analyzer model "fast" must confirm tool support`) {
+		t.Fatalf("Resolve() error=%v", err)
+	}
+}
+
+func TestResolveRejectsAgentWorkflowWithoutToolSupport(t *testing.T) {
+	record := validAutoRoutingRecord()
+	unsupported := false
+	record.Config.Models[0].SupportsTools = &unsupported
+
+	_, err := record.Resolve()
+	if !errors.Is(err, ErrInvalidConfig) ||
+		!strings.Contains(err.Error(), "supports_agent_workflow requires supports_tools") {
 		t.Fatalf("Resolve() error=%v", err)
 	}
 }
@@ -245,6 +235,7 @@ func TestResolveDynamicOptimizationContract(t *testing.T) {
 	record := validAutoRoutingRecord()
 	record.Config.AutoRouting.DynamicOptimization = DynamicOptimizationConfig{
 		Enabled:             true,
+		AutoUpdatePolicy:    true,
 		SampleRateBPS:       1250,
 		DailyBudgetMicroUSD: 250_000,
 		ReviewerModel:       "strong",
@@ -258,7 +249,7 @@ func TestResolveDynamicOptimizationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := runtime.AutoRouting.DynamicOptimization
-	if !got.Enabled || got.SampleRateBPS != 1250 || got.DailyBudgetMicroUSD != 250_000 ||
+	if !got.Enabled || !got.AutoUpdatePolicy || got.SampleRateBPS != 1250 || got.DailyBudgetMicroUSD != 250_000 ||
 		got.ReviewerModel != "strong" || got.MaxConcurrency != 3 ||
 		got.QueueCapacity != 128 || got.TaskTimeout != 90*time.Second {
 		t.Fatalf("dynamic optimization=%+v", got)
@@ -375,6 +366,17 @@ func TestResolveDynamicOptimizationDisabledIgnoresEmptySettings(t *testing.T) {
 	}
 	if runtime.AutoRouting.DynamicOptimization.Enabled {
 		t.Fatal("dynamic optimization unexpectedly enabled")
+	}
+}
+
+func TestResolveDynamicOptimizationRejectsAutomaticUpdatesWithoutEvaluation(t *testing.T) {
+	record := validAutoRoutingRecord()
+	record.Config.AutoRouting.DynamicOptimization = DynamicOptimizationConfig{
+		AutoUpdatePolicy: true,
+	}
+
+	if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Resolve() error=%v, want ErrInvalidConfig", err)
 	}
 }
 
@@ -567,6 +569,7 @@ func TestResolveAutoRoutingRequiresExecutableVisionModel(t *testing.T) {
 func validAutoRoutingRecord() Record {
 	supportsVision := false
 	supportsTools := true
+	supportsAgentWorkflow := true
 	supportsStructuredOutput := true
 	contextWindow := 200_000
 	maxOutputTokens := 16_000
@@ -580,6 +583,7 @@ func validAutoRoutingRecord() Record {
 		{
 			ID: "fast", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutputTokens,
 			SupportsVision: &supportsVision, SupportsTools: &supportsTools,
+			SupportsAgentWorkflow:         &supportsAgentWorkflow,
 			SupportsStructuredOutput:      &supportsStructuredOutput,
 			InputPriceMicroUSDPerMillion:  &fastInputPrice,
 			OutputPriceMicroUSDPerMillion: &fastOutputPrice,
@@ -587,6 +591,7 @@ func validAutoRoutingRecord() Record {
 		{
 			ID: "strong", ContextWindow: &contextWindow, MaxOutputTokens: &maxOutputTokens,
 			SupportsVision: &supportsVision, SupportsTools: &supportsTools,
+			SupportsAgentWorkflow:         &supportsAgentWorkflow,
 			SupportsStructuredOutput:      &supportsStructuredOutput,
 			InputPriceMicroUSDPerMillion:  &strongInputPrice,
 			OutputPriceMicroUSDPerMillion: &strongOutputPrice,
@@ -605,20 +610,28 @@ func validAutoRoutingRecord() Record {
 			DefaultRoute: "balanced",
 			TaskRoutes: []TaskRouteConfig{
 				{TaskType: "simple", Route: "balanced"},
-				{TaskType: "high_risk", Route: "strong"},
+				{TaskType: "reasoning", Route: "strong"},
 			},
 			Routes: []RouteConfig{
 				{
-					ID: "balanced", MinQualityBPS: 9000, MaxSevereErrorRateBPS: 100,
+					ID: "balanced", MinQualityBPS: 9000, MinStabilityBPS: 8000,
+					MaxSevereErrorRateBPS: 100,
+					Weights: RoutingWeightsConfig{
+						QualityBPS: 4000, StabilityBPS: 2500, CostBPS: 2500, PerformanceBPS: 1000,
+					},
 					Candidates: []RouteCandidateConfig{
-						{Model: "fast", QualityScoreBPS: 9200, SevereErrorRateBPS: 50},
-						{Model: "strong", QualityScoreBPS: 9900, SevereErrorRateBPS: 10},
+						{Model: "fast", QualityScoreBPS: 9200, StabilityScoreBPS: 9300, SevereErrorRateBPS: 50, ExpectedLatencyMS: 250},
+						{Model: "strong", QualityScoreBPS: 9900, StabilityScoreBPS: 9900, SevereErrorRateBPS: 10, ExpectedLatencyMS: 800},
 					},
 				},
 				{
-					ID: "strong", MinQualityBPS: 9800, MaxSevereErrorRateBPS: 50,
+					ID: "strong", MinQualityBPS: 9800, MinStabilityBPS: 9800,
+					MaxSevereErrorRateBPS: 50,
+					Weights: RoutingWeightsConfig{
+						QualityBPS: 4000, StabilityBPS: 2500, CostBPS: 2500, PerformanceBPS: 1000,
+					},
 					Candidates: []RouteCandidateConfig{
-						{Model: "strong", QualityScoreBPS: 9900, SevereErrorRateBPS: 10},
+						{Model: "strong", QualityScoreBPS: 9900, StabilityScoreBPS: 9900, SevereErrorRateBPS: 10, ExpectedLatencyMS: 800},
 					},
 				},
 			},
@@ -627,7 +640,6 @@ func validAutoRoutingRecord() Record {
 				MaxAuxiliaryCalls:        2,
 				MaxTotalOutboundCalls:    5,
 				MaxRetriesPerTarget:      1,
-				MaxTargetSwitches:        0,
 				MaxModelSwitches:         1,
 				Deadline:                 "2m",
 				MaxWorstCaseCostMicroUSD: 500_000,
@@ -637,5 +649,42 @@ func validAutoRoutingRecord() Record {
 
 	return Record{
 		Slug: "auto", DisplayName: "Auto", Enabled: true, Config: config,
+	}
+}
+
+func TestAutoRoutingRequiresCompleteFourDimensionalScoring(t *testing.T) {
+	record := validAutoRoutingRecord()
+	route := &record.Config.AutoRouting.Strategy.Routes[0]
+
+	route.Weights = RoutingWeightsConfig{
+		QualityBPS: 4000, StabilityBPS: 2500, CostBPS: 2500, PerformanceBPS: 999,
+	}
+	if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("weights sum Resolve() error=%v, want ErrInvalidConfig", err)
+	}
+
+	record = validAutoRoutingRecord()
+	record.Config.AutoRouting.Strategy.Routes[0].Candidates[0].StabilityScoreBPS = 10_001
+	if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("stability Resolve() error=%v, want ErrInvalidConfig", err)
+	}
+
+	record = validAutoRoutingRecord()
+	record.Config.AutoRouting.Strategy.Routes[0].Candidates[0].ExpectedLatencyMS = -1
+	if _, err := record.Resolve(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("latency Resolve() error=%v, want ErrInvalidConfig", err)
+	}
+
+	runtime, err := validAutoRoutingRecord().Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := runtime.AutoRouting.Strategy.Routes["balanced"]
+	if resolved.MinStabilityBPS != 8000 || resolved.Weights.QualityBPS != 4000 ||
+		resolved.Weights.StabilityBPS != 2500 || resolved.Weights.CostBPS != 2500 ||
+		resolved.Weights.PerformanceBPS != 1000 ||
+		resolved.Candidates[0].StabilityScoreBPS != 9300 ||
+		resolved.Candidates[0].ExpectedLatencyMS != 250 {
+		t.Fatalf("resolved scoring=%+v", resolved)
 	}
 }

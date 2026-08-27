@@ -2,18 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const chapters = [
-  ["overview", "智能路由概览", "一句话理解", "用一个简单流程说明 auto 如何在单个 Profile 内选模型、控成本并守住质量。"],
-  ["source-baseline", "当前能力与目标", "固定基线", "区分当前已实现能力与智能路由的待实现目标。"],
-  ["competitor-evidence", "参考方案与取舍", "参考矩阵", "提炼竞品中值得采用的机制，并明确不照搬的复杂设计。"],
-  ["core-model", "Profile 配置与模型角色", "启用 auto 的必要配置", "说明启用 auto 所需配置，以及 ModelCard、Target 和模型角色。"],
-  ["profile-isolation", "Profile 隔离边界", "边界如何工作", "URL 选定 Profile 后，路由、视觉、重试和评测始终留在该边界内。"],
-  ["online-routing", "在线路由", "从请求到执行", "规则先判断，拿不准时调用轻量任务分析器，再生成不可变执行计划。"],
-  ["quality-and-cost", "质量与成本", "Route 质量门槛", "先满足 Route 质量门槛，再选择完整成本更低的模型。"],
-  ["target-reliability", "Target 与容错", "为什么要分开", "在同一 Profile 内选择模型部署，并以有界重试处理临时故障。"],
-  ["runtime-reliability", "视觉、重试与 Session", "视觉三态", "把视觉辅助、尝试预算、流式提交和 Session 连续性放进同一执行边界。"],
-  ["evaluation-feedback", "异步评测与策略优化", "开启条件", "用异步样本评测积累证据，只生成候选策略，不自动改变线上选择。"],
-  ["strategy-lifecycle", "策略生命周期", "命名与状态", "以不可变版本、CAS、灰度和 LKG 安全发布或回滚策略。"],
-  ["engineering-and-delivery", "实施范围与交付", "v1 边界", "明确 v1 范围、实施阶段和验收条件。"],
+  ["overview", "系统概览", "两种请求模式", "说明显式模型与 model=auto 的边界，以及当前系统实际负责什么。"],
+  ["admin-workflow", "后台操作流程", "第一次配置", "按照当前管理后台页面完成 Profile、模型、策略和 Agent 配置。"],
+  ["profiles-models", "Profile 与模型目录", "Profile 是隔离边界", "说明连接配置、模型事实、状态和运行时修订如何立即生效。"],
+  ["routing-policy", "Routing Policy", "当前生效模型", "说明策略生成、编辑、生产资格、立即生效和历史回滚。"],
+  ["online-routing", "在线请求链路", "请求处理顺序", "从任务分析、候选门槛到执行计划解释一次 model=auto 请求。"],
+  ["vision", "视觉预处理", "视觉不是最终回答模型", "解释原生视觉与复合视觉、识图缓存以及失败边界。"],
+  ["reliability", "重试、超时与 Session", "重试何时发生", "解释 overload_rules、统一预算、ClientCommit 和 Session 锁定。"],
+  ["evaluation", "评测与自动校准", "证据从哪里来", "说明公开评测、本地证据、Shadow 和自动生产资格更新。"],
+  ["observability", "统计与故障排查", "先确定失败阶段", "使用路由轨迹、物理调用和模型表现定位请求问题。"],
+  ["operations", "运行边界与上线检查", "上线前检查", "汇总 Profile 隔离、网关职责、热更新和上线验收边界。"],
 ];
 
 async function render(pathname, headers = {}) {
@@ -66,12 +64,7 @@ test("each document has page-specific safe canonical and Open Graph metadata", a
     assert.match(html, new RegExp(`name=\"description\" content=\"${summary}\"`));
     assert.match(html, new RegExp(`rel=\"canonical\" href=\"${canonical}\"`));
     assert.match(html, new RegExp(`property=\"og:url\" content=\"${canonical}\"`));
-    assert.match(
-      html,
-      /property="og:image" content="https:\/\/docs\.example\.test\/og-routing-design\.png"/,
-    );
-    assert.match(html, /property="og:image:width" content="1200"/);
-    assert.match(html, /property="og:image:height" content="630"/);
+    assert.doesNotMatch(html, /og-routing-design\.png/);
   }
 });
 
@@ -99,7 +92,7 @@ test("serves the full-text search index only from its on-demand endpoint", async
   const entries = await response.json();
   assert.ok(Array.isArray(entries));
   assert.ok(entries.length > chapters.length);
-  assert.ok(entries.some(({ text }) => text.includes("轻量任务分析器")));
+  assert.ok(entries.some(({ text }) => text.includes("任务分析模型")));
 
   const versioned = await render(`/api/search-index?v=${version}`);
   assert.equal(versioned.status, 200);

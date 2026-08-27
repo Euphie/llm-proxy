@@ -22,8 +22,6 @@ export async function generateMetadata({ params }: DocumentPageProps): Promise<M
   const origin = getSiteOrigin();
   const canonical = new URL(`/docs/${chapter.slug}`, origin).toString();
   const title = `${chapter.title} · Mesotes`;
-  const image = new URL("/og-routing-design.png", origin).toString();
-
   return {
     title,
     description: chapter.summary,
@@ -33,13 +31,11 @@ export async function generateMetadata({ params }: DocumentPageProps): Promise<M
       description: chapter.summary,
       url: canonical,
       type: "article",
-      images: [{ url: image, width: 1200, height: 630, alt: title }],
     },
     twitter: {
-      card: "summary_large_image",
+      card: "summary",
       title,
       description: chapter.summary,
-      images: [image],
     },
   };
 }

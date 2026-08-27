@@ -3,27 +3,33 @@ package app
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Euphie/llm-proxy/internal/admin"
 	adminui "github.com/Euphie/llm-proxy/internal/admin/ui"
+	"github.com/Euphie/llm-proxy/internal/agenttrajectory"
 	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/evalcatalog"
 	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/modelcatalog"
 	"github.com/Euphie/llm-proxy/internal/profile"
 	"github.com/Euphie/llm-proxy/internal/proxy"
 	"github.com/Euphie/llm-proxy/internal/routing"
+	"github.com/Euphie/llm-proxy/internal/runtimeconfig"
 	"github.com/Euphie/llm-proxy/internal/stats"
 	"github.com/Euphie/llm-proxy/internal/strategy"
+	"github.com/Euphie/llm-proxy/internal/strategycompiler"
 )
 
 type Options struct {
@@ -38,11 +44,14 @@ type App struct {
 	evaluation *evaluation.Service
 	gate       *requestGate
 
-	closeOnce       sync.Once
-	closeErr        error
-	closeEvaluation func() error
-	closeUsage      func() error
-	closeDatabase   func() error
+	closeOnce                       sync.Once
+	closeErr                        error
+	closeAgentTrajectoryMaintenance func() error
+	closeEvaluationCatalog          func() error
+	closeEvaluation                 func() error
+	closePolicyReconciler           func() error
+	closeUsage                      func() error
+	closeDatabase                   func() error
 }
 
 func New(options Options) (*App, error) {
@@ -66,11 +75,38 @@ func New(options Options) (*App, error) {
 		databaseErr := db.Close()
 		return nil, errors.Join(err, usageErr, databaseErr)
 	}
+	closeEvaluationCatalog := func() error { return nil }
+	closeAgentTrajectoryMaintenance := func() error { return nil }
+	closePolicyReconciler := func() error { return nil }
 	fail := func(cause error) (*App, error) {
+		agentTrajectoryMaintenanceErr := closeAgentTrajectoryMaintenance()
+		evaluationCatalogErr := closeEvaluationCatalog()
 		evaluationErr := evaluations.Close()
+		policyReconcilerErr := closePolicyReconciler()
 		usageErr := usage.Close()
 		databaseErr := db.Close()
-		return nil, errors.Join(cause, evaluationErr, usageErr, databaseErr)
+		return nil, errors.Join(
+			cause, agentTrajectoryMaintenanceErr, evaluationCatalogErr,
+			evaluationErr, policyReconcilerErr, usageErr, databaseErr,
+		)
+	}
+	agentTrajectoryCipher, err := agenttrajectory.OpenCipher(dataDir)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Agent trajectory encryption: %w", err))
+	}
+	agentTrajectoryStore := agenttrajectory.NewStore(db, time.Now)
+	if _, err := agentTrajectoryStore.MarkInterrupted(context.Background()); err != nil {
+		return fail(fmt.Errorf("interrupt stale Agent trajectory evaluations: %w", err))
+	}
+	agentTrajectories := agenttrajectory.NewCollector(agentTrajectoryStore, agentTrajectoryCipher, time.Now)
+	agentTrajectoryMaintenance := agenttrajectory.NewMaintenance(agentTrajectoryStore, time.Now)
+	if err := agentTrajectoryMaintenance.Sweep(context.Background()); err != nil {
+		return fail(fmt.Errorf("maintain Agent trajectories: %w", err))
+	}
+	agentTrajectoryMaintenance.Start(0)
+	closeAgentTrajectoryMaintenance = func() error {
+		agentTrajectoryMaintenance.Close()
+		return nil
 	}
 
 	routingSessions, err := routing.NewSessionStore(db, time.Now)
@@ -81,33 +117,76 @@ func New(options Options) (*App, error) {
 	sessions := admin.NewSessionStore(db, time.Now)
 	profiles := profile.NewStore(db)
 	strategies := strategy.NewStore(db, time.Now)
+	runtimeConfigs := runtimeconfig.NewStore(db, time.Now)
 	registry := gateway.NewRegistry()
 	client := &http.Client{Timeout: 10 * time.Minute}
+	var canarySafetyCheck func(
+		context.Context, int64, int64, profile.RoutingStrategyConfig,
+	) (bool, error)
 	buildResolved := func(record profile.Record, snapshot strategy.Snapshot) (http.Handler, error) {
-		runtime, err := record.Resolve()
+		activeRecord := record
+		if snapshot.Active.ID != 0 {
+			profile.ApplyRoutingStrategyRoles(&activeRecord.Config.AutoRouting, snapshot.Active.Config)
+			activeRecord.Config.AutoRouting.Strategy = snapshot.Active.Config
+		}
+		runtime, err := activeRecord.Resolve()
 		if err != nil {
 			return nil, fmt.Errorf("resolve Profile %q: %w", record.Slug, err)
 		}
-		active := proxy.NewWithEvaluation(runtime, client, usage, routingSessions, evaluations)
+		active := proxy.NewWithAgentTrajectories(
+			runtime, client, usage, routingSessions, evaluations, agentTrajectories,
+		)
 		if snapshot.Canary == nil {
 			return active, nil
 		}
 		canaryRecord := record
+		profile.ApplyRoutingStrategyRoles(&canaryRecord.Config.AutoRouting, snapshot.Canary.Config)
 		canaryRecord.Config.AutoRouting.Strategy = snapshot.Canary.Config
 		canaryRuntime, err := canaryRecord.Resolve()
 		if err != nil {
 			return nil, fmt.Errorf("resolve canary strategy for Profile %q: %w", record.Slug, err)
 		}
-		canary := proxy.NewWithEvaluation(canaryRuntime, client, usage, routingSessions, evaluations)
+		canary := proxy.NewWithAgentTrajectories(
+			canaryRuntime, client, usage, routingSessions, evaluations, agentTrajectories,
+		)
 		return canaryHandler(
 			active, canary, routingSessions, record.ID, snapshot.Canary.ID, snapshot.CanaryBPS,
+			func(ctx context.Context) (bool, error) {
+				if canarySafetyCheck == nil {
+					return true, errors.New("canary safety service unavailable")
+				}
+				return canarySafetyCheck(ctx, record.ID, snapshot.Canary.ID, snapshot.Canary.Config)
+			},
 		), nil
 	}
 	buildStrategy := func(record profile.Record, snapshot strategy.Snapshot) (http.Handler, error) {
-		record.Config.AutoRouting.Strategy = snapshot.Active.Config
 		return buildResolved(record, snapshot)
 	}
+	buildAggregate := func(aggregate runtimeconfig.Aggregate) (http.Handler, error) {
+		var policy *profile.RoutingPolicyConfig
+		if aggregate.Active != nil {
+			policy = &aggregate.Active.Policy
+		}
+		runtime, err := profile.ResolvePolicyRuntime(aggregate.Profile, aggregate.Models, policy)
+		if err != nil {
+			return nil, fmt.Errorf("resolve Profile %q active Policy: %w", aggregate.Profile.Slug, err)
+		}
+		runtime.RuntimeRevision = aggregate.State.Revision
+		runtime.ActivePolicyVersionID = aggregate.State.ActivePolicyVersionID
+		runtime.ModelCatalogRevision = aggregate.State.ModelCatalogRevision
+		return proxy.NewWithAgentTrajectories(
+			runtime, client, usage, routingSessions, evaluations, agentTrajectories,
+		), nil
+	}
+	runtimeCoordinator := gateway.NewRuntimeCoordinator(registry, buildAggregate)
 	build := func(record profile.Record) (http.Handler, error) {
+		if record.Config.Version == 2 {
+			aggregate, err := runtimeConfigs.Load(context.Background(), record.ID)
+			if err != nil {
+				return nil, fmt.Errorf("load Profile %q runtime aggregate: %w", record.Slug, err)
+			}
+			return buildAggregate(aggregate)
+		}
 		if !record.Config.AutoRouting.Enabled {
 			return buildResolved(record, strategy.Snapshot{})
 		}
@@ -125,6 +204,31 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return fail(fmt.Errorf("initialize model catalog: %w", err))
 	}
+	evaluationCatalog, err := evalcatalog.NewService(dataDir)
+	if err != nil {
+		return fail(fmt.Errorf("initialize evaluation catalog: %w", err))
+	}
+	evaluationCatalogUpdater := evalcatalog.NewUpdater(
+		evaluationCatalog,
+		modelCatalog,
+		evalcatalog.NewRestrictedDownloader(nil, nil),
+		[]evalcatalog.SourceAdapter{
+			evalcatalog.NewLiveBenchAdapter(),
+			evalcatalog.NewBFCLAdapter(),
+			evalcatalog.NewVLMEvalKitAdapter(),
+			evalcatalog.NewArenaAdapter(),
+			evalcatalog.NewSWEBenchAdapter(),
+		},
+		time.Now,
+	)
+	closeEvaluationCatalog = evaluationCatalogUpdater.Close
+	generationStore := strategy.NewGenerationStore(db, time.Now)
+	strategyCompiler := strategycompiler.New(
+		modelCatalog,
+		evaluationCatalog,
+		strategycompiler.NewEvaluationEvidenceProvider(evaluationStore, time.Now),
+		time.Now,
+	)
 
 	account, _, err := accounts.EnsureDefault(context.Background())
 	if err != nil {
@@ -140,6 +244,16 @@ func New(options Options) (*App, error) {
 		return fail(fmt.Errorf("load Profile snapshot: %w", err))
 	}
 	for _, record := range records {
+		if record.Config.Version == 2 {
+			aggregate, loadErr := runtimeConfigs.Load(context.Background(), record.ID)
+			if loadErr != nil {
+				return fail(fmt.Errorf("load Profile %q runtime aggregate: %w", record.Slug, loadErr))
+			}
+			if _, buildErr := buildAggregate(aggregate); buildErr != nil {
+				return fail(buildErr)
+			}
+			continue
+		}
 		resolved := record
 		if record.Config.AutoRouting.Enabled {
 			resolved, _, err = strategies.ResolveRecord(context.Background(), record)
@@ -175,17 +289,53 @@ func New(options Options) (*App, error) {
 		}
 		return coordinator.Reload(ctx)
 	}
+	strategyService := admin.NewStrategyService(
+		profiles, strategies, coordinator, time.Now, evaluationStore,
+	)
+	strategyService.EnableGeneration(strategyCompiler, generationStore)
+	strategyService.EnableRuntimePolicies(runtimeConfigs)
+	canarySafetyCheck = strategyService.CanaryEvidenceUnsafe
+	policyService := admin.NewRoutingPolicyService(runtimeConfigs, runtimeCoordinator)
+	policyService.EnableGeneration(strategyCompiler)
+	if err := applyPendingPolicyMigration(
+		context.Background(), dataDir, policyService,
+	); err != nil {
+		return fail(err)
+	}
+	policyReconciler := admin.NewRoutingPolicyReconciler(
+		db,
+		policyService,
+		strategyCompiler,
+		admin.RoutingPolicyReconcilerOptions{},
+	)
+	evaluations.SetEvidenceRecordedHook(policyReconciler.MarkDirty)
+	usage.SetRoutingTraceRecordedHook(policyReconciler.MarkDirty)
+	policyService.EnableAutomaticReconciliation(policyReconciler)
+	policyReconciler.Start()
+	closePolicyReconciler = func() error {
+		evaluations.SetEvidenceRecordedHook(nil)
+		usage.SetRoutingTraceRecordedHook(nil)
+		policyReconciler.Close()
+		return nil
+	}
+	profileService := admin.NewProfileService(profiles, coordinator, strategies)
+	profileService.EnableRuntimeConfiguration(runtimeConfigs, runtimeCoordinator)
 	adminAPI := admin.NewAPI(admin.Dependencies{
-		Auth:             auth,
-		Profiles:         admin.NewProfileService(profiles, coordinator, strategies),
-		Strategies:       admin.NewStrategyService(profiles, strategies, coordinator, time.Now, evaluationStore),
-		Stats:            usage,
-		DB:               db,
-		Version:          options.Version,
-		DataDir:          dataDir,
-		ActivateProfiles: activateProfiles,
-		RuntimeReady:     coordinator.Ready,
-		ModelCatalog:     modelCatalog,
+		Auth:                     auth,
+		Profiles:                 profileService,
+		Strategies:               strategyService,
+		Policies:                 policyService,
+		Stats:                    usage,
+		DB:                       db,
+		Version:                  options.Version,
+		DataDir:                  dataDir,
+		ActivateProfiles:         activateProfiles,
+		RuntimeReady:             coordinator.Ready,
+		ModelCatalog:             modelCatalog,
+		EvaluationCatalog:        evaluationCatalog,
+		EvaluationCatalogUpdater: evaluationCatalogUpdater,
+		AgentTrajectories:        agentTrajectoryStore,
+		AgentTrajectoryCipher:    agentTrajectoryCipher,
 	})
 	handler := routeApplication(
 		adminAPI,
@@ -202,9 +352,58 @@ func New(options Options) (*App, error) {
 		gate:       gate,
 	}
 	application.closeEvaluation = evaluations.Close
+	application.closePolicyReconciler = closePolicyReconciler
+	application.closeAgentTrajectoryMaintenance = closeAgentTrajectoryMaintenance
+	application.closeEvaluationCatalog = evaluationCatalogUpdater.Close
 	application.closeUsage = usage.Close
 	application.closeDatabase = db.Close
 	return application, nil
+}
+
+func applyPendingPolicyMigration(
+	ctx context.Context,
+	dataDir string,
+	policies *admin.RoutingPolicyService,
+) error {
+	candidate, resultPath, pending, err := database.PendingPolicyMigrationCandidate(dataDir)
+	if err != nil || !pending {
+		return err
+	}
+	var legacyConfig profile.Config
+	if err := json.Unmarshal(candidate.ProfileConfig, &legacyConfig); err != nil {
+		return fmt.Errorf("decode exported Profile for strategy 16: %w", err)
+	}
+	var strategyConfig profile.RoutingStrategyConfig
+	if err := json.Unmarshal(candidate.StrategyConfig, &strategyConfig); err != nil {
+		return fmt.Errorf("decode exported strategy 16: %w", err)
+	}
+	if strategyConfig.Roles == nil {
+		strategyConfig.Roles = profile.RoutingStrategyRoles(legacyConfig.AutoRouting)
+	}
+	target := profile.PolicyFromLegacy(legacyConfig.AutoRouting, strategyConfig)
+	overview, err := policies.Overview(ctx, candidate.ProfileID)
+	if err != nil {
+		return fmt.Errorf("load migrated Profile before strategy 16 import: %w", err)
+	}
+	status := "applied"
+	detail := "Legacy strategy 16 was validated and applied as a new immutable Policy."
+	if overview.Active == nil || !reflect.DeepEqual(overview.Active.Policy, target) {
+		_, err = policies.Apply(
+			ctx, candidate.ProfileID, overview.RuntimeState.Revision, target,
+			"Imported from exported legacy strategy 16.",
+		)
+	}
+	if err != nil {
+		status = "rejected"
+		detail = err.Error()
+		slog.Warn("legacy strategy 16 was not applied; migrated active Policy remains live", "error", err)
+	} else {
+		slog.Info("legacy strategy 16 was applied as the active Routing Policy")
+	}
+	if err := database.CompletePolicyMigrationCandidate(resultPath, status, detail); err != nil {
+		return err
+	}
+	return nil
 }
 
 func canaryHandler(
@@ -214,6 +413,7 @@ func canaryHandler(
 	profileID int64,
 	strategyID int64,
 	canaryBPS int,
+	safetyChecks ...func(context.Context) (bool, error),
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := ""
@@ -222,6 +422,13 @@ func canaryHandler(
 		}
 		bucket, identified := sessions.CanaryBucket(r.Header, sessionID, profileID, strategyID)
 		if identified && bucket < canaryBPS {
+			if len(safetyChecks) > 0 && safetyChecks[0] != nil {
+				unsafe, err := safetyChecks[0](r.Context())
+				if err != nil || unsafe {
+					active.ServeHTTP(w, r)
+					return
+				}
+			}
 			canary.ServeHTTP(w, r)
 			return
 		}
@@ -290,10 +497,16 @@ func (a *App) Handler() http.Handler {
 func (a *App) Close() error {
 	a.closeOnce.Do(func() {
 		a.gate.Close()
+		agentTrajectoryMaintenanceErr := a.closeAgentTrajectoryMaintenance()
+		evaluationCatalogErr := a.closeEvaluationCatalog()
 		evaluationErr := a.closeEvaluation()
+		policyReconcilerErr := a.closePolicyReconciler()
 		usageErr := a.closeUsage()
 		databaseErr := a.closeDatabase()
-		a.closeErr = errors.Join(evaluationErr, usageErr, databaseErr)
+		a.closeErr = errors.Join(
+			agentTrajectoryMaintenanceErr, evaluationCatalogErr,
+			evaluationErr, policyReconcilerErr, usageErr, databaseErr,
+		)
 	})
 	return a.closeErr
 }

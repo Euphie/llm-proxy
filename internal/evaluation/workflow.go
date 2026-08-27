@@ -39,6 +39,7 @@ type ModelOutput struct {
 	Text                 string
 	CostMicroUSD         int64
 	LatencyMS            int64
+	ToolCallAttempted    bool
 	DeterministicFailure bool
 	SevereError          bool
 }
@@ -63,6 +64,7 @@ type ComparisonTask struct {
 	ReferenceModel        string
 	ReviewerModel         string
 	EscalationObservation EscalationObservation
+	Context               string
 	Question              string
 	Candidate             *ModelOutput
 	Reference             *ModelOutput
@@ -71,9 +73,10 @@ type ComparisonTask struct {
 }
 
 type ReviewInput struct {
-	Question string
-	A        string
-	B        string
+	Context  string `json:"context,omitempty"`
+	Question string `json:"question"`
+	A        string `json:"a"`
+	B        string `json:"b"`
 }
 
 type Winner string
@@ -153,7 +156,7 @@ func (w *Workflow) Evaluate(ctx context.Context, task ComparisonTask) (Result, e
 	}
 
 	swapped := w.swap()
-	input := ReviewInput{Question: task.Question, A: candidate.Text, B: reference.Text}
+	input := ReviewInput{Context: task.Context, Question: task.Question, A: candidate.Text, B: reference.Text}
 	if swapped {
 		input.A, input.B = input.B, input.A
 	}
@@ -243,7 +246,7 @@ func weightedOutcome(dimensions map[Dimension]Outcome) Outcome {
 }
 
 func normalizeOutput(output *ModelOutput) {
-	if strings.TrimSpace(output.Text) == "" {
+	if strings.TrimSpace(output.Text) == "" || output.ToolCallAttempted {
 		output.DeterministicFailure = true
 		output.SevereError = true
 	}

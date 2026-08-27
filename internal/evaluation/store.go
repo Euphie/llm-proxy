@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -355,6 +356,82 @@ func (s *Store) ListEvidence(ctx context.Context, profileID int64) ([]EvidenceAg
 		return nil, fmt.Errorf("commit routing quality evidence snapshot: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Store) OnlineStability(
+	ctx context.Context,
+	profileID int64,
+	strategy string,
+	route string,
+	model string,
+) (OnlineStabilityAggregate, error) {
+	return s.OnlineStabilityFor(ctx, profileID, strategy, route, model, "", "")
+}
+
+func (s *Store) OnlineStabilityFor(
+	ctx context.Context,
+	profileID int64,
+	strategy string,
+	route string,
+	model string,
+	taskType string,
+	difficulty string,
+) (OnlineStabilityAggregate, error) {
+	if s == nil || profileID <= 0 || strings.TrimSpace(strategy) == "" ||
+		strings.TrimSpace(route) == "" || strings.TrimSpace(model) == "" {
+		return OnlineStabilityAggregate{}, ErrInvalidEvidence
+	}
+	var aggregate OnlineStabilityAggregate
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT date(created_at), COUNT(*),
+		       COALESCE(SUM(CASE
+		           WHEN status_code BETWEEN 200 AND 299 AND client_committed = 1
+		                AND final_model = initial_model THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE
+		           WHEN status_code BETWEEN 200 AND 299 AND client_committed = 1
+		                AND final_model = initial_model AND answer_attempts = 1
+		                AND model_switches = 0
+		           THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(elapsed_ms), 0)
+		FROM routing_traces
+		WHERE profile_id = ? AND strategy_name = ? AND route_id = ? AND initial_model = ?
+		  AND (? = '' OR task_type = ?)
+		  AND (? = '' OR difficulty = ?)
+		  AND date(created_at) IS NOT NULL
+		GROUP BY date(created_at)
+	`, profileID, strategy, route, model, taskType, taskType, difficulty, difficulty)
+	if err != nil {
+		return OnlineStabilityAggregate{}, fmt.Errorf("aggregate online routing stability: %w", err)
+	}
+	defer rows.Close()
+	now := s.now().UTC()
+	for rows.Next() {
+		var day string
+		var daily OnlineStabilityAggregate
+		if err := rows.Scan(
+			&day, &daily.Samples, &daily.SuccessfulCompletions,
+			&daily.CleanCompletions, &daily.TotalLatencyMS,
+		); err != nil {
+			return OnlineStabilityAggregate{}, fmt.Errorf("scan online routing stability: %w", err)
+		}
+		date, parseErr := time.Parse(dayFormat, day)
+		if parseErr != nil {
+			continue
+		}
+		weight := math.Exp2(-max(now.Sub(date).Hours()/24, 0) / evidenceHalfLifeDays)
+		aggregate.Samples += daily.Samples
+		aggregate.SuccessfulCompletions += daily.SuccessfulCompletions
+		aggregate.CleanCompletions += daily.CleanCompletions
+		aggregate.TotalLatencyMS += daily.TotalLatencyMS
+		aggregate.EffectiveSamples += weight * float64(daily.Samples)
+		aggregate.EffectiveSuccessfulCompletions += weight * float64(daily.SuccessfulCompletions)
+		aggregate.EffectiveCleanCompletions += weight * float64(daily.CleanCompletions)
+		aggregate.EffectiveLatencyMS += weight * float64(daily.TotalLatencyMS)
+	}
+	if err := rows.Err(); err != nil {
+		return OnlineStabilityAggregate{}, fmt.Errorf("read online routing stability: %w", err)
+	}
+	return aggregate, nil
 }
 
 func listEvidenceAggregates(

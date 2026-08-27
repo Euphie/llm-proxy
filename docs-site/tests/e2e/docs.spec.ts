@@ -22,57 +22,57 @@ function contrastRatio(foreground: string, background: string) {
   return (light + 0.05) / (dark + 0.05);
 }
 
-test("navigates the twelve canonical chapters and pagination", async ({ page }) => {
+test("navigates the ten current chapters and pagination", async ({ page }) => {
   await page.goto("/docs/overview");
 
-  await expect(page.getByRole("heading", { level: 1, name: "智能路由概览" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "系统概览" })).toBeVisible();
   const chapterLinks = page.locator('.sidebar-navigation a[href^="/docs/"]');
-  await expect(chapterLinks).toHaveCount(12);
+  await expect(chapterLinks).toHaveCount(10);
 
-  await page.getByRole("link", { name: /Profile 配置与模型角色/ }).click();
-  await expect(page).toHaveURL(/\/docs\/core-model$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Profile 配置与模型角色" })).toBeFocused();
+  await page.getByRole("link", { name: /Profile 与模型目录/ }).click();
+  await expect(page).toHaveURL(/\/docs\/profiles-models$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Profile 与模型目录" })).toBeFocused();
 
-  const nextChapter = page.getByRole("link", { name: /下一章.*Profile 隔离边界/ });
+  const nextChapter = page.getByRole("link", { name: /下一章.*Routing Policy/ });
   await nextChapter.focus();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/docs\/profile-isolation$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Profile 隔离边界" })).toBeFocused();
+  await expect(page).toHaveURL(/\/docs\/routing-policy$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Routing Policy" })).toBeFocused();
 });
 
 test("handles valid and invalid heading hashes with browser history", async ({ page }) => {
-  await page.goto("/docs/overview#%E4%B8%80%E5%8F%A5%E8%AF%9D%E7%90%86%E8%A7%A3");
-  await expectHash(page, "一句话理解");
-  await expect(page.getByRole("heading", { level: 2, name: "一句话理解", exact: true })).toBeInViewport();
+  await page.goto("/docs/overview#%E4%B8%A4%E7%A7%8D%E8%AF%B7%E6%B1%82%E6%A8%A1%E5%BC%8F");
+  await expectHash(page, "两种请求模式");
+  await expect(page.getByRole("heading", { level: 2, name: "两种请求模式", exact: true })).toBeInViewport();
 
   await page.goto("/docs/overview#not-a-heading");
   await expectHash(page, "not-a-heading");
-  await expect(page.getByRole("heading", { level: 1, name: "智能路由概览" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "系统概览" })).toBeVisible();
   await expect(page.locator("#not-a-heading")).toHaveCount(0);
 
-  await page.getByRole("link", { name: /下一章.*当前能力与目标/ }).click();
-  await expect(page).toHaveURL(/\/docs\/source-baseline$/);
+  await page.getByRole("link", { name: /下一章.*后台操作流程/ }).click();
+  await expect(page).toHaveURL(/\/docs\/admin-workflow$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/docs\/overview#not-a-heading$/);
   await page.goForward();
-  await expect(page).toHaveURL(/\/docs\/source-baseline$/);
+  await expect(page).toHaveURL(/\/docs\/admin-workflow$/);
 });
 
 test("searches chapter titles and section bodies", async ({ page }) => {
   await page.goto("/docs/overview");
   const search = page.getByRole("searchbox", { name: "搜索方案与模块" });
 
-  await search.fill("Profile 配置与模型角色");
+  await search.fill("Profile 与模型目录");
   await expect(page.getByRole("status")).toContainText("找到");
-  await page.locator(".search-result").filter({ hasText: "Profile 配置与模型角色" }).first().click();
-  await expect(page).toHaveURL(/\/docs\/core-model$/);
+  await page.locator(".search-result").filter({ hasText: "Profile 与模型目录" }).first().click();
+  await expect(page).toHaveURL(/\/docs\/profiles-models$/);
 
-  await search.fill("请求正文、模型名称或 Header 不能改写已选定的 Profile");
-  const bodyResult = page.locator(".search-result").filter({ hasText: "边界如何工作" });
+  await search.fill("URL 已选定的 Profile");
+  const bodyResult = page.locator(".search-result").filter({ hasText: "Profile 是隔离边界" });
   await expect(bodyResult).toHaveCount(1);
   await bodyResult.click();
-  await expect(page).toHaveURL(/\/docs\/profile-isolation#%E8%BE%B9%E7%95%8C%E5%A6%82%E4%BD%95%E5%B7%A5%E4%BD%9C$/);
-  await expect(page.getByRole("heading", { level: 2, name: "边界如何工作", exact: true })).toBeFocused();
+  await expect(page).toHaveURL(/\/docs\/profiles-models#profile-%E6%98%AF%E9%9A%94%E7%A6%BB%E8%BE%B9%E7%95%8C$/);
+  await expect(page.getByRole("heading", { level: 2, name: "Profile 是隔离边界", exact: true })).toBeFocused();
 });
 
 test("loads one query-independent search index while the query changes", async ({ page }) => {
@@ -86,8 +86,8 @@ test("loads one query-independent search index while the query changes", async (
   const search = page.getByRole("searchbox", { name: "搜索方案与模块" });
 
   await search.fill("Profile 配置");
-  await search.fill("Profile 配置与模型角色");
-  await expect(page.locator(".search-result").filter({ hasText: "Profile 配置与模型角色" }).first()).toBeVisible();
+  await search.fill("Profile 与模型目录");
+  await expect(page.locator(".search-result").filter({ hasText: "Profile 与模型目录" }).first()).toBeVisible();
   expect(requests).toBe(1);
 });
 
@@ -104,15 +104,15 @@ test("recovers a failed search index request without retaining stale errors", as
   await page.goto("/docs/overview");
   const search = page.getByRole("searchbox", { name: "搜索方案与模块" });
 
-  await search.fill("Profile 配置与模型角色");
+  await search.fill("Profile 与模型目录");
   await expect(page.getByRole("status")).toHaveText("搜索索引加载失败");
   await page.getByRole("button", { name: "重试" }).click();
   await expect(
-    page.locator(".search-result").filter({ hasText: "Profile 配置与模型角色" }).first(),
+    page.locator(".search-result").filter({ hasText: "Profile 与模型目录" }).first(),
   ).toBeVisible();
-  await search.fill("请求正文、模型名称或 Header 不能改写已选定的 Profile");
-  await expect(page.locator(".search-result").filter({ hasText: "边界如何工作" })).toHaveCount(1);
-  await search.fill("Profile 配置与模型角色");
+  await search.fill("URL 已选定的 Profile");
+  await expect(page.locator(".search-result").filter({ hasText: "Profile 是隔离边界" })).toHaveCount(1);
+  await search.fill("Profile 与模型目录");
   await expect(page.getByRole("status")).toContainText("找到");
   expect(requests).toBe(2);
 });
@@ -135,7 +135,7 @@ test("asks stale document sessions to refresh when the search index version chan
 
   await expect(page.getByRole("status")).toHaveText("文档已更新，请刷新后搜索");
   await expect(page.getByRole("button", { name: "刷新文档" })).toBeVisible();
-  await page.getByRole("searchbox", { name: "搜索方案与模块" }).fill("Target");
+  await page.getByRole("searchbox", { name: "搜索方案与模块" }).fill("Upstream");
   expect(requests).toBe(1);
   await Promise.all([
     page.waitForEvent("domcontentloaded"),
@@ -155,29 +155,29 @@ test("focuses same-page section and page destinations on desktop and mobile", as
       await page.getByRole("button", { name: "打开章节导航" }).click();
     }
     const search = page.getByRole("searchbox", { name: "搜索方案与模块" });
-    await search.fill("一句话理解");
-    await page.locator(".search-result").filter({ hasText: "一句话理解" }).first().click();
+    await search.fill("两种请求模式");
+    await page.locator(".search-result").filter({ hasText: "两种请求模式" }).first().click();
 
-    await expectHash(page, "一句话理解");
+    await expectHash(page, "两种请求模式");
     await expect(
-      page.getByRole("heading", { level: 2, name: "一句话理解", exact: true }),
+      page.getByRole("heading", { level: 2, name: "两种请求模式", exact: true }),
     ).toBeFocused();
     if (viewport.width < 900) {
       await expect(page.locator("#docs-sidebar")).toHaveAttribute("aria-hidden", "true");
       await page.getByRole("button", { name: "打开章节导航" }).click();
     }
 
-    await search.fill("智能路由概览");
-    await page.locator(".search-result").filter({ hasText: "智能路由概览" }).first().click();
+    await search.fill("系统概览");
+    await page.locator(".search-result").filter({ hasText: "系统概览" }).first().click();
     await expect(page).toHaveURL(/\/docs\/overview$/);
-    await expect(page.getByRole("heading", { level: 1, name: "智能路由概览" })).toBeFocused();
+    await expect(page.getByRole("heading", { level: 1, name: "系统概览" })).toBeFocused();
 
     if (viewport.width < 900) {
       await page.getByRole("button", { name: "打开章节导航" }).click();
     }
     await search.fill("");
-    await page.getByRole("link", { name: /智能路由概览/ }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "智能路由概览" })).toBeFocused();
+    await page.getByRole("link", { name: /系统概览/ }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "系统概览" })).toBeFocused();
   }
 });
 
@@ -198,7 +198,7 @@ test("persists the selected theme across navigation and reload", async ({ page }
   await page.getByRole("button", { name: "切换明暗主题" }).click();
   await expect(app).toHaveAttribute("data-theme", "dark");
 
-  await page.getByRole("link", { name: /下一章.*当前能力与目标/ }).click();
+  await page.getByRole("link", { name: /下一章.*后台操作流程/ }).click();
   await expect(page.locator(".docs-app")).toHaveAttribute("data-theme", "dark");
   await page.reload();
   await expect(page.locator(".docs-app")).toHaveAttribute("data-theme", "dark");
@@ -210,13 +210,11 @@ test("applies a saved dark theme before client hydration", async ({ page }) => {
     window.localStorage.setItem("llm-proxy-docs-theme", "dark");
   });
   await page.route(/\.js(?:\?|$)/, (route) => route.abort());
-  await page.goto("/docs/overview", { waitUntil: "domcontentloaded" });
+  await page.goto("/docs/profiles-models", { waitUntil: "domcontentloaded" });
 
   await expect(page.locator("html")).toHaveAttribute("data-docs-theme", "dark");
   await expect(page.locator(".docs-app")).toHaveCSS("color-scheme", "dark");
-  const badge = page.locator(".status-badge--target").first();
-  await expect(badge).toHaveCSS("color", "rgb(111, 221, 154)");
-  await expect(badge).toHaveCSS("background-color", "rgb(32, 59, 54)");
+  const badge = page.locator(".status-badge--implemented").first();
   const colors = await badge.evaluate((element) => {
     const style = getComputedStyle(element);
     return { foreground: style.color, background: style.backgroundColor };
@@ -299,51 +297,18 @@ test("traps and restores focus in the mobile drawer and exposes the mobile TOC",
   await expect(tocButton).toBeVisible();
   await tocButton.click();
   await expect(tocButton).toHaveAttribute("aria-expanded", "true");
-  const boundaryLink = page.locator(".mobile-toc").getByRole("link", { name: "一句话理解" });
+  const boundaryLink = page.locator(".mobile-toc").getByRole("link", { name: "两种请求模式" });
   await expect(boundaryLink).toBeVisible();
   await boundaryLink.click();
-  await expectHash(page, "一句话理解");
+  await expectHash(page, "两种请求模式");
   expect(searchRequests).toBe(0);
-});
-
-test("traps lightbox focus and restores it after Escape", async ({ page }) => {
-  await page.goto("/docs/online-routing");
-  const opener = page.getByRole("button", { name: "放大查看：在线路由流程" });
-
-  await opener.click();
-  const dialog = page.getByRole("dialog", { name: "在线路由流程" });
-  const canvas = dialog.getByRole("region", { name: "可滚动图表：在线路由流程" });
-  await expect(dialog).toBeVisible();
-  await expect(canvas).toHaveAttribute("tabindex", "0");
-  await expect(page.locator(".docs-app")).toHaveAttribute("inert", "");
-  await expect(page.locator(".docs-app")).toHaveAttribute("aria-hidden", "true");
-  await expect(dialog.getByRole("button", { name: "关闭" })).toBeFocused();
-  await page.getByRole("button", { name: "切换明暗主题", includeHidden: true }).focus();
-  await expect(dialog.getByRole("button", { name: "关闭" })).toBeFocused();
-
-  await page.locator(".docs-scroll-region").evaluate((element) => {
-    element.scrollTop = 320;
-    element.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
-  await page.keyboard.press("Tab");
-  await expect(canvas).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(dialog.getByRole("button", { name: "关闭" })).toBeFocused();
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  await page.keyboard.press("Tab");
-  await expect(dialog.getByRole("button", { name: "关闭" })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toHaveCount(0);
-  await expect(page.locator(".docs-app")).not.toHaveAttribute("inert", "");
-  await expect(page.locator(".docs-app")).not.toHaveAttribute("aria-hidden", "true");
-  await expect(opener).toBeFocused();
 });
 
 test("keeps the documentation usable with reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/docs/overview");
 
-  await expect(page.getByRole("heading", { level: 1, name: "智能路由概览" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "系统概览" })).toBeVisible();
   const layout = await page.evaluate(() => {
     const windowFrame = document.querySelector(".mac-window");
     const animatedControl = document.querySelector(".icon-button");
@@ -374,9 +339,26 @@ test("makes horizontally scrollable code keyboard accessible on mobile", async (
   await expect(code).toBeFocused();
 });
 
+test("opens a routing diagram and restores trigger focus after Escape", async ({ page }) => {
+  await page.goto("/docs/online-routing");
+
+  const trigger = page.getByRole("button", { name: "放大查看：model=auto 在线请求链路" });
+  await trigger.focus();
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "model=auto 在线请求链路" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "关闭" })).toBeFocused();
+  await expect(page.locator(".docs-app")).toHaveAttribute("inert", "");
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(page.locator(".docs-app")).not.toHaveAttribute("inert", "");
+});
+
 test("keeps the final content reachable in a short desktop viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 500 });
-  await page.goto("/docs/engineering-and-delivery");
+  await page.goto("/docs/operations");
 
   const scrollRegion = page.locator(".docs-scroll-region");
   const pagination = page.locator(".chapter-pagination");

@@ -330,7 +330,7 @@ func scanRecord(row rowScanner) (Record, error) {
 	if err := json.Unmarshal([]byte(configJSON), &record.Config); err != nil {
 		return Record{}, fmt.Errorf("%w: decode config: %v", ErrInvalidConfig, err)
 	}
-	if record.Config.Version != 1 {
+	if record.Config.Version != 1 && record.Config.Version != 2 {
 		return Record{}, fmt.Errorf(
 			"%w: unsupported version %d",
 			ErrInvalidConfig,

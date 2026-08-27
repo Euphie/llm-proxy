@@ -1,6 +1,9 @@
 package routing
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,11 +34,13 @@ const (
 
 type RequestFacts struct {
 	EstimatedInputTokens     int                          `json:"estimated_input_tokens"`
+	ConversationTokens       int                          `json:"conversation_tokens"`
 	RequestedOutputTokens    int                          `json:"requested_output_tokens"`
 	ImageCount               int                          `json:"image_count"`
 	HasImages                bool                         `json:"has_images"`
 	ImageSources             []llmrequest.ImageSourceKind `json:"image_sources,omitempty"`
 	HasTools                 bool                         `json:"has_tools"`
+	RequiresAgentWorkflow    bool                         `json:"requires_agent_workflow"`
 	ActualToolOperations     []string                     `json:"actual_tool_operations,omitempty"`
 	HistoricalToolOperations []string                     `json:"historical_tool_operations,omitempty"`
 	ForcedToolOperation      string                       `json:"forced_tool_operation,omitempty"`
@@ -48,9 +53,11 @@ type Request struct {
 	Model     string
 	Facts     RequestFacts
 
-	root           map[string]json.RawMessage
-	evaluationText string
-	latestUserText string
+	root               map[string]json.RawMessage
+	evaluationText     string
+	classificationText string
+	latestUserText     string
+	userTaskCount      int
 }
 
 func RequestedModel(body []byte) (string, bool) {
@@ -98,23 +105,122 @@ func ParseAutoRequest(
 	if err != nil {
 		return Request{}, fmt.Errorf("%w: canonical token estimate: %v", ErrInvalidRequest, err)
 	}
+	conversationJSON, err := document.CanonicalConversationEstimationJSON()
+	if err != nil {
+		return Request{}, fmt.Errorf("%w: canonical conversation token estimate: %v", ErrInvalidRequest, err)
+	}
+
+	facts := extractFacts(
+		operation,
+		root,
+		estimatedTokens(estimationJSON),
+		estimatedTokens(conversationJSON),
+		images,
+		document.ActualToolOperations(),
+		document.HistoricalToolOperations(),
+		document.ForcedToolOperation(),
+	)
+	facts.RequiresAgentWorkflow = facts.HasTools && requiresAgentWorkflow(
+		agentWorkflowControlTexts(operation, root),
+	)
 
 	return Request{
-		Operation: operation,
-		Model:     model,
-		Facts: extractFacts(
-			operation,
-			root,
-			estimatedTokens(estimationJSON),
-			images,
-			document.ActualToolOperations(),
-			document.HistoricalToolOperations(),
-			document.ForcedToolOperation(),
-		),
-		root:           cloneRoot(root),
-		evaluationText: boundedRoutingText(document.Texts()),
-		latestUserText: boundedRoutingText(document.LatestUserTexts()),
+		Operation:          operation,
+		Model:              model,
+		Facts:              facts,
+		root:               cloneRoot(root),
+		evaluationText:     boundedRoutingText(document.Texts()),
+		classificationText: boundedRecentRoutingText(document.Texts()),
+		latestUserText:     boundedRoutingText(document.LatestUserTexts()),
+		userTaskCount:      document.UserTaskCount(),
 	}, nil
+}
+
+func requiresAgentWorkflow(texts []string) bool {
+	joined := strings.ToLower(strings.Join(texts, "\n"))
+	markers := []string{
+		"sessionstart hook additional context:",
+		"<extremely_important>",
+		"available user-invocable skills",
+		"to invoke a skill, use the skill tool",
+		"you are codex",
+		"# agents.md instructions",
+		"<collaboration_mode>",
+		"<permissions instructions>",
+		"<skills_instructions>",
+	}
+	for _, marker := range markers {
+		if strings.Contains(joined, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func agentWorkflowControlTexts(
+	operation Operation,
+	root map[string]json.RawMessage,
+) []string {
+	var texts []string
+	switch operation {
+	case OperationAnthropicMessages:
+		appendJSONStrings(root["system"], &texts)
+		appendAgentWorkflowMessageTexts(root["messages"], &texts)
+	case OperationOpenAIChatCompletions:
+		appendAgentWorkflowMessageTexts(root["messages"], &texts)
+	case OperationOpenAIResponses:
+		appendJSONStrings(root["instructions"], &texts)
+		appendAgentWorkflowMessageTexts(root["input"], &texts)
+	}
+	return texts
+}
+
+func appendAgentWorkflowMessageTexts(raw json.RawMessage, texts *[]string) {
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return
+	}
+	for _, item := range items {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(item, &fields) != nil {
+			continue
+		}
+		var role string
+		if json.Unmarshal(fields["role"], &role) != nil {
+			continue
+		}
+		var contentTexts []string
+		appendJSONStrings(fields["content"], &contentTexts)
+		if role == "system" || role == "developer" || requiresAgentWorkflow(contentTexts) {
+			*texts = append(*texts, contentTexts...)
+		}
+	}
+}
+
+func appendJSONStrings(raw json.RawMessage, texts *[]string) {
+	if len(raw) == 0 {
+		return
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return
+	}
+	appendStringValues(value, texts)
+}
+
+func appendStringValues(value any, texts *[]string) {
+	switch typed := value.(type) {
+	case string:
+		*texts = append(*texts, typed)
+	case []any:
+		for _, item := range typed {
+			appendStringValues(item, texts)
+		}
+	case map[string]any:
+		for _, item := range typed {
+			appendStringValues(item, texts)
+		}
+	}
 }
 
 func (r Request) WithModel(model string) ([]byte, error) {
@@ -153,6 +259,24 @@ func (r Request) LatestUserText() string {
 	return r.latestUserText
 }
 
+func (r Request) TaskFingerprint(key SessionKey) ([sha256.Size]byte, bool) {
+	var fingerprint [sha256.Size]byte
+	if r.latestUserText == "" || r.userTaskCount <= 0 {
+		return fingerprint, false
+	}
+	mac := hmac.New(sha256.New, key[:])
+	var ordinal [8]byte
+	binary.BigEndian.PutUint64(ordinal[:], uint64(r.userTaskCount))
+	_, _ = mac.Write(ordinal[:])
+	_, _ = mac.Write([]byte(r.latestUserText))
+	copy(fingerprint[:], mac.Sum(nil))
+	return fingerprint, true
+}
+
+func (r Request) ClassificationText() string {
+	return r.classificationText
+}
+
 func (r Request) routingText() string {
 	return r.evaluationText
 }
@@ -181,6 +305,7 @@ func extractFacts(
 	operation Operation,
 	root map[string]json.RawMessage,
 	estimatedInputTokens int,
+	conversationTokens int,
 	images []llmrequest.Image,
 	actualToolOperations []string,
 	historicalToolOperations []string,
@@ -189,6 +314,7 @@ func extractFacts(
 	imageCount := len(images)
 	facts := RequestFacts{
 		EstimatedInputTokens: estimatedInputTokens,
+		ConversationTokens:   conversationTokens,
 		ImageCount:           imageCount,
 		HasImages:            imageCount > 0,
 		ImageSources:         make([]llmrequest.ImageSourceKind, imageCount),
@@ -282,6 +408,15 @@ func boundedRoutingText(texts []string) string {
 	runes := []rune(joined)
 	if len(runes) > routingTextRuneLimit {
 		return string(runes[:routingTextRuneLimit])
+	}
+	return joined
+}
+
+func boundedRecentRoutingText(texts []string) string {
+	joined := strings.TrimSpace(strings.Join(texts, "\n"))
+	runes := []rune(joined)
+	if len(runes) > routingTextRuneLimit {
+		return string(runes[len(runes)-routingTextRuneLimit:])
 	}
 	return joined
 }

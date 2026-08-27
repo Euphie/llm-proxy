@@ -89,6 +89,63 @@ func TestSubmitSkipsSamplingAndExpiredCredentialsWithoutRunning(t *testing.T) {
 	}
 }
 
+func TestAdaptiveSamplingLookupRunsOffTheRequestPath(t *testing.T) {
+	db := openEvaluationDB(t)
+	profileID := insertEvaluationProfile(t, db)
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	lookupStarted := make(chan struct{})
+	releaseLookup := make(chan struct{})
+	runs := make(chan struct{}, 1)
+	var sampledRates []int
+	service, err := NewService(NewStore(db, func() time.Time { return now }), ServiceOptions{
+		Now: func() time.Time { return now },
+		Sample: func(rate int) bool {
+			sampledRates = append(sampledRates, rate)
+			return rate == 4000
+		},
+		AdaptiveRate: func(context.Context, Job) (int, error) {
+			close(lookupStarted)
+			<-releaseLookup
+			return 1000, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	job := Job{
+		ProfileID: profileID, SampleRateBPS: 4000, DailyBudgetMicroUSD: 100,
+		EstimatedCostMicroUSD: 10, MaxConcurrency: 1, QueueCapacity: 1,
+		Timeout: time.Minute, ExpiresAt: now.Add(time.Minute),
+		Run: func(context.Context) (Result, error) {
+			runs <- struct{}{}
+			return Result{}, nil
+		},
+	}
+
+	begin := time.Now()
+	if got := service.Submit(job); got != SubmitAccepted {
+		t.Fatalf("Submit()=%q", got)
+	}
+	if elapsed := time.Since(begin); elapsed > 100*time.Millisecond {
+		t.Fatalf("Submit blocked for %s", elapsed)
+	}
+	<-lookupStarted
+	close(releaseLookup)
+	deadline := time.Now().Add(time.Second)
+	for service.Status().SampledOut != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-runs:
+		t.Fatal("sampled-out adaptive evaluation ran")
+	default:
+	}
+	if len(sampledRates) != 2 || sampledRates[0] != 4000 || sampledRates[1] != 2500 {
+		t.Fatalf("sampled rates=%v, want [4000 2500]", sampledRates)
+	}
+}
+
 func TestServiceEnforcesDailyBudgetAndPersistsSuccessfulEvidence(t *testing.T) {
 	db := openEvaluationDB(t)
 	profileID := insertEvaluationProfile(t, db)
@@ -289,5 +346,65 @@ func TestServiceRejectsJobsWithoutACompleteBoundedContract(t *testing.T) {
 	}
 	if !errors.Is(validateJob(Job{}), ErrInvalidJob) {
 		t.Fatalf("validateJob() error=%v", validateJob(Job{}))
+	}
+}
+
+func TestServiceCallsTerminalCallbackAfterEvidencePersistence(t *testing.T) {
+	db := openEvaluationDB(t)
+	profileID := insertEvaluationProfile(t, db)
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	store := NewStore(db, func() time.Time { return now })
+	service, err := NewService(store, ServiceOptions{
+		Now: func() time.Time { return now }, Sample: func(int) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	terminal := make(chan TerminalResult, 1)
+	recorded := make(chan int64, 1)
+	service.SetEvidenceRecordedHook(func(_ context.Context, gotProfileID int64) error {
+		recorded <- gotProfileID
+		return nil
+	})
+	job := Job{
+		ProfileID: profileID, SampleRateBPS: 10_000, DailyBudgetMicroUSD: 100,
+		EstimatedCostMicroUSD: 10, MaxConcurrency: 1, QueueCapacity: 1,
+		Timeout: time.Minute, ExpiresAt: now.Add(time.Minute),
+		Run: func(context.Context) (Result, error) {
+			return Result{SpentMicroUSD: 10, Evidence: &Evidence{
+				ProfileID: profileID, Strategy: "active", Route: "agent", TaskType: "tool_use",
+				Difficulty: "medium", Risk: "normal", VisionMode: "none",
+				CandidateModel: "fast", ReferenceModel: "strong", ReviewerModel: "judge",
+				Outcome: OutcomeCandidateWin, Dimensions: dimensionOutcomes(OutcomeCandidateWin),
+			}}, nil
+		},
+		OnTerminal: func(result TerminalResult) {
+			rows, queryErr := store.ListEvidence(context.Background(), profileID)
+			if queryErr != nil || len(rows) != 1 {
+				t.Errorf("evidence not persisted before callback: rows=%+v err=%v", rows, queryErr)
+			}
+			terminal <- result
+		},
+	}
+	if got := service.Submit(job); got != SubmitAccepted {
+		t.Fatalf("Submit()=%q", got)
+	}
+	select {
+	case result := <-terminal:
+		if result.Status != TerminalCompleted || result.SpentMicroUSD != 10 || !result.EvidenceRecorded ||
+			result.Evidence == nil || result.Evidence.Outcome != OutcomeCandidateWin || result.Err != nil {
+			t.Fatalf("terminal=%+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal callback did not run")
+	}
+	select {
+	case gotProfileID := <-recorded:
+		if gotProfileID != profileID {
+			t.Fatalf("evidence hook profile=%d want %d", gotProfileID, profileID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("evidence recorded hook did not run")
 	}
 }

@@ -58,6 +58,12 @@ type providerModel struct {
 	Model      feedModel
 }
 
+var compatibilityAliasesByCanonicalID = map[string][]string{
+	"deepseek/deepseek-v4-flash": {"azure-ds-v4-flash"},
+	"deepseek/deepseek-v4-pro":   {"azure-ds-v4-pro"},
+	"zhipuai/glm-5.2":            {"claude-glm-5.2"},
+}
+
 func BuildFromFeeds(modelsContents, providersContents []byte, retrieved time.Time) (Catalog, error) {
 	var canonical map[string]feedModel
 	if err := decodeFeed(modelsContents, &canonical); err != nil {
@@ -206,8 +212,11 @@ func compactFeedModel(canonicalID string, canonical feedModel, providers map[str
 	if canonical.Limit.Output != nil && (canonical.Limit.Context == nil || *canonical.Limit.Output < *canonical.Limit.Context) {
 		model.MaxOutputTokens = cloneInt64(canonical.Limit.Output)
 	}
+	model.CompatibilityAliases = append(
+		[]string(nil),
+		compatibilityAliasesByCanonicalID[canonicalID]...,
+	)
 	if canonicalID == "zhipuai/glm-5.2" {
-		model.CompatibilityAliases = []string{"claude-glm-5.2"}
 		model.References = []Reference{{
 			Name: "Z.AI " + name,
 			URL:  "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2",

@@ -151,7 +151,6 @@ function profileFixture() {
         task_analyzer_model: "strong",
         strategy: { routes: [] },
       },
-      targets: [],
     },
   };
 }

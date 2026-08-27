@@ -1,70 +1,68 @@
 {
-  "example_kind": "static_design",
+  "example_kind": "current_runtime_shape",
   "projection_kind": "sanitized_example",
-  "label": "静态设计示例",
+  "label": "当前字段示例",
   "scope": {
-    "profile_id": "profile_acme_primary"
+    "profile_id": "profile_demo"
   },
   "route": {
-    "route_id": "route_code_auto",
-    "matched_by": "task_type",
-    "task_type": "code_change",
-    "strategy_id": "20260801-001",
-    "strategy_alias": "代码助手-均衡版"
+    "route_id": "route_code_easy",
+    "matched_by": "task_type_and_difficulty",
+    "task_type": "code",
+    "strategy_id": "20260818-001",
+    "strategy_alias": "日常均衡"
   },
   "task_analysis": {
-    "local_rule_result": "uncertain",
     "analyzer_called": true,
-    "result": "code_change",
+    "result": "code",
+    "difficulty": "easy",
+    "risk": "normal",
     "confidence": "high"
   },
   "hard_filter": {
     "eligible": [
       {
-        "model_id": "model_balanced",
-        "reason": "满足工具、上下文与 Route 质量门槛"
+        "model_id": "model_primary",
+        "reason": "通过能力、Production 与 Route 门槛"
       }
     ],
     "excluded": [
       {
-        "model_id": "model_economy",
-        "reason": "缺少所需工具能力"
+        "model_id": "model_shadow",
+        "reason": "没有 Production 资格"
       }
     ]
   },
   "model_selection": {
-    "selected_model_id": "model_balanced",
-    "reason": "通过硬约束后，预计完整成本最低"
+    "selected_model_id": "model_primary",
+    "reason": "通过硬门槛后路由分最高"
   },
   "attempt_budget": {
     "max_answer_attempts": 2,
-    "max_auxiliary_calls": 1,
-    "max_total_outbound_calls": 4,
+    "max_auxiliary_calls": 2,
+    "max_total_outbound_calls": 5,
     "max_retries_per_target": 1,
-    "max_target_switches": 0,
-    "max_model_switches": 0,
-    "deadline": "3.2s",
-    "max_worst_case_cost_micro_usd": 9000
+    "max_model_switches": 1,
+    "deadline": "2m",
+    "max_worst_case_cost_micro_usd": 250000
   },
   "execution_plan": {
-    "profile_id": "profile_acme_primary",
+    "profile_id": "profile_demo",
     "snapshot_refs": {
-      "strategy_id": "20260801-001",
-      "catalog_version": "catalog-v12",
-      "price_version": "price-v8"
+      "routing_policy_version": "20260818-001",
+      "model_catalog_revision": "catalog-r17",
+      "runtime_revision": "runtime-r24"
     },
     "vision_mode": "native",
     "attempts": [
       {
         "order": 1,
-        "model_id": "model_balanced",
-        "target_id": "target_balanced_primary",
+        "model_id": "model_primary",
         "purpose": "answer"
       },
       {
         "order": 2,
-        "model_id": "model_balanced",
-        "target_id": "target_balanced_primary",
+        "model_id": "model_primary",
         "purpose": "answer_retry"
       }
     ],
@@ -73,15 +71,13 @@
   "attempts": [
     {
       "order": 1,
-      "model_id": "model_balanced",
-      "target_id": "target_balanced_primary",
+      "model_id": "model_primary",
       "outcome": "retryable_pre_commit_failure",
       "elapsed_ms": 180
     },
     {
       "order": 2,
-      "model_id": "model_balanced",
-      "target_id": "target_balanced_primary",
+      "model_id": "model_primary",
       "outcome": "ClientCommit",
       "commit_event": "first_legal_response_event",
       "elapsed_ms": 420

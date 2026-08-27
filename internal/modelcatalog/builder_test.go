@@ -82,6 +82,19 @@ func TestBuildFromFeedsMatchesCatalogSemantics(t *testing.T) {
 	}
 }
 
+func TestKnownGatewayCompatibilityAliases(t *testing.T) {
+	for canonicalID, want := range map[string]string{
+		"deepseek/deepseek-v4-flash": "azure-ds-v4-flash",
+		"deepseek/deepseek-v4-pro":   "azure-ds-v4-pro",
+		"zhipuai/glm-5.2":            "claude-glm-5.2",
+	} {
+		aliases := compatibilityAliasesByCanonicalID[canonicalID]
+		if len(aliases) != 1 || aliases[0] != want {
+			t.Fatalf("compatibility aliases for %s=%v, want %q", canonicalID, aliases, want)
+		}
+	}
+}
+
 func TestBuildFromFeedsRejectsIneligibleOrMalformedData(t *testing.T) {
 	if _, err := BuildFromFeeds([]byte(`{"acme/no-tools":{"tool_call":false,"modalities":{"input":["text"],"output":["text"]}}}`), []byte(`{}`), time.Now()); err == nil {
 		t.Fatal("BuildFromFeeds accepted an empty eligible catalog")

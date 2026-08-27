@@ -14,7 +14,6 @@ type CallGraphSnapshot struct {
 	AuxiliaryCalls             int
 	TotalOutboundCalls         int
 	ModelSwitches              int
-	TargetSwitches             int
 	WorstCaseCostMicroUSD      int64
 	ConsumedBeforePlanCalls    int
 	ConsumedBeforePlanMicroUSD int64
@@ -25,13 +24,11 @@ type PhysicalAttemptSnapshot struct {
 	Model                  string
 	TargetID               string
 	ModelIndex             int
-	TargetIndex            int
 	VisionCallsPerImage    []int
 	AnswerCalls            int
 	AnswerCallCostMicroUSD int64
 	VisionCallCostMicroUSD int64
 	ModelSwitch            bool
-	TargetSwitch           bool
 }
 
 func (p *Planner) finalizePlan(
@@ -102,17 +99,8 @@ func trimModelAttemptsToGraph(
 			if len(trimmed) >= len(attempts) {
 				return trimmed
 			}
-			attempt := attempts[len(trimmed)]
-			attempt.targets = nil
-			trimmed = append(trimmed, attempt)
+			trimmed = append(trimmed, attempts[len(trimmed)])
 		}
-		if node.ModelIndex >= len(attempts) || node.TargetIndex >= len(attempts[node.ModelIndex].targets) {
-			continue
-		}
-		trimmed[node.ModelIndex].targets = append(
-			trimmed[node.ModelIndex].targets,
-			attempts[node.ModelIndex].targets[node.TargetIndex],
-		)
 	}
 	return trimmed
 }
@@ -144,23 +132,20 @@ func (p *Planner) freezeCallGraph(
 	remainingModelSwitches, modelSwitchesOK := remainingCount(
 		p.strategy.Budget.MaxModelSwitches, state.ModelSwitches, 0,
 	)
-	remainingTargetSwitches, targetSwitchesOK := remainingCount(
-		p.strategy.Budget.MaxTargetSwitches, state.TargetSwitches, 0,
-	)
 	if !answersOK || !auxiliaryOK || !totalOK || !costOK || !modelSwitchesOK ||
-		!targetSwitchesOK || remainingAnswers < 1 || remainingTotal < 1 {
+		remainingAnswers < 1 || remainingTotal < 1 {
 		return CallGraphSnapshot{}, fmt.Errorf("%w: no remaining graph capacity", ErrAttemptBudgetExceeded)
 	}
 
 	limits := callGraphLimits{
 		answers: remainingAnswers, auxiliary: remainingAuxiliary, total: remainingTotal,
-		modelSwitches: remainingModelSwitches, targetSwitches: remainingTargetSwitches,
-		cost: remainingCost,
+		modelSwitches: remainingModelSwitches,
+		cost:          remainingCost,
 	}
 	initial := callGraphPath{retries: cloneRetryCounts(state.RetriesByTarget)}
 	queue := []callGraphWork{{path: initial}}
 	seen := make(map[string]struct{})
-	reachable := make(map[[2]int]PhysicalAttemptSnapshot)
+	reachable := make(map[int]PhysicalAttemptSnapshot)
 	processedStates := 0
 
 	for len(queue) > 0 {
@@ -170,7 +155,7 @@ func (p *Planner) freezeCallGraph(
 			continue
 		}
 		attempt := attempts[work.modelIndex]
-		if work.targetIndex >= len(attempt.targets) {
+		if len(attempt.targets) == 0 {
 			continue
 		}
 		key := work.key()
@@ -188,8 +173,8 @@ func (p *Planner) freezeCallGraph(
 			queue = enqueueModelFallback(queue, work, attempts)
 			continue
 		}
-		target := attempt.targets[work.targetIndex]
-		node, visionCalls, ok := p.callGraphNode(request, attempt, work.modelIndex, work.targetIndex, target)
+		target := attempt.targets[0]
+		node, visionCalls, ok := p.callGraphNode(request, attempt, work.modelIndex, target)
 		if !ok || visionCalls > maxCallGraphPathStates {
 			return CallGraphSnapshot{}, fmt.Errorf("%w: frozen call graph overflow", ErrAttemptBudgetExceeded)
 		}
@@ -198,14 +183,14 @@ func (p *Planner) freezeCallGraph(
 			heldVisionCalls = 0
 		}
 		if !entered.canHoldAttempt(heldVisionCalls, node, limits) {
-			if work.modelIndex == 0 && work.targetIndex == 0 && work.switchKind == callGraphSwitchNone {
+			if work.modelIndex == 0 && work.switchKind == callGraphSwitchNone {
 				return CallGraphSnapshot{}, fmt.Errorf("%w: initial call graph node", ErrAttemptBudgetExceeded)
 			}
 			queue = enqueueModelFallback(queue, work, attempts)
 			continue
 		}
 
-		nodeKey := [2]int{work.modelIndex, work.targetIndex}
+		nodeKey := work.modelIndex
 		planned := reachable[nodeKey]
 		if planned.Model == "" {
 			planned = node
@@ -267,16 +252,11 @@ func (p *Planner) freezeCallGraph(
 		reachable[nodeKey] = planned
 	}
 
-	keys := make([][2]int, 0, len(reachable))
+	keys := make([]int, 0, len(reachable))
 	for key := range reachable {
 		keys = append(keys, key)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i][0] == keys[j][0] {
-			return keys[i][1] < keys[j][1]
-		}
-		return keys[i][0] < keys[j][0]
-	})
+	sort.Ints(keys)
 	for _, key := range keys {
 		graph.Attempts = append(graph.Attempts, reachable[key])
 	}
@@ -307,28 +287,27 @@ type callGraphSwitch uint8
 
 const (
 	callGraphSwitchNone callGraphSwitch = iota
-	callGraphSwitchTarget
 	callGraphSwitchModel
 )
 
 type callGraphLimits struct {
-	answers, auxiliary, total     int
-	modelSwitches, targetSwitches int
-	cost                          int64
+	answers, auxiliary, total int
+	modelSwitches             int
+	cost                      int64
 }
 
 type callGraphPath struct {
-	answers, auxiliary, total     int
-	modelSwitches, targetSwitches int
-	cost                          int64
-	visionCached                  bool
-	retries                       map[string]int
+	answers, auxiliary, total int
+	modelSwitches             int
+	cost                      int64
+	visionCached              bool
+	retries                   map[string]int
 }
 
 type callGraphWork struct {
-	modelIndex, targetIndex int
-	switchKind              callGraphSwitch
-	path                    callGraphPath
+	modelIndex int
+	switchKind callGraphSwitch
+	path       callGraphPath
 }
 
 func (w callGraphWork) key() string {
@@ -342,10 +321,10 @@ func (w callGraphWork) key() string {
 		fmt.Fprintf(&retries, "%s=%d;", target, w.path.retries[target])
 	}
 	return fmt.Sprintf(
-		"%d/%d/%d/%d/%d/%d/%d/%d/%t/%s",
-		w.modelIndex, w.targetIndex, w.switchKind,
+		"%d/%d/%d/%d/%d/%d/%t/%s",
+		w.modelIndex, w.switchKind,
 		w.path.answers, w.path.auxiliary, w.path.total,
-		w.path.modelSwitches, w.path.targetSwitches,
+		w.path.modelSwitches,
 		w.path.visionCached, retries.String(),
 	) + fmt.Sprintf("/%d", w.path.cost)
 }
@@ -354,11 +333,6 @@ func (w callGraphWork) enter(limits callGraphLimits) (callGraphPath, bool) {
 	path := w.path.clone()
 	switch w.switchKind {
 	case callGraphSwitchNone:
-	case callGraphSwitchTarget:
-		if path.targetSwitches >= limits.targetSwitches {
-			return callGraphPath{}, false
-		}
-		path.targetSwitches++
 	case callGraphSwitchModel:
 		if path.modelSwitches >= limits.modelSwitches {
 			return callGraphPath{}, false
@@ -462,16 +436,14 @@ func (p *Planner) callGraphNode(
 	request Request,
 	attempt ModelAttemptPlan,
 	modelIndex int,
-	targetIndex int,
 	target TargetPlan,
 ) (PhysicalAttemptSnapshot, int, bool) {
 	node := PhysicalAttemptSnapshot{
 		Model: attempt.model, TargetID: target.id,
-		ModelIndex: modelIndex, TargetIndex: targetIndex,
+		ModelIndex:             modelIndex,
 		AnswerCallCostMicroUSD: attempt.answerCallCostMicroUSD,
 		VisionCallCostMicroUSD: attempt.visionCallCostMicroUSD,
-		ModelSwitch:            modelIndex > 0 && targetIndex == 0,
-		TargetSwitch:           targetIndex > 0,
+		ModelSwitch:            modelIndex > 0,
 	}
 	if attempt.visionMode != VisionComposite {
 		return node, 0, true
@@ -496,7 +468,6 @@ func recordCallGraphPath(graph *CallGraphSnapshot, path callGraphPath) {
 	graph.AuxiliaryCalls = max(graph.AuxiliaryCalls, path.auxiliary)
 	graph.TotalOutboundCalls = max(graph.TotalOutboundCalls, path.total)
 	graph.ModelSwitches = max(graph.ModelSwitches, path.modelSwitches)
-	graph.TargetSwitches = max(graph.TargetSwitches, path.targetSwitches)
 	graph.WorstCaseCostMicroUSD = max(graph.WorstCaseCostMicroUSD, path.cost)
 }
 
@@ -506,12 +477,6 @@ func enqueueNextCallGraphNode(
 	path callGraphPath,
 	attempts []ModelAttemptPlan,
 ) []callGraphWork {
-	if current.targetIndex+1 < len(attempts[current.modelIndex].targets) {
-		return append(queue, callGraphWork{
-			modelIndex: current.modelIndex, targetIndex: current.targetIndex + 1,
-			switchKind: callGraphSwitchTarget, path: path,
-		})
-	}
 	if current.modelIndex+1 < len(attempts) {
 		return append(queue, callGraphWork{
 			modelIndex: current.modelIndex + 1,
@@ -584,6 +549,5 @@ func (p PhysicalAttemptSnapshot) Reservation() AttemptReservation {
 		AnswerCalls:            p.AnswerCalls,
 		AnswerCallCostMicroUSD: p.AnswerCallCostMicroUSD,
 		ModelSwitch:            p.ModelSwitch,
-		TargetSwitch:           p.TargetSwitch,
 	}
 }

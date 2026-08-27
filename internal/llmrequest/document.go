@@ -21,6 +21,7 @@ type Document struct {
 	images               []Image
 	texts                []string
 	latestUserTexts      []string
+	userTaskCount        int
 	actualToolOperations []string
 	historicalTools      []string
 	forcedToolOperation  string
@@ -94,6 +95,10 @@ func (d *Document) LatestUserTexts() []string {
 	return append([]string(nil), d.latestUserTexts...)
 }
 
+func (d *Document) UserTaskCount() int {
+	return d.userTaskCount
+}
+
 func (d *Document) CanonicalEstimationJSON() ([]byte, error) {
 	overrides := make(map[[2]int]json.RawMessage, len(d.images))
 	for _, image := range d.images {
@@ -109,6 +114,51 @@ func (d *Document) CanonicalEstimationJSON() ([]byte, error) {
 		return json.Marshal(d.root)
 	}
 	return d.marshalWithBlockOverrides(overrides)
+}
+
+func (d *Document) CanonicalConversationEstimationJSON() ([]byte, error) {
+	canonical, err := d.CanonicalEstimationJSON()
+	if err != nil {
+		return nil, err
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(canonical, &root); err != nil {
+		return nil, fmt.Errorf("parse canonical conversation estimate: %w", err)
+	}
+	conversation := root[d.collectionField]
+	if len(conversation) == 0 {
+		return []byte("null"), nil
+	}
+	if d.operation == OperationOpenAIChatCompletions || d.operation == OperationOpenAIResponses {
+		return withoutOpenAIFixedPromptMessages(conversation)
+	}
+	return append([]byte(nil), conversation...), nil
+}
+
+func withoutOpenAIFixedPromptMessages(conversation json.RawMessage) ([]byte, error) {
+	if !isJSONType(conversation, '[') {
+		return append([]byte(nil), conversation...), nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(conversation, &items); err != nil {
+		return nil, fmt.Errorf("parse OpenAI conversation estimate: %w", err)
+	}
+	filtered := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(item, &fields) == nil {
+			role := rawString(fields["role"])
+			if role == "system" || role == "developer" {
+				continue
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	encoded, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, fmt.Errorf("marshal OpenAI conversation estimate: %w", err)
+	}
+	return encoded, nil
 }
 
 func (d *Document) RewriteImages(replacements []string) ([]byte, error) {
@@ -428,7 +478,11 @@ func (d *Document) addActualToolOperation(name string) {
 }
 
 func (d *Document) setLatestUserTexts(texts []string) {
+	if len(texts) == 0 {
+		return
+	}
 	d.latestUserTexts = append(d.latestUserTexts[:0], texts...)
+	d.userTaskCount++
 }
 
 func boundedActualToolOperation(name string) string {

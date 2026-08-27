@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/Euphie/llm-proxy/internal/llmrequest"
@@ -12,30 +13,152 @@ import (
 )
 
 type selfEscalationStreamGuard struct {
-	pending []byte
+	operation     llmrequest.Operation
+	pending       []byte
+	chatToolNames map[string]string
+}
+
+func newSelfEscalationStreamGuard(operation llmrequest.Operation) selfEscalationStreamGuard {
+	return selfEscalationStreamGuard{
+		operation: operation, chatToolNames: make(map[string]string),
+	}
 }
 
 func (g *selfEscalationStreamGuard) Filter(data []byte) ([]byte, error) {
 	g.pending = append(g.pending, data...)
-	token := []byte(routing.SelfEscalationToolName)
-	if bytes.Contains(g.pending, token) {
+	var emit []byte
+	for {
+		eventEnd, ok := completeSSEEventEnd(g.pending)
+		if !ok {
+			break
+		}
+		event := g.pending[:eventEnd]
+		if err := g.inspectEvent(event); err != nil {
+			g.pending = nil
+			return nil, err
+		}
+		emit = append(emit, event...)
+		g.pending = g.pending[eventEnd:]
+	}
+	if len(g.pending) > maxPrecommitStreamBytes {
 		g.pending = nil
-		return nil, invalidLateSelfEscalation()
+		return nil, provider.NewFailure(
+			provider.FailureRequestProtocolCapability,
+			0,
+			errors.New("stream event exceeded buffer limit after client commit"),
+		)
 	}
-	keep := len(token) - 1
-	if len(g.pending) <= keep {
-		return nil, nil
-	}
-	emitLength := len(g.pending) - keep
-	emit := append([]byte(nil), g.pending[:emitLength]...)
-	g.pending = append(g.pending[:0], g.pending[emitLength:]...)
 	return emit, nil
 }
 
-func (g *selfEscalationStreamGuard) Flush() []byte {
+func (g *selfEscalationStreamGuard) Flush() ([]byte, error) {
+	if len(g.pending) > 0 {
+		if err := g.inspectEvent(g.pending); err != nil {
+			g.pending = nil
+			return nil, err
+		}
+	}
 	remaining := append([]byte(nil), g.pending...)
 	g.pending = nil
-	return remaining
+	return remaining, nil
+}
+
+func completeSSEEventEnd(data []byte) (int, bool) {
+	lf := bytes.Index(data, []byte("\n\n"))
+	crlf := bytes.Index(data, []byte("\r\n\r\n"))
+	switch {
+	case lf < 0 && crlf < 0:
+		return 0, false
+	case crlf < 0 || lf >= 0 && lf < crlf:
+		return lf + 2, true
+	default:
+		return crlf + 4, true
+	}
+}
+
+func (g *selfEscalationStreamGuard) inspectEvent(raw []byte) error {
+	normalized := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	normalized = strings.TrimSuffix(normalized, "\n\n")
+	event := parseSSEEvent(normalized)
+	if !event.hasDataLine || strings.TrimSpace(event.data) == "" ||
+		strings.TrimSpace(event.data) == "[DONE]" {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal([]byte(event.data), &payload) != nil || payload == nil {
+		return nil
+	}
+	var requested bool
+	switch g.operation {
+	case llmrequest.OperationAnthropicMessages:
+		requested = anthropicEventRequestsEscalation(payload)
+	case llmrequest.OperationOpenAIChatCompletions:
+		requested = g.chatEventRequestsEscalation(payload)
+	case llmrequest.OperationOpenAIResponses:
+		requested = responsesEventRequestsEscalation(payload)
+	}
+	if requested {
+		return invalidLateSelfEscalation()
+	}
+	return nil
+}
+
+func anthropicEventRequestsEscalation(payload map[string]json.RawMessage) bool {
+	if jsonString(payload["type"]) != "content_block_start" {
+		return false
+	}
+	var block map[string]json.RawMessage
+	return json.Unmarshal(payload["content_block"], &block) == nil &&
+		jsonString(block["type"]) == "tool_use" &&
+		jsonString(block["name"]) == routing.SelfEscalationToolName
+}
+
+func (g *selfEscalationStreamGuard) chatEventRequestsEscalation(
+	payload map[string]json.RawMessage,
+) bool {
+	var choices []struct {
+		Index int `json:"index"`
+		Delta struct {
+			ToolCalls []struct {
+				Index    int `json:"index"`
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal(payload["choices"], &choices) != nil {
+		return false
+	}
+	for _, choice := range choices {
+		for _, call := range choice.Delta.ToolCalls {
+			key := fmt.Sprintf("%d:%d", choice.Index, call.Index)
+			current := g.chatToolNames[key]
+			if current == "\x00" {
+				continue
+			}
+			current += call.Function.Name
+			if current == routing.SelfEscalationToolName {
+				return true
+			}
+			if current != "" && !strings.HasPrefix(routing.SelfEscalationToolName, current) {
+				g.chatToolNames[key] = "\x00"
+				continue
+			}
+			g.chatToolNames[key] = current
+		}
+	}
+	return false
+}
+
+func responsesEventRequestsEscalation(payload map[string]json.RawMessage) bool {
+	if jsonString(payload["type"]) != "response.output_item.added" {
+		return false
+	}
+	var item map[string]json.RawMessage
+	return json.Unmarshal(payload["item"], &item) == nil &&
+		jsonString(item["type"]) == "function_call" &&
+		jsonString(item["name"]) == routing.SelfEscalationToolName
 }
 
 type selfEscalationDecision struct {

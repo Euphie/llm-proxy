@@ -45,6 +45,17 @@ func Open(dataDir string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("connect database: %w", err)
 	}
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read database version: %w", err)
+	}
+	if version == 24 {
+		if _, err := PreparePolicyMigrationArtifacts(db, dataDir); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	if err := Migrate(db); err != nil {
 		db.Close()
 		return nil, err

@@ -13,6 +13,14 @@ const upstream = http.createServer((request, response) => {
     upstreamRequests.push({ path: request.url, body });
     response.setHeader("content-type", "application/json");
     if (body.stream === false) {
+      if (request.url.endsWith("/chat/completions")) {
+        response.end(
+          JSON.stringify({
+            choices: [{ message: { content: "fixture image description" } }],
+          }),
+        );
+        return;
+      }
       response.end(
         JSON.stringify({
           output: [
@@ -57,7 +65,7 @@ test("persists model capabilities and applies them to Agent and vision workflows
 
   await page.goto("/_admin/");
   await expect(page.locator(".auth-window")).toBeVisible();
-  await expect(page.getByText("首次登录存在公网抢占风险")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
 
   await page.getByLabel("用户名").fill("admin");
   await page.getByLabel("密码").fill("admin");
@@ -70,7 +78,9 @@ test("persists model capabilities and applies them to Agent and vision workflows
   await page.getByLabel("新密码", { exact: true }).fill(password);
   await page.getByLabel("确认新密码").fill(password);
   await page.getByRole("button", { name: "保存新密码" }).click();
+  await expect(page.getByRole("heading", { name: "让第一个 Agent 跑起来" })).toBeVisible();
 
+  await page.goto("/_admin/profiles");
   await page.getByRole("button", { name: "创建第一个 Profile" }).click();
   await page.getByLabel("名称").fill("Coding");
   await page.getByLabel("Slug").fill("coding");
@@ -79,11 +89,9 @@ test("persists model capabilities and applies them to Agent and vision workflows
   const defaultProfile = page.getByLabel("设为默认 Profile");
   await expect(defaultProfile).toBeChecked();
   await expect(defaultProfile).toBeDisabled();
-  await page.getByRole("button", { name: "保存 Profile" }).click();
+  await page.getByRole("button", { name: "创建并继续" }).click();
 
-  await expect(page.getByRole("heading", { name: "Coding" })).toBeVisible();
-  await expect(page.getByText("coding", { exact: true })).toBeVisible();
-  await expect(page.getByText("默认", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "录入模型", exact: true })).toBeVisible();
   const appWindow = page.locator(".app-window");
   await expect(appWindow).toBeVisible();
   await expect(page.locator(".window-control")).toHaveCount(3);
@@ -92,7 +100,6 @@ test("persists model capabilities and applies them to Agent and vision workflows
     "true",
   );
   await expect(page.locator(".app-sidebar")).toBeVisible();
-  await expect(page.locator(".profile-settings-row")).toHaveCount(1);
 
   const desktopMaterial = await appWindow.evaluate((element) => {
     const body = element.querySelector(".app-window-body");
@@ -114,7 +121,6 @@ test("persists model capabilities and applies them to Agent and vision workflows
     desktopMaterial.sidebarRight - 1,
   );
 
-  await page.getByRole("button", { name: "编辑" }).click();
   const addModel = page.getByRole("button", { name: "添加模型" });
   await expect(addModel.locator("..")).toHaveClass(/model-list-actions/);
   const addModelAlignment = await addModel.evaluate((button) => ({
@@ -192,6 +198,15 @@ test("persists model capabilities and applies them to Agent and vision workflows
   await expect(previewRow.getByLabel("最大输出 Token")).toHaveValue("128000");
   await expect(previewRow.getByLabel("支持视觉")).toHaveValue("true");
   await previewRow.getByRole("button", { name: "删除模型" }).click();
+
+  await page.getByRole("button", { name: "保存并继续" }).click();
+  await expect(page.locator(".profile-create-header h1")).toHaveText("智能路由");
+  await page.getByRole("button", { name: "暂不启用智能路由" }).click();
+  await expect(page.getByRole("heading", { name: "配置完成" })).toBeVisible();
+  await page.getByRole("button", { name: "完成" }).click();
+
+  await expect(page.locator(".page-heading > h1")).toHaveText("Coding");
+  await page.locator('nav[aria-label="Profile 设置"] a[href$="/vision"]').click();
   await page.getByLabel("启用视觉预处理").check();
   await page.getByText("视觉参数", { exact: true }).click();
   await page.getByLabel("识图模型").fill("Kimi-K2.5");
@@ -199,20 +214,21 @@ test("persists model capabilities and applies them to Agent and vision workflows
   await page.getByRole("button", { name: "保存 Profile" }).click();
 
   await page.reload();
-  await page.getByRole("button", { name: "编辑" }).click();
+  await page.locator('nav[aria-label="Profile 设置"] a[href$="/models"]').click();
   await expect(page.locator('[name="model-0-id"]')).toHaveValue("GLM-5");
   await expect(page.locator('[name="model-0-context-window"]')).toHaveValue("204800");
-  await expect(page.locator('[name="model-0-max-output-tokens"]')).toHaveValue("");
+  await expect(page.locator('[name="model-0-max-output-tokens"]')).toHaveValue("131072");
   await expect(page.locator('[name="model-0-supports-vision"]')).toHaveValue("false");
   await expect(page.locator('[name="model-1-id"]')).toHaveValue("Kimi-K2.5");
   await expect(page.locator('[name="model-1-context-window"]')).toHaveValue("262144");
   await expect(page.locator('[name="model-1-max-output-tokens"]')).toHaveValue("65536");
   await expect(page.locator('[name="model-1-supports-vision"]')).toHaveValue("true");
+  await page.locator('nav[aria-label="Profile 设置"] a[href$="/vision"]').click();
   await expect(page.getByLabel("启用视觉预处理")).toBeChecked();
   await page.getByText("视觉参数", { exact: true }).click();
   await expect(page.getByLabel("识图模型")).toHaveValue("Kimi-K2.5");
   await expect(page.getByLabel("未收录模型")).toHaveValue("bypass");
-  await page.getByRole("button", { name: "返回列表" }).click();
+  await page.getByRole("link", { name: "Profiles", exact: true }).click();
 
   await page.getByRole("button", { name: "生成配置" }).click();
   const generator = page.getByRole("dialog");
@@ -247,8 +263,10 @@ test("persists model capabilities and applies them to Agent and vision workflows
 
   await generator.getByRole("button", { name: "返回 Profiles" }).click();
   await page.getByRole("button", { name: "编辑" }).click();
+  await page.locator('nav[aria-label="Profile 设置"] a[href$="/connection"]').click();
   await page.getByLabel("协议").selectOption("openai");
   await page.getByRole("button", { name: "保存 Profile" }).click();
+  await page.getByRole("link", { name: "Profiles", exact: true }).click();
   await page.getByRole("button", { name: "生成配置" }).click();
   const openAIGenerator = page.getByRole("dialog");
   await openAIGenerator.getByLabel("Agent").selectOption("opencode-responses");
@@ -261,10 +279,10 @@ test("persists model capabilities and applies them to Agent and vision workflows
   await expect(openCodeOutput).toContainText(
     '"model": "llm-proxy-coding/GLM-5"',
   );
-  await expect(openCodeOutput).not.toContainText('"limit"');
-  await expect(openCodeOutput).not.toContainText('"compaction"');
-  await expect(openCodeWarning).toBeVisible();
-  await expect(openCodeWarning).toContainText(/OpenCode.*输出|输出.*OpenCode/);
+  await expect(openCodeOutput).toContainText('"context": 204800');
+  await expect(openCodeOutput).toContainText('"output": 131072');
+  await expect(openCodeOutput).toContainText('"reserved": 131072');
+  await expect(openCodeWarning).toBeHidden();
 
   await openCodeModel.fill("Kimi-K2.5");
   await expect(

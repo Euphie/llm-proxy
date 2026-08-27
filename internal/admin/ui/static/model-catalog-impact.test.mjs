@@ -29,7 +29,6 @@ test("impact analysis classifies regressions prices and newly known facts", () =
   assert.equal(rows.some((row) => row.modelId === "new-model" && row.risk === "low"), true);
   assert.equal(rows.some((row) => row.label === "视觉模型" && row.href === "/_admin/profiles/7/vision"), true);
   assert.equal(rows.some((row) => row.label === "强模型基线" && row.href === "/_admin/profiles/7/routing"), true);
-  assert.equal(rows.some((row) => row.label === "上游节点 backup" && row.href === "/_admin/profiles/7/reliability"), true);
 });
 
 test("impact analysis scans every stored strategy lifecycle without mutating input", () => {
@@ -101,7 +100,6 @@ function profileFixture() {
     config: {
       models: [{ id: "strong" }, { id: "fast" }, { id: "new-model" }],
       vision: { enabled: true, model: "strong" },
-      targets: [{ id: "backup", models: ["strong"] }],
       auto_routing: {
         enabled: true,
         participants: ["fast", "strong"],

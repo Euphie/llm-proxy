@@ -130,53 +130,55 @@ Object.assign(api, {
       method: "PUT",
       body: { profile_id: profileId },
     }),
-  listStrategies: (profileId) =>
-    request(`/_admin/api/profiles/${profileId}/strategies`),
-  createStrategy: (profileId, config) =>
-    request(`/_admin/api/profiles/${profileId}/strategies`, {
-      method: "POST",
-      body: { config },
-    }),
-  updateStrategy: (profileId, strategyId, config) =>
-    request(`/_admin/api/profiles/${profileId}/strategies/${strategyId}`, {
+  routingPolicy: (profileId) =>
+    request(`/_admin/api/profiles/${profileId}/routing-policy`),
+  applyRoutingPolicy: (profileId, expectedRevision, policy, changeReason) =>
+    request(`/_admin/api/profiles/${profileId}/routing-policy`, {
       method: "PUT",
-      body: { config },
-    }),
-  advanceStrategy: (profileId, strategyId, from, to) =>
-    request(
-      `/_admin/api/profiles/${profileId}/strategies/${strategyId}/advance`,
-      { method: "POST", body: { from, to } },
-    ),
-  startStrategyCanary: (profileId, strategyId, canaryBps, expectedRevision) =>
-    request(
-      `/_admin/api/profiles/${profileId}/strategies/${strategyId}/canary`,
-      {
-        method: "POST",
-        body: {
-          canary_bps: canaryBps,
-          expected_revision: expectedRevision,
-        },
+      body: {
+        expected_runtime_revision: expectedRevision,
+        policy,
+        change_reason: changeReason,
       },
-    ),
-  cancelStrategyCanary: (profileId, expectedRevision) =>
-    request(`/_admin/api/profiles/${profileId}/strategies/cancel-canary`, {
-      method: "POST",
-      body: { expected_revision: expectedRevision },
     }),
-  promoteStrategy: (profileId, expectedRevision) =>
-    request(`/_admin/api/profiles/${profileId}/strategies/promote`, {
+  generateRoutingPolicy: (profileId, intent) =>
+    request(`/_admin/api/profiles/${profileId}/routing-policy/generate`, {
       method: "POST",
-      body: { expected_revision: expectedRevision },
+      body: intent,
     }),
-  rollbackStrategy: (profileId, expectedRevision) =>
-    request(`/_admin/api/profiles/${profileId}/strategies/rollback`, {
+  rollbackRoutingPolicy: (profileId, expectedRevision, versionId, changeReason) =>
+    request(`/_admin/api/profiles/${profileId}/routing-policy/rollback`, {
       method: "POST",
-      body: { expected_revision: expectedRevision },
+      body: {
+        expected_runtime_revision: expectedRevision,
+        version_id: versionId,
+        change_reason: changeReason,
+      },
     }),
-	generateStrategyCandidate: (profileId) =>
-		request(`/_admin/api/profiles/${profileId}/strategies/generate-candidate`, {
-			method: "POST",
-		}),
+  profileModels: (profileId) =>
+    request(`/_admin/api/profiles/${profileId}/models`),
+  addProfileModel: (profileId, expectedRevision, modelId, capability, reason = "") =>
+    request(`/_admin/api/profiles/${profileId}/models`, {
+      method: "POST",
+      body: { expected_runtime_revision: expectedRevision, model_id: modelId, capability, reason },
+    }),
+  updateProfileModel: (profileId, expectedRevision, modelId, capability, reason = "") =>
+    request(`/_admin/api/profiles/${profileId}/models/update`, {
+      method: "PUT",
+      body: { expected_runtime_revision: expectedRevision, model_id: modelId, capability, reason },
+    }),
+  offlineProfileModel: (profileId, body) =>
+    request(`/_admin/api/profiles/${profileId}/models/offline`, { method: "POST", body }),
+  restoreProfileModel: (profileId, expectedRevision, modelId, reason = "") =>
+    request(`/_admin/api/profiles/${profileId}/models/restore`, {
+      method: "POST",
+      body: { expected_runtime_revision: expectedRevision, model_id: modelId, reason },
+    }),
+  retireProfileModel: (profileId, expectedRevision, modelId, reason = "") =>
+    request(`/_admin/api/profiles/${profileId}/models/retire`, {
+      method: "POST",
+      body: { expected_runtime_revision: expectedRevision, model_id: modelId, reason },
+    }),
   stats: (params = {}) => {
     const query = new URLSearchParams(
       Object.entries(params)
@@ -196,6 +198,8 @@ Object.assign(api, {
     );
   },
 	routingTrace: (id) => request(`/_admin/api/routing-traces/${Number(id)}`),
+	routingSessionFlow: (id) =>
+		request(`/_admin/api/routing-traces/${Number(id)}/session-flow`),
 	modelPerformance: (params = {}) => {
 		const query = new URLSearchParams(
 			Object.entries(params)
@@ -204,10 +208,29 @@ Object.assign(api, {
 		).toString();
 		return request(`/_admin/api/model-performance${query === "" ? "" : `?${query}`}`);
 	},
+	agentTrajectories: (params = {}) => {
+		const query = new URLSearchParams(
+			Object.entries(params)
+				.map(([key, value]) => [key, String(value ?? "").trim()])
+				.filter(([, value]) => value !== ""),
+		).toString();
+		return request(`/_admin/api/agent-trajectories${query === "" ? "" : `?${query}`}`);
+	},
+	agentTrajectory: (id) => request(`/_admin/api/agent-trajectories/${Number(id)}`),
+	deleteAgentTrajectory: (id) => request(`/_admin/api/agent-trajectories/${Number(id)}`, {
+		method: "DELETE",
+	}),
   system: () => request("/_admin/api/system"),
   modelCatalog: () => request("/_admin/api/model-catalog"),
   refreshModelCatalog: () =>
     request("/_admin/api/model-catalog/refresh", {
       method: "POST",
     }),
+	evaluationCatalog: () => request("/_admin/api/evaluation-catalog"),
+	startEvaluationCatalogUpdate: () =>
+		request("/_admin/api/evaluation-catalog/update", {
+			method: "POST",
+		}),
+	evaluationCatalogUpdateStatus: () =>
+		request("/_admin/api/evaluation-catalog/update-status"),
 });

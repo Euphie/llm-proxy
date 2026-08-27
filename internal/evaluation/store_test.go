@@ -245,6 +245,121 @@ func TestEvidenceAggregateAndDimensionsUseOneReadSnapshot(t *testing.T) {
 	}
 }
 
+func TestOnlineStabilityAggregatesInitialModelOutcomes(t *testing.T) {
+	db := openEvaluationDB(t)
+	defer db.Close()
+	profileID := insertEvaluationProfile(t, db)
+	now := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	insertTrace := func(finalModel string, answerAttempts, modelSwitches, targetSwitches int, elapsedMS int64) {
+		t.Helper()
+		_, err := db.Exec(`INSERT INTO routing_traces (
+			created_at, profile_id, profile_slug, protocol, path, strategy_name, route_id,
+			task_type, risk, classification_source, initial_model, final_model, vision_mode,
+			status_code, client_committed, answer_attempts, auxiliary_calls,
+			total_outbound_calls, model_switches, target_switches,
+			planned_worst_case_cost_micro_usd, consumed_estimated_cost_micro_usd, elapsed_ms
+		) VALUES (?, ?, 'auto', 'anthropic', '/v1/messages', 'active', 'balanced',
+			'simple', 'normal', 'rule', 'fast', ?, 'none', 200, 1, ?, 0, ?, ?, ?, 10, 5, ?)`,
+			now.Format(time.RFC3339Nano), profileID, finalModel,
+			answerAttempts, answerAttempts, modelSwitches, targetSwitches, elapsedMS,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertTrace("fast", 1, 0, 0, 100)
+	insertTrace("fast", 2, 0, 0, 200)
+	insertTrace("strong", 2, 1, 0, 300)
+
+	aggregate, err := NewStore(db, func() time.Time { return now }).OnlineStability(
+		context.Background(), profileID, "active", "balanced", "fast",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Samples != 3 || aggregate.SuccessfulCompletions != 2 ||
+		aggregate.CleanCompletions != 1 || aggregate.TotalLatencyMS != 600 ||
+		aggregate.EffectiveSamples != 3 ||
+		aggregate.EffectiveSuccessfulCompletions != 2 ||
+		aggregate.EffectiveCleanCompletions != 1 || aggregate.EffectiveLatencyMS != 600 {
+		t.Fatalf("aggregate=%+v", aggregate)
+	}
+}
+
+func TestOnlineStabilityDecaysOldRoutingTraces(t *testing.T) {
+	db := openEvaluationDB(t)
+	defer db.Close()
+	profileID := insertEvaluationProfile(t, db)
+	now := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	insert := func(createdAt time.Time, elapsedMS int64) {
+		t.Helper()
+		_, err := db.Exec(`INSERT INTO routing_traces (
+			created_at, profile_id, profile_slug, protocol, path, strategy_name, route_id,
+			task_type, risk, classification_source, initial_model, final_model, vision_mode,
+			status_code, client_committed, answer_attempts, auxiliary_calls,
+			total_outbound_calls, model_switches, target_switches,
+			planned_worst_case_cost_micro_usd, consumed_estimated_cost_micro_usd, elapsed_ms
+		) VALUES (?, ?, 'auto', 'anthropic', '/v1/messages', 'active', 'balanced',
+			'simple', 'normal', 'rule', 'fast', 'fast', 'none', 200, 1, 1, 0, 1, 0, 0, 10, 5, ?)`,
+			createdAt.Format(time.RFC3339Nano), profileID, elapsedMS,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(now, 100)
+	insert(now.AddDate(0, 0, -30), 300)
+
+	aggregate, err := NewStore(db, func() time.Time { return now }).OnlineStability(
+		context.Background(), profileID, "active", "balanced", "fast",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Samples != 2 || aggregate.EffectiveSamples != 1.5 ||
+		aggregate.EffectiveSuccessfulCompletions != 1.5 ||
+		aggregate.EffectiveCleanCompletions != 1.5 || aggregate.EffectiveLatencyMS != 250 {
+		t.Fatalf("aggregate=%+v", aggregate)
+	}
+}
+
+func TestOnlineStabilityForFiltersTaskAndDifficulty(t *testing.T) {
+	db := openEvaluationDB(t)
+	defer db.Close()
+	profileID := insertEvaluationProfile(t, db)
+	now := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	insert := func(taskType, difficulty, finalModel string, elapsedMS int64) {
+		t.Helper()
+		_, err := db.Exec(`INSERT INTO routing_traces (
+			created_at, profile_id, profile_slug, protocol, path, strategy_name, route_id,
+			task_type, difficulty, risk, classification_source, initial_model, final_model, vision_mode,
+			status_code, client_committed, answer_attempts, auxiliary_calls,
+			total_outbound_calls, model_switches, target_switches,
+			planned_worst_case_cost_micro_usd, consumed_estimated_cost_micro_usd, elapsed_ms
+		) VALUES (?, ?, 'auto', 'anthropic', '/v1/messages', 'active', 'shared',
+			?, ?, 'normal', 'rule', 'fast', ?, 'none', 200, 1, 1, 0, 1, 0, 0, 10, 5, ?)`,
+			now.Format(time.RFC3339Nano), profileID, taskType, difficulty, finalModel, elapsedMS,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("coding", "easy", "fast", 100)
+	insert("coding", "hard", "strong", 900)
+	insert("math", "easy", "strong", 700)
+
+	aggregate, err := NewStore(db, func() time.Time { return now }).OnlineStabilityFor(
+		context.Background(), profileID, "active", "shared", "fast", "coding", "easy",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Samples != 1 || aggregate.SuccessfulCompletions != 1 ||
+		aggregate.CleanCompletions != 1 || aggregate.TotalLatencyMS != 100 {
+		t.Fatalf("aggregate=%+v", aggregate)
+	}
+}
+
 func dimensionOutcomes(outcome Outcome) map[Dimension]Outcome {
 	result := make(map[Dimension]Outcome, len(ReviewDimensions))
 	for _, dimension := range ReviewDimensions {

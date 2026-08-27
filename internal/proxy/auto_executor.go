@@ -14,21 +14,20 @@ import (
 type autoExecution struct {
 	budget       *routing.AttemptBudget
 	ledger       *routing.CallLedger
-	nodes        map[[2]int]routing.PhysicalAttemptSnapshot
+	nodes        map[int]routing.PhysicalAttemptSnapshot
 	models       profile.ModelCatalog
 	answerParser stats.Parser
 	visionParser stats.Parser
 }
 
 type autoNodeLease struct {
-	lease             *routing.AttemptLease
-	ledger            *routing.CallLedger
-	modelSwitchIndex  int
-	targetSwitchIndex int
-	answerCalls       int
-	models            profile.ModelCatalog
-	answerParser      stats.Parser
-	visionParser      stats.Parser
+	lease            *routing.AttemptLease
+	ledger           *routing.CallLedger
+	modelSwitchIndex int
+	answerCalls      int
+	models           profile.ModelCatalog
+	answerParser     stats.Parser
+	visionParser     stats.Parser
 }
 
 func newAutoExecution(
@@ -39,9 +38,9 @@ func newAutoExecution(
 	answerParser stats.Parser,
 	visionParser stats.Parser,
 ) *autoExecution {
-	nodes := make(map[[2]int]routing.PhysicalAttemptSnapshot)
+	nodes := make(map[int]routing.PhysicalAttemptSnapshot)
 	for _, node := range plan.CallGraph().Attempts {
-		nodes[[2]int{node.ModelIndex, node.TargetIndex}] = node
+		nodes[node.ModelIndex] = node
 	}
 	return &autoExecution{
 		budget: budget, ledger: ledger, nodes: nodes, models: models,
@@ -52,10 +51,9 @@ func newAutoExecution(
 func (e *autoExecution) reserveNode(
 	ctx context.Context,
 	modelIndex int,
-	targetIndex int,
 	visionCached bool,
 ) (*autoNodeLease, error) {
-	node, ok := e.nodes[[2]int{modelIndex, targetIndex}]
+	node, ok := e.nodes[modelIndex]
 	if !ok {
 		return nil, fmt.Errorf("%w: call graph node", routing.ErrAttemptBudgetExceeded)
 	}
@@ -71,12 +69,11 @@ func (e *autoExecution) reserveNode(
 	snapshot := e.budget.Snapshot()
 	return &autoNodeLease{
 		lease: lease, ledger: e.ledger,
-		modelSwitchIndex:  snapshot.ModelSwitches,
-		targetSwitchIndex: snapshot.TargetSwitches,
-		answerCalls:       node.AnswerCalls,
-		models:            e.models,
-		answerParser:      e.answerParser,
-		visionParser:      e.visionParser,
+		modelSwitchIndex: snapshot.ModelSwitches,
+		answerCalls:      node.AnswerCalls,
+		models:           e.models,
+		answerParser:     e.answerParser,
+		visionParser:     e.visionParser,
 	}, nil
 }
 
@@ -95,7 +92,7 @@ func (n *autoNodeLease) visionReservation(visionModel string) vision.CallReserva
 			return nil, err
 		}
 		ticket.Model = visionModel
-		sequence := n.ledger.Begin(*ticket, n.modelSwitchIndex, n.targetSwitchIndex)
+		sequence := n.ledger.Begin(*ticket, n.modelSwitchIndex)
 		var once sync.Once
 		return func(statusCode int, outcome string, responseBody []byte) {
 			once.Do(func() {
@@ -128,7 +125,7 @@ func (n *autoNodeLease) beginAnswer(
 	if err != nil {
 		return routing.CallTicket{}, nil, err
 	}
-	sequence := n.ledger.Begin(*ticket, n.modelSwitchIndex, n.targetSwitchIndex)
+	sequence := n.ledger.Begin(*ticket, n.modelSwitchIndex)
 	var once sync.Once
 	return *ticket, func(statusCode int, outcome string, responseBody []byte) {
 		once.Do(func() {
@@ -169,9 +166,8 @@ func physicalCallsForStats(entries []routing.CallLedgerEntry) []stats.PhysicalCa
 	for index, entry := range entries {
 		result[index] = stats.PhysicalCall{
 			Sequence: entry.Sequence, Kind: string(entry.Kind), Model: entry.Model,
-			Target: entry.Target, ImageIndex: entry.ImageIndex,
+			ImageIndex: entry.ImageIndex,
 			RetryIndex: entry.RetryIndex, ModelSwitchIndex: entry.ModelSwitchIndex,
-			TargetSwitchIndex: entry.TargetSwitchIndex,
 			EstimatedMicroUSD: entry.EstimatedMicroUSD,
 			ActualCostKnown:   entry.ActualCostKnown, ActualMicroUSD: entry.ActualMicroUSD,
 			UsagePresent: entry.Usage.Present && entry.Usage.InputPresent,
@@ -191,12 +187,16 @@ func candidateDecisionsForStats(entries []routing.CandidateDecision) []stats.Can
 		result[index] = stats.CandidateDecision{
 			Model: entry.Model, Decision: entry.Decision, ReasonCode: entry.Reason,
 			QualityScoreBPS:         entry.QualityScoreBPS,
+			StabilityScoreBPS:       entry.StabilityScoreBPS,
 			SevereErrorRateBPS:      entry.SevereErrorRateBPS,
+			ExpectedLatencyMS:       entry.ExpectedLatencyMS,
+			CostEfficiencyScoreBPS:  entry.CostEfficiencyScoreBPS,
+			PerformanceScoreBPS:     entry.PerformanceScoreBPS,
+			RoutingScoreBPS:         entry.RoutingScoreBPS,
 			ExpectedCostMicroUSD:    entry.ExpectedCostMicroUSD,
 			AnswerWorstCostMicroUSD: entry.AnswerCallCostMicroUSD,
 			VisionCallCostMicroUSD:  entry.VisionCallCostMicroUSD,
 			VisionMode:              string(entry.VisionMode),
-			UpstreamNodes:           append([]string(nil), entry.UpstreamNodeIDs...),
 		}
 	}
 	return result

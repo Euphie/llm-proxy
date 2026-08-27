@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/agenttrajectory"
 	"github.com/Euphie/llm-proxy/internal/gateway"
+	"github.com/Euphie/llm-proxy/internal/runtimeconfig"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
 
@@ -20,34 +22,44 @@ const (
 )
 
 type Dependencies struct {
-	Auth             *AuthService
-	Profiles         *ProfileService
-	Strategies       *StrategyService
-	Stats            *stats.DB
-	DB               *sql.DB
-	Version          string
-	DataDir          string
-	Logger           *slog.Logger
-	ActivateProfiles func(context.Context) error
-	RuntimeReady     func() bool
-	ModelCatalog     ModelCatalogService
+	Auth                     *AuthService
+	Profiles                 *ProfileService
+	Strategies               *StrategyService
+	Policies                 *RoutingPolicyService
+	Stats                    *stats.DB
+	DB                       *sql.DB
+	Version                  string
+	DataDir                  string
+	Logger                   *slog.Logger
+	ActivateProfiles         func(context.Context) error
+	RuntimeReady             func() bool
+	ModelCatalog             ModelCatalogService
+	EvaluationCatalog        EvaluationCatalogService
+	EvaluationCatalogUpdater EvaluationCatalogUpdater
+	AgentTrajectories        AgentTrajectoryStore
+	AgentTrajectoryCipher    AgentTrajectoryCipher
 }
 
 type API struct {
-	auth             *AuthService
-	profiles         *ProfileService
-	strategies       *StrategyService
-	stats            *stats.DB
-	db               *sql.DB
-	version          string
-	dataDir          string
-	logger           *slog.Logger
-	activateProfiles func(context.Context) error
-	runtimeReady     func() bool
-	modelCatalog     ModelCatalogService
-	now              func() time.Time
-	routePaths       *http.ServeMux
-	allowedMethods   map[string][]string
+	auth                     *AuthService
+	profiles                 *ProfileService
+	strategies               *StrategyService
+	policies                 *RoutingPolicyService
+	stats                    *stats.DB
+	db                       *sql.DB
+	version                  string
+	dataDir                  string
+	logger                   *slog.Logger
+	activateProfiles         func(context.Context) error
+	runtimeReady             func() bool
+	modelCatalog             ModelCatalogService
+	evaluationCatalog        EvaluationCatalogService
+	evaluationCatalogUpdater EvaluationCatalogUpdater
+	agentTrajectories        AgentTrajectoryStore
+	agentTrajectoryCipher    AgentTrajectoryCipher
+	now                      func() time.Time
+	routePaths               *http.ServeMux
+	allowedMethods           map[string][]string
 }
 
 type apiRoute struct {
@@ -71,18 +83,23 @@ func NewAPI(deps Dependencies) http.Handler {
 		runtimeReady = func() bool { return true }
 	}
 	api := &API{
-		auth:             deps.Auth,
-		profiles:         deps.Profiles,
-		strategies:       deps.Strategies,
-		stats:            deps.Stats,
-		db:               deps.DB,
-		version:          version,
-		dataDir:          deps.DataDir,
-		logger:           logger,
-		activateProfiles: activateProfiles,
-		runtimeReady:     runtimeReady,
-		modelCatalog:     deps.ModelCatalog,
-		now:              time.Now,
+		auth:                     deps.Auth,
+		profiles:                 deps.Profiles,
+		strategies:               deps.Strategies,
+		policies:                 deps.Policies,
+		stats:                    deps.Stats,
+		db:                       deps.DB,
+		version:                  version,
+		dataDir:                  deps.DataDir,
+		logger:                   logger,
+		activateProfiles:         activateProfiles,
+		runtimeReady:             runtimeReady,
+		modelCatalog:             deps.ModelCatalog,
+		evaluationCatalog:        deps.EvaluationCatalog,
+		evaluationCatalogUpdater: deps.EvaluationCatalogUpdater,
+		agentTrajectories:        deps.AgentTrajectories,
+		agentTrajectoryCipher:    deps.AgentTrajectoryCipher,
+		now:                      time.Now,
 	}
 
 	mux := http.NewServeMux()
@@ -120,25 +137,44 @@ func (a *API) routes() []apiRoute {
 		{method: http.MethodPut, pattern: "/_admin/api/profiles/{id}", handler: a.updateProfile},
 		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/copy", handler: a.copyProfile},
 		{method: http.MethodDelete, pattern: "/_admin/api/profiles/{id}", handler: a.deleteProfile},
-		{method: http.MethodGet, pattern: "/_admin/api/profiles/{id}/strategies", handler: a.listStrategies},
-		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies", handler: a.createStrategy},
-		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/generate-candidate", handler: a.generateStrategyCandidate},
-		{method: http.MethodPut, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}", handler: a.updateStrategy},
-		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}/advance", handler: a.advanceStrategy},
-		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/{strategy_id}/canary", handler: a.startStrategyCanary},
-		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/cancel-canary", handler: a.cancelStrategyCanary},
-		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/promote", handler: a.promoteStrategy},
-		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/strategies/rollback", handler: a.rollbackStrategy},
+		{method: http.MethodGet, pattern: "/_admin/api/profiles/{id}/routing-policy", handler: a.getRoutingPolicy},
+		{method: http.MethodPut, pattern: "/_admin/api/profiles/{id}/routing-policy", handler: a.applyRoutingPolicy},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/routing-policy/generate", handler: a.generateRoutingPolicy},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/routing-policy/rollback", handler: a.rollbackRoutingPolicy},
+		{method: http.MethodGet, pattern: "/_admin/api/profiles/{id}/models", handler: a.listProfileModels},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/models", handler: a.mutateProfileModel(runtimeconfig.ModelAdd)},
+		{method: http.MethodPut, pattern: "/_admin/api/profiles/{id}/models/update", handler: a.mutateProfileModel(runtimeconfig.ModelUpdate)},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/models/offline", handler: a.offlineProfileModel},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/models/restore", handler: a.mutateProfileModel(runtimeconfig.ModelRestore)},
+		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/models/retire", handler: a.mutateProfileModel(runtimeconfig.ModelRetire)},
 		{method: http.MethodPut, pattern: "/_admin/api/default-profile", handler: a.setDefaultProfile},
 		{method: http.MethodGet, pattern: "/_admin/api/stats", handler: a.getStats},
 		{method: http.MethodGet, pattern: "/_admin/api/routing-traces", handler: a.getRoutingTraces},
 		{method: http.MethodGet, pattern: "/_admin/api/routing-traces/{id}", handler: a.getRoutingTraceDetail},
+		{method: http.MethodGet, pattern: "/_admin/api/routing-traces/{id}/session-flow", handler: a.getRoutingSessionFlow},
 		{method: http.MethodGet, pattern: "/_admin/api/routing-calls", handler: a.getRoutingCalls},
 		{method: http.MethodGet, pattern: "/_admin/api/model-performance", handler: a.getModelPerformance},
+		{method: http.MethodGet, pattern: "/_admin/api/agent-trajectories", handler: a.getAgentTrajectories},
+		{method: http.MethodGet, pattern: "/_admin/api/agent-trajectories/{id}", handler: a.getAgentTrajectory},
+		{method: http.MethodDelete, pattern: "/_admin/api/agent-trajectories/{id}", handler: a.deleteAgentTrajectory},
 		{method: http.MethodGet, pattern: "/_admin/api/system", handler: a.getSystem},
 		{method: http.MethodGet, pattern: "/_admin/api/model-catalog", handler: a.getModelCatalog},
 		{method: http.MethodPost, pattern: "/_admin/api/model-catalog/refresh", handler: a.refreshModelCatalog},
+		{method: http.MethodGet, pattern: "/_admin/api/evaluation-catalog", handler: a.getEvaluationCatalog},
+		{method: http.MethodPost, pattern: "/_admin/api/evaluation-catalog/update", handler: a.updateEvaluationCatalog},
+		{method: http.MethodGet, pattern: "/_admin/api/evaluation-catalog/update-status", handler: a.getEvaluationCatalogUpdateStatus},
 	}
+}
+
+type AgentTrajectoryStore interface {
+	List(context.Context, agenttrajectory.ListFilter) (agenttrajectory.ListResult, error)
+	Summary(context.Context, agenttrajectory.ListFilter) (agenttrajectory.Summary, error)
+	Get(context.Context, int64) (agenttrajectory.Record, error)
+	Delete(context.Context, int64) error
+}
+
+type AgentTrajectoryCipher interface {
+	Open(agenttrajectory.EncryptedPayload) (agenttrajectory.Plaintext, error)
 }
 
 func allowedMethodsForRoute(method string) []string {

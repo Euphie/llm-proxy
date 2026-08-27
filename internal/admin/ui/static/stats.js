@@ -1,5 +1,6 @@
 import { formatMicroUSD } from "./money.js";
 import { renderModelPerformancePage } from "./stats-models.js";
+import { routingSessionFlowView } from "./routing-session-flow.js";
 import {
 	localDateTimeValue,
 	positivePageParameter,
@@ -203,6 +204,9 @@ async function renderRoutingStatsContent(
 		profiles = [],
 		loadRoutingTraces = async () => ({ items: [], page: 1, page_size: 25, total: 0, total_pages: 0, category_counts: {} }),
 		loadRoutingTrace = async () => null,
+		loadRoutingSessionFlow = async (id) => ({
+			scope: "request", selected_trace_id: Number(id), truncated: false, requests: [],
+		}),
 		onUnauthorized = () => {},
 	},
 ) {
@@ -245,8 +249,7 @@ async function renderRoutingStatsContent(
 	form.append(fields, submit);
 	const categories = element("div", "routing-categories");
 	const output = element("div", "stack routing-output");
-	const detail = element("div", "stack routing-detail-region");
-	root.replaceChildren(form, categories, output, detail);
+	root.replaceChildren(form, categories, output);
 	profile.value = initial.get("profile_id") || "";
 	taskType.value = initial.get("task_type") || "";
 	difficulty.value = initial.get("difficulty") || "";
@@ -260,6 +263,7 @@ async function renderRoutingStatsContent(
 
 	function filters() {
 		const selected = {
+			group: "session",
 			page: state.page,
 			page_size: Number(pageSize.value || state.page_size),
 			category: state.category,
@@ -277,17 +281,9 @@ async function renderRoutingStatsContent(
 	}
 
 	async function showDetail(id) {
-		detail.replaceChildren(statusMessage("正在加载路由详情…"));
-		try {
-			const response = await loadRoutingTrace(id);
-			detail.replaceChildren(routingTraceDetail(response));
-		} catch (error) {
-			if (error?.status === 401) {
-				onUnauthorized();
-				return;
-			}
-			detail.replaceChildren(alertMessage(error?.message || "路由详情加载失败。"));
-		}
+		await openRoutingTraceDialog(
+			root, id, loadRoutingTrace, loadRoutingSessionFlow, onUnauthorized,
+		);
 	}
 
 	async function refresh() {
@@ -308,7 +304,7 @@ async function renderRoutingStatsContent(
 			output.replaceChildren(routingTraceList(page.items, showDetail), routingPager(page, async (nextPage) => {
 				state.page = nextPage;
 				await refresh();
-			}));
+			}, "个会话"));
 		} catch (error) {
 			if (error?.status === 401) {
 				onUnauthorized();
@@ -345,11 +341,13 @@ function normalizeRoutingPage(response, state) {
 
 function renderRoutingCategories(root, counts, selected, onSelect) {
 	root.replaceChildren();
+	root.setAttribute("aria-label", "路由分类统计，各分类计数可能重叠");
+	root.title = "分类计数可能重叠，例如一次请求可以同时属于分析回退和超出计划。";
 	for (const [value, label, key] of [
 		["all", "全部", "all"], ["normal", "正常", "normal"],
 		["high_risk", "高风险", "high_risk"], ["fallback", "分析回退", "fallback"],
 		["changed", "已升级 / 切换", "changed"],
-		["failed", "失败", "failed"], ["cost_anomaly", "费用异常", "cost_anomaly"],
+		["failed", "请求失败", "failed"], ["cost_anomaly", "超出计划", "cost_anomaly"],
 	]) {
 		const button = textElement("button", `${label} ${Number(counts?.[key] || 0)}`);
 		button.type = "button";
@@ -367,20 +365,26 @@ function routingTraceList(rows, onDetail) {
 		return list;
 	}
 	for (const row of rows) {
+		const session = row.scope === "session";
 		const card = element("article", "card routing-trace-card");
 		const header = element("div", "routing-trace-header");
 		header.append(
-			textElement("h2", `${row.task_type || "unknown"} · ${difficultyLabel(row.difficulty)}`),
+			textElement("h2", session ? `会话ID：${row.session_ref || "-"}` : `${row.task_type || "unknown"} · ${difficultyLabel(row.difficulty)}`),
 			textElement("span", classificationSummary(row)),
 		);
 		const modelPath = row.initial_model === row.final_model ? row.initial_model : `${row.initial_model} → ${row.final_model}`;
 		const summary = textElement("p", `${row.profile_slug || "-"} · ${row.strategy || "-"} / ${row.route || "-"} · ${modelPath || "-"}`);
-		const metadata = textElement("p", `${reliableDate(row.created_at)} · ${Number(row.status_code || 0)} · ${visionModeLabel(row.vision_mode)} · ${Number(row.elapsed_ms || 0)} ms`);
+		const metadata = textElement("p", session
+			? `${Number(row.request_count || 0)} 次请求 · ${reliableDate(row.first_created_at)} 至 ${reliableDate(row.created_at)}`
+			: `${reliableDate(row.created_at)} · ${Number(row.status_code || 0)} · ${visionModeLabel(row.vision_mode)} · ${Number(row.elapsed_ms || 0)} ms`);
 		metadata.className = "muted";
-		const costs = textElement("p", `计划 ${formatMicroUSD(row.planned_worst_case_cost_micro_usd)} · 已消费估算 ${formatMicroUSD(row.consumed_estimated_cost_micro_usd)} · 已知实际 ${formatMicroUSD(row.known_actual_cost_micro_usd)}`);
-		const action = textElement("button", "查看详情");
+		const costs = textElement("p", session
+			? `${Number(row.fallback_requests || 0)} 次分析回退 · ${Number(row.changed_requests || 0)} 次升级 / 切换 · ${Number(row.failed_requests || 0)} 次失败 · 已知实际 ${formatMicroUSD(row.total_known_actual_cost_micro_usd)}`
+			: `计划 ${formatMicroUSD(row.planned_worst_case_cost_micro_usd)} · 已消费估算 ${formatMicroUSD(row.consumed_estimated_cost_micro_usd)} · 已知实际 ${formatMicroUSD(row.known_actual_cost_micro_usd)}`);
+		const action = textElement("button", session ? "查看会话" : "查看流转");
 		action.type = "button";
-		action.className = "button-secondary";
+		action.className = "button button-compact routing-detail-trigger";
+		action.setAttribute("aria-label", `查看路由详情 #${row.id}`);
 		action.addEventListener("click", () => onDetail(row.id));
 		card.append(header, summary, metadata, costs, action);
 		list.append(card);
@@ -388,17 +392,99 @@ function routingTraceList(rows, onDetail) {
 	return list;
 }
 
-function routingPager(page, onPage) {
+async function openRoutingTraceDialog(
+	root,
+	id,
+	loadRoutingTrace,
+	loadRoutingSessionFlow,
+	onUnauthorized,
+) {
+	const dialog = element("dialog", "routing-detail-dialog");
+	const shell = element("section", "routing-detail-dialog-shell");
+	const header = element("header", "routing-detail-dialog-header");
+	const headingGroup = element("div", "stack routing-detail-dialog-heading");
+	const eyebrow = textElement("span", "路由轨迹");
+	eyebrow.className = "eyebrow";
+	const heading = textElement("h2", `路由详情 #${id}`);
+	heading.id = `routing-trace-${id}-title`;
+	headingGroup.append(eyebrow, heading);
+	const close = textElement("button", "关闭");
+	close.type = "button";
+	close.className = "button button-secondary button-compact routing-detail-close";
+	const refresh = textElement("button", "刷新流转");
+	refresh.type = "button";
+	refresh.className = "button button-secondary button-compact";
+	const headerActions = element("div", "cluster routing-detail-dialog-actions");
+	headerActions.append(refresh, close);
+	const content = element("div", "routing-detail-dialog-content");
+	content.setAttribute("aria-live", "polite");
+	content.replaceChildren(statusMessage("正在加载路由详情…"));
+	header.append(headingGroup, headerActions);
+	shell.append(header, content);
+	dialog.append(shell);
+	dialog.setAttribute("aria-labelledby", heading.id);
+	dialog.setAttribute("aria-modal", "true");
+
+	const closeDialog = () => {
+		if (dialog.open) dialog.close();
+		dialog.remove();
+	};
+	close.addEventListener("click", closeDialog);
+	dialog.addEventListener("cancel", (event) => {
+		event.preventDefault();
+		closeDialog();
+	});
+	dialog.addEventListener("click", (event) => {
+		if (event.target === dialog) closeDialog();
+	});
+	root.append(dialog);
+	dialog.showModal();
+
+	const refreshContent = async () => {
+		refresh.disabled = true;
+		content.replaceChildren(statusMessage("正在加载路由流转…"));
+		const [detailResult, flowResult] = await Promise.allSettled([
+			loadRoutingTrace(id),
+			loadRoutingSessionFlow(id),
+		]);
+		for (const result of [detailResult, flowResult]) {
+			if (result.status === "rejected" && result.reason?.status === 401) {
+				closeDialog();
+				onUnauthorized();
+				return;
+			}
+		}
+		const children = [];
+		if (flowResult.status === "fulfilled") {
+			children.push(routingSessionFlowView(flowResult.value));
+		} else {
+			children.push(alertMessage(flowResult.reason?.message || "会话流转图加载失败，可点击“刷新流转”重试。"));
+		}
+		if (detailResult.status === "fulfilled") {
+			children.push(routingTraceDetailDisclosure(detailResult.value));
+		} else {
+			children.push(alertMessage(detailResult.reason?.message || "请求明细加载失败，可点击“刷新流转”重试。"));
+		}
+		if (dialog.parentNode) {
+			content.replaceChildren(...children);
+			refresh.disabled = false;
+		}
+	};
+	refresh.addEventListener("click", refreshContent);
+	await refreshContent();
+}
+
+function routingPager(page, onPage, unit = "条") {
 	const wrapper = element("div", "routing-pager");
 	const previous = textElement("button", "上一页");
 	previous.type = "button";
-	previous.className = "button-secondary";
+	previous.className = "button button-secondary button-compact";
 	previous.disabled = page.page <= 1;
 	previous.addEventListener("click", () => onPage(page.page - 1));
-	const label = textElement("span", `第 ${page.page} / ${Math.max(page.total_pages, 1)} 页 · 共 ${page.total} 条`);
+	const label = textElement("span", `第 ${page.page} / ${Math.max(page.total_pages, 1)} 页 · 共 ${page.total} ${unit}`);
 	const next = textElement("button", "下一页");
 	next.type = "button";
-	next.className = "button-secondary";
+	next.className = "button button-secondary button-compact";
 	next.disabled = page.total_pages === 0 || page.page >= page.total_pages;
 	next.addEventListener("click", () => onPage(page.page + 1));
 	wrapper.append(previous, label, next);
@@ -407,32 +493,241 @@ function routingPager(page, onPage) {
 
 function routingTraceDetail(response = {}) {
 	const trace = response.trace || {};
-	const wrapper = element("section", "card routing-trace-detail");
-	wrapper.append(textElement("h2", `路由详情 #${trace.id || "-"}`));
+	const wrapper = element("section", "routing-trace-detail");
+	const explanation = element("section", "routing-detail-explanation");
+	explanation.append(
+		textElement("h4", `这次为什么使用 ${trace.final_model || trace.initial_model || "该模型"}`),
+		textElement("p", routingTraceExplanation(trace)),
+	);
+	const summary = element("dl", "routing-detail-summary-grid");
+	for (const [label, value] of [
+		["处理方式", routingModeLabel(trace)],
+		["任务判断", classificationDisplayLabel(trace)],
+		["最终结果", routingResultLabel(trace)],
+		["输入规模", `${Number(trace.estimated_input_tokens || 0)} Token`],
+		["最终模型", trace.final_model || "-"],
+		["实际费用", formatMicroUSD(trace.known_actual_cost_micro_usd)],
+	]) {
+		summary.append(textElement("dt", label), textElement("dd", value));
+	}
+	explanation.append(summary);
 	const facts = element("dl", "detail-grid");
 	for (const [label, value] of [
-		["任务类型", trace.task_type || "unknown"], ["难度", difficultyLabel(trace.difficulty)],
+		["任务类型", sessionTaskTypeLabel(trace)], ["难度", sessionDifficultyLabel(trace)],
 		["风险", riskLabel(trace.risk)], ["判断来源", classificationSourceLabel(trace.classification_source)],
-		["置信度", trace.classification_source === "fallback" ? "不可用" : `${Number(trace.classification_confidence_bps || 0) / 100}%`],
-		["判断依据", (trace.classification_reason_codes || []).join("、") || "-"],
+		["综合置信度", classificationConfidence(trace, "classification_confidence_bps")],
+		["任务类型置信度", classificationConfidence(trace, "task_type_confidence_bps")],
+		["难度信号置信度", classificationConfidence(trace, "difficulty_confidence_bps")],
+		["风险置信度", classificationConfidence(trace, "risk_confidence_bps")],
+		["信息充分性", trace.classification_underspecified ? "信息不足" : "信息完整"],
+		["复杂度信号", complexitySignalsLabel(trace.complexity_signals)],
+		["判断依据", classificationReasonsLabel(trace.classification_reason_codes)],
 		["估算输入", `${Number(trace.estimated_input_tokens || 0)} Token`],
 		["请求输出", `${Number(trace.requested_output_tokens || 0)} Token`],
-		["选型结论", trace.decision_reason || "-"],
+		["选型结论", decisionReasonLabel(trace.decision_reason)],
 	]) {
 		facts.append(textElement("dt", label), textElement("dd", value));
 	}
-	wrapper.append(facts, detailTable("候选模型", ["模型", "结果", "原因", "质量", "严重错误率", "预期费用"], (response.candidates || []).map((row) => [
-		row.model, row.decision, row.reason_code, `${Number(row.quality_score_bps || 0) / 100}%`,
-		`${Number(row.severe_error_rate_bps || 0) / 100}%`, formatMicroUSD(row.expected_cost_micro_usd),
-	])), detailTable("上游调用链", ["序号", "类型", "模型", "节点", "结果", "估算费用", "实际费用"], (response.calls || []).map((row) => [
-		row.sequence, row.kind, row.model, row.target, `${row.status_code} / ${row.outcome}`,
+	const technical = element("details", "routing-technical-details");
+	technical.append(textElement("summary", "查看分类、评分和调用数据"));
+	technical.append(facts, detailTable("候选模型", ["模型", "状态", "原因", "质量", "稳定性", "路由分", "预期延迟", "预期费用"], (response.candidates || []).map((row) => [
+		row.model, candidateDecisionLabel(row.decision), candidateReasonLabel(row.reason_code),
+		`${Number(row.quality_score_bps || 0) / 100}%`, `${Number(row.stability_score_bps || 0) / 100}%`,
+		`${Number(row.routing_score_bps || 0) / 100}%`, `${Number(row.expected_latency_ms || 0)} ms`,
+		formatMicroUSD(row.expected_cost_micro_usd),
+	])), detailTable("上游调用链", ["序号", "调用类型", "模型", "结果", "估算费用", "实际费用"], (response.calls || []).map((row) => [
+		row.sequence, callKindLabel(row.kind), row.model, callResultLabel(row),
 		formatMicroUSD(row.estimated_cost_micro_usd), row.actual_cost_known ? formatMicroUSD(row.actual_cost_micro_usd) : "未知",
 	])));
+	wrapper.append(explanation, technical);
 	return wrapper;
 }
 
+function classificationConfidence(trace, field) {
+	if (trace.classification_source === "fallback") return "不可用";
+	if (trace.classification_source === "session") return "不适用（本轮未分类）";
+	const value = trace[field] ?? trace.classification_confidence_bps ?? 0;
+	return `${Number(value) / 100}%`;
+}
+
+function complexitySignalsLabel(signals = {}) {
+	const labels = {
+		obvious_solution: "解法明显",
+		localized_change: "局部改动",
+		bounded_familiar_steps: "步骤有限且常规",
+		formal_proof: "形式化推导或证明",
+		multiple_interacting_constraints: "多约束相互影响",
+		distributed_or_concurrent: "分布式或并发",
+		unknown_or_nondeterministic: "原因未知或非确定性",
+		cross_system_or_layer: "跨系统或层级",
+		invariants_or_compatibility: "不变量或兼容性约束",
+		security_or_safety_critical: "安全关键",
+		quantitative_slo: "定量 SLO",
+		broad_verification: "需要广泛验证",
+		migration_or_rollback: "迁移或回滚",
+	};
+	const active = Object.entries(signals || {})
+		.filter(([, enabled]) => Boolean(enabled))
+		.map(([name]) => labels[name] || name);
+	return active.join("、") || "无显著复杂度信号";
+}
+
+function routingTraceDetailDisclosure(response = {}) {
+	const details = element("details", "routing-request-details");
+	details.append(
+		textElement("summary", "本次路由说明与排障数据"),
+		routingTraceDetail(response),
+	);
+	return details;
+}
+
+function routingTraceExplanation(trace) {
+	if (trace.classification_source === "session") {
+		const reason = String((trace.classification_reason_codes || [])[0] || "");
+		if (reason === "session_highest_model_locked") {
+			return "这个会话已经可靠地锁定到最高模型，本轮不再分类，也不会降级。";
+		}
+		if (reason === "session_model_locked") {
+			return "前几轮已经稳定选中同一模型并达到锁定条件，本轮直接复用。";
+		}
+		if (reason === "session_task_continuation") {
+			return "这是同一任务的工具结果或续接回合，因此沿用上一轮判断和模型，不重复分类。";
+		}
+		return "本轮沿用了会话中已经保存的任务判断和模型。";
+	}
+	if (trace.classification_source === "fallback") {
+		if (retainsSessionModelAfterAnalyzerFailure(trace)) return retainedSessionModelExplanation();
+		return "任务分析没有得到可用结论，系统为避免低估难度，改用强模型安全兜底。";
+	}
+	return `${classificationDisplayLabel(trace)}。${decisionReasonLabel(trace.decision_reason)}。`;
+}
+
+function routingModeLabel(trace) {
+	if (trace.classification_source === "session") return "沿用会话模型";
+	if (trace.classification_source === "fallback") {
+		return retainsSessionModelAfterAnalyzerFailure(trace) ? "分析失败后保持模型不变" : "分析失败后安全兜底";
+	}
+	return "重新分析并选型";
+}
+
+function classificationDisplayLabel(trace) {
+	if (retainsSessionModelAfterAnalyzerFailure(trace)) return "本轮分析无效";
+	if (trace.classification_source === "session" && !hasKnownClassification(trace)) {
+		return "本轮未重新分类";
+	}
+	return `${taskTypeLabel(trace.task_type)} / ${difficultyLabel(trace.difficulty)} / ${riskLabel(trace.risk)}`;
+}
+
+function routingResultLabel(trace) {
+	return Number(trace.status_code || 0) >= 200 && Number(trace.status_code || 0) < 300 && trace.client_committed
+		? `成功 · HTTP ${Number(trace.status_code || 0)}`
+		: `失败 · HTTP ${Number(trace.status_code || 0)}`;
+}
+
+function hasKnownClassification(trace) {
+	return Boolean(trace.task_type && trace.task_type !== "unknown" && trace.difficulty && trace.difficulty !== "unknown");
+}
+
+function retainsSessionModelAfterAnalyzerFailure(trace) {
+	return (trace.classification_reason_codes || []).includes("session_model_retained_after_analyzer_failure");
+}
+
+function retainedSessionModelExplanation() {
+	return "本轮继续使用会话中原来的模型，且不会锁定或覆盖会话判断；下一轮会重新分析。";
+}
+
+function sessionTaskTypeLabel(trace) {
+	return trace.classification_source === "session" && !hasKnownClassification(trace)
+		? "本轮未重新分类"
+		: taskTypeLabel(trace.task_type);
+}
+
+function sessionDifficultyLabel(trace) {
+	return trace.classification_source === "session" && !hasKnownClassification(trace)
+		? "沿用会话模型"
+		: difficultyLabel(trace.difficulty);
+}
+
+function taskTypeLabel(value) {
+	return {
+		simple: "简单问答", general: "通用任务", reasoning: "推理任务", math: "数学任务",
+		coding: "编码任务", tool_use: "工具操作", vision: "视觉任务", unknown: "未识别",
+	}[value] || "未识别";
+}
+
+function classificationReasonsLabel(values = []) {
+	const labels = {
+		task_analyzer: "任务分析模型判断",
+		session_reuse: "沿用会话判断",
+		session_task_continuation: "同一任务续接",
+		session_model_locked: "会话模型已经锁定",
+		session_highest_model_locked: "会话已经锁定最高模型",
+		session_model_retained_after_analyzer_failure: "分析失败，本轮保持会话模型不变",
+		complexity_easy_localized: "解法明确且改动局部",
+		complexity_formal_proof: "需要形式化推导或证明",
+		complexity_distributed_invariants: "涉及分布式与不变量",
+		complexity_unknown_cross_system: "原因未知且跨系统",
+		complexity_interacting_constraints: "多个约束相互影响",
+		complexity_bounded: "步骤范围明确",
+		difficulty_low_confidence_hard_guard: "难度置信度不足，按困难保护",
+		task_type_low_confidence: "任务类型置信度不足",
+		difficulty_low_confidence: "难度置信度不足",
+		risk_low_confidence: "风险置信度不足",
+	};
+	return values.map((value) => {
+		if (String(value).startsWith("task_analyzer_malformed_response")) return "任务分析返回格式错误";
+		return labels[value] || value;
+	}).join("、") || "未记录";
+}
+
+function decisionReasonLabel(value) {
+	return {
+		"Session binding": "沿用会话绑定",
+		"highest weighted routing score": "综合路由分最高",
+		"lowest expected cost": "预计总成本最低",
+		"guarded difficulty baseline": "难度需要保守保护，因此使用强模型基线",
+		"task analyzer fallback": "任务分析失败，因此使用强模型兜底",
+		"analyzer failure; retained Session model": "任务分析失败，保持会话模型不变",
+		"high risk": "高风险任务，因此使用强模型基线",
+	}[value] || value || "未记录";
+}
+
+function candidateDecisionLabel(value) {
+	return { selected: "已选用", eligible: "可用", rejected: "已排除" }[value] || "状态未知";
+}
+
+function candidateReasonLabel(value) {
+	return {
+		session_binding: "沿用会话绑定",
+		highest_weighted_routing_score: "综合路由分最高",
+		passed_all_gates: "通过全部门槛",
+		quality_below_route_minimum: "质量低于 Route 门槛",
+		quality_below_session_minimum: "质量低于会话已达到水平",
+		stability_below_route_minimum: "稳定性低于 Route 门槛",
+		severe_error_rate_above_route_maximum: "严重错误率超过上限",
+		latency_target_not_met: "不满足延迟目标",
+		net_savings_below_minimum: "节省幅度不足",
+		context_window_exceeded: "上下文容量不足",
+		tools_not_supported: "不支持所需工具",
+		agent_workflow_not_supported: "未通过 Agent 工作流兼容验证",
+		structured_output_not_supported: "不支持结构化输出",
+		lowest_expected_cost: "预计总成本最低",
+		analyzer_failure_session_retained: "分析失败，保持会话模型不变",
+	}[value] || value || "未记录原因";
+}
+
+function callKindLabel(value) {
+	return { analyzer: "任务分析", vision: "视觉处理", answer: "模型回答" }[value] || value || "其他调用";
+}
+
+function callResultLabel(row) {
+	const succeeded = Number(row.status_code || 0) >= 200 && Number(row.status_code || 0) < 300;
+	return succeeded ? `成功 · HTTP ${Number(row.status_code || 0)}` : `失败 · HTTP ${Number(row.status_code || 0)}`;
+}
+
 function detailTable(captionText, headings, rows) {
-	const wrap = element("div", "table-wrap");
+	const widthClass = headings.length > 6 ? " routing-detail-table-wide" : "";
+	const wrap = element("div", `table-wrap routing-detail-table${widthClass}`);
 	const table = element("table");
 	const caption = textElement("caption", captionText);
 	const head = element("thead");
@@ -460,7 +755,16 @@ function riskLabel(value) {
 
 function classificationSummary(row) {
 	if (row.classification_source === "fallback") {
-		return "分析失败 · 已使用强模型兜底";
+		const succeeded = Number(row.status_code || 0) >= 200 &&
+			Number(row.status_code || 0) < 300 && Boolean(row.client_committed);
+		if (retainsSessionModelAfterAnalyzerFailure(row)) {
+			return succeeded
+				? `请求成功 · 分析失败后保持 ${row.final_model || "会话模型"}`
+				: "请求失败 · 分析失败时保持了会话模型";
+		}
+		return succeeded
+			? "请求成功 · 分析回退到强模型"
+			: "请求失败 · 分析阶段已回退";
 	}
 	return `${riskLabel(row.risk)} · ${classificationSourceLabel(row.classification_source)} · 置信度 ${Number(row.classification_confidence_bps || 0) / 100}%`;
 }
@@ -476,7 +780,7 @@ function routingTraceTable(rows) {
     "Profile",
     "策略 / Route",
     "任务判断",
-    "模型 / 上游节点路径",
+    "模型路径",
     "视觉",
     "结果",
     "调用预算",
@@ -493,11 +797,6 @@ function routingTraceTable(rows) {
     const modelPath = row.initial_model === row.final_model
       ? row.initial_model
       : `${row.initial_model} → ${row.final_model}`;
-    const initialTarget = row.initial_target || "primary";
-    const finalTarget = row.final_target || initialTarget;
-    const targetPath = initialTarget === finalTarget
-      ? initialTarget
-      : `${initialTarget} → ${finalTarget}`;
     const escalationCount = Number(row.self_escalations ?? 0);
     const escalationSummary = escalationCount > 0
       ? ` / 主动升级 ${escalationCount}（${selfEscalationReasonLabel(row.self_escalation_reason)}）`
@@ -507,10 +806,10 @@ function routingTraceTable(rows) {
       row.profile_slug,
       `${row.strategy} / ${row.route}`,
       `${row.task_type} · ${classificationSourceLabel(row.classification_source)}`,
-      `${modelPath} · 上游节点 ${targetPath}`,
+      modelPath,
       visionModeLabel(row.vision_mode),
       `${Number(row.status_code ?? 0)} · ${row.client_committed ? "已提交" : "未提交"}`,
-      `回答 ${Number(row.answer_attempts ?? 0)} / 辅助 ${Number(row.auxiliary_calls ?? 0)} / 模型切换 ${Number(row.model_switches ?? 0)} / 节点切换 ${Number(row.target_switches ?? 0)}${escalationSummary}`,
+      `回答 ${Number(row.answer_attempts ?? 0)} / 辅助 ${Number(row.auxiliary_calls ?? 0)} / 模型切换 ${Number(row.model_switches ?? 0)}${escalationSummary}`,
       `计划上限 ${formatMicroUSD(row.planned_worst_case_cost_micro_usd)} / 已消费估算 ${formatMicroUSD(row.consumed_estimated_cost_micro_usd)} / 持有 ${formatMicroUSD(row.held_cost_micro_usd)} / ${row.all_actual_costs_known ? "实际" : "已知实际（部分）"} ${formatMicroUSD(row.known_actual_cost_micro_usd)}`,
       `${Number(row.elapsed_ms ?? 0)} ms`,
     ]) {

@@ -73,13 +73,9 @@ function getServerThemeSnapshot(): Theme {
 }
 
 function implementationBadgeClass(chapter: Chapter): string {
-  if (chapter.implementationStatus === "已实现") {
-    return "status-badge--implemented";
-  }
-  if (chapter.implementationStatus === "后续方向") {
-    return "status-badge--future";
-  }
-  return "status-badge--target";
+  return chapter.implementationStatus === "已实现"
+    ? "status-badge--implemented"
+    : "status-badge--target";
 }
 
 export function DocsShell({ currentChapter, chapters, searchIndexVersion }: DocsShellProps) {

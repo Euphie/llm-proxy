@@ -86,7 +86,11 @@ test("statistics and System API methods omit blanks and encode exact queries", a
   await api.stats({});
 	await api.routingTraces({ profile_id: "7", page: 2, page_size: 50 });
 	await api.routingTrace(19);
+	await api.routingSessionFlow(19);
 	await api.modelPerformance({ profile_id: 7, difficulty: "hard", page: 1 });
+	await api.agentTrajectories({ profile_id: 7, status: "evaluated", page: 2 });
+	await api.agentTrajectory(23);
+	await api.deleteAgentTrajectory(23);
   await api.system();
 
   assert.deepEqual(calls, [
@@ -97,7 +101,11 @@ test("statistics and System API methods omit blanks and encode exact queries", a
     ["/_admin/api/stats", "GET"],
 	["/_admin/api/routing-traces?profile_id=7&page=2&page_size=50", "GET"],
 	["/_admin/api/routing-traces/19", "GET"],
+	["/_admin/api/routing-traces/19/session-flow", "GET"],
 	["/_admin/api/model-performance?profile_id=7&difficulty=hard&page=1", "GET"],
+	["/_admin/api/agent-trajectories?profile_id=7&status=evaluated&page=2", "GET"],
+	["/_admin/api/agent-trajectories/23", "GET"],
+	["/_admin/api/agent-trajectories/23", "DELETE"],
     ["/_admin/api/system", "GET"],
   ]);
 });
@@ -217,6 +225,7 @@ test("routing statistics page exposes classification filters pagination and deta
 	const root = installFakeDOM(t);
 	const filters = [];
 	const details = [];
+	const flows = [];
 	await renderStatsPage(root, {
 		section: "routing",
 		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
@@ -228,6 +237,10 @@ test("routing statistics page exposes classification filters pagination and deta
 			details.push(id);
 			return routingTraceDetailFixture();
 		},
+		loadRoutingSessionFlow: async (id) => {
+			flows.push(id);
+			return routingSessionFlowFixture();
+		},
 	});
 	assert.deepEqual(labelTexts(root), [
 		"Profile", "任务类型", "难度", "风险", "模型", "判断来源", "视觉", "开始时间", "结束时间", "每页",
@@ -235,14 +248,41 @@ test("routing statistics page exposes classification filters pagination and deta
 	assert.equal(filters[0].page, 1);
 	assert.equal(filters[0].page_size, 25);
 	assert.equal(filters[0].category, "all");
-	assert.ok(findText(root, "coding · 20260802-001 / balanced · fast → strong"));
-	assert.ok(findText(root, "置信度 91%"));
-	assert.ok(findText(root, "第 1 / 3 页 · 共 6 条"));
-	await buttonByText(root, "查看详情").dispatch("click");
+	assert.equal(filters[0].group, "session");
+	assert.ok(findText(root, "会话ID：4d4d4d4d4d4d"));
+	assert.ok(findText(root, "4 次请求"));
+	assert.ok(findText(root, "1 次分析回退 · 1 次升级 / 切换 · 0 次失败"));
+	assert.ok(findText(root, "第 1 / 3 页 · 共 6 个会话"));
+	const detailButton = buttonByText(root, "查看会话");
+	assert.match(detailButton.className, /routing-detail-trigger/);
+	await detailButton.dispatch("click");
 	assert.deepEqual(details, [1]);
+	assert.deepEqual(flows, [1]);
+	const dialog = findTag(root, "dialog");
+	assert.equal(dialog.open, true);
+	assert.match(dialog.className, /routing-detail-dialog/);
 	assert.ok(findText(root, "路由详情 #1"));
-	assert.ok(findText(root, "task_analyzer"));
-	assert.ok(findText(root, "lowest_expected_cost"));
+	assert.ok(findText(root, "会话 4d4d4d4d4d4d"));
+	assert.ok(findText(root, "请求进入"));
+	assert.ok(findText(root, "本次路由说明与排障数据"));
+	assert.ok(findText(root, "这次为什么使用 strong"));
+	assert.ok(findText(root, "任务分析模型判断"));
+	assert.ok(findText(root, "任务类型置信度"));
+	assert.ok(findText(root, "难度信号置信度"));
+	assert.ok(findText(root, "风险置信度"));
+	assert.ok(findText(root, "93%"));
+	assert.ok(findText(root, "97%"));
+	assert.ok(findText(root, "多约束相互影响、跨系统或层级"));
+	assert.ok(findText(root, "信息完整"));
+	assert.ok(findText(root, "预计总成本最低"));
+	assert.equal(descendants(root).some((element) => element.className.includes("routing-detail-region")), false);
+	await buttonByText(dialog, "刷新流转").dispatch("click");
+	assert.deepEqual(details, [1, 1]);
+	assert.deepEqual(flows, [1, 1]);
+	await buttonByText(dialog, "关闭").dispatch("click");
+	assert.equal(dialog.parentNode, null);
+	assert.equal(descendants(root).some((element) => element.textContent.includes("节点切换")), false);
+	assert.equal(descendants(root).some((element) => element.textContent.includes("上游节点")), false);
 });
 
 test("routing statistics separates analyzer fallback from high risk", async (t) => {
@@ -274,10 +314,45 @@ test("routing statistics separates analyzer fallback from high risk", async (t) 
 		}),
 	});
 	assert.ok(findText(root, "分析回退 1"));
-	assert.ok(findText(root, "分析失败 · 已使用强模型兜底"));
-	await buttonByText(root, "查看详情").dispatch("click");
+	assert.ok(findText(root, "请求成功 · 分析回退到强模型"));
+	await buttonByText(root, "查看会话").dispatch("click");
 	assert.ok(findText(root, "不可用"));
-	assert.ok(findText(root, "task_analyzer_malformed_response"));
+	assert.ok(findText(root, "任务分析返回格式错误"));
+});
+
+test("routing statistics explains analyzer failure that retains the session model", async (t) => {
+	const root = installFakeDOM(t);
+	const retained = {
+		...routingTraceFixture().items[0],
+		id: 3,
+		task_type: "unknown",
+		difficulty: "unknown",
+		risk: "unknown",
+		classification_source: "fallback",
+		classification_confidence_bps: 0,
+		classification_reason_codes: [
+			"task_analyzer_malformed_response_invalid_json",
+			"session_model_retained_after_analyzer_failure",
+		],
+		decision_reason: "analyzer failure; retained Session model",
+		initial_model: "fast",
+		final_model: "fast",
+	};
+	await renderStatsPage(root, {
+		section: "routing",
+		loadRoutingTraces: async () => ({
+			items: [retained], page: 1, page_size: 25, total: 1, total_pages: 1,
+			category_counts: { all: 1, normal: 0, high_risk: 0, fallback: 1 },
+		}),
+		loadRoutingTrace: async () => ({
+			...routingTraceDetailFixture(),
+			trace: retained,
+		}),
+	});
+	assert.ok(findText(root, "请求成功 · 分析失败后保持 fast"));
+	await buttonByText(root, "查看会话").dispatch("click");
+	assert.ok(findText(root, "本轮继续使用会话中原来的模型，且不会锁定或覆盖会话判断；下一轮会重新分析。"));
+	assert.equal(descendants(root).some((element) => element.textContent.includes("任务分析失败，因此使用强模型兜底")), false);
 });
 
 test("routing filters category and page survive reload through the URL", async (t) => {
@@ -327,20 +402,185 @@ test("model performance page shows five dimensions summary filters and paginatio
 			filters.push(current);
 			return modelPerformanceFixture();
 		},
+		loadEvaluationCatalog: async () => evaluationCatalogFixture(),
+		loadAgentTrajectories: async () => agentTrajectoryFixture(),
+		loadAgentTrajectory: async () => agentTrajectoryDetailFixture(),
+		deleteAgentTrajectory: async () => ({}),
 		initialProfileID: 7,
 	});
-	assert.deepEqual(labelTexts(root), [
+	assert.deepEqual(labelTexts(root).slice(-9), [
 		"Profile", "候选模型", "任务类型", "难度", "风险", "视觉处理",
 		"开始日期", "结束日期", "每页",
 	]);
 	assert.equal(filters[0].profile_id, "7");
+	assert.ok(findText(root, "公开评测"));
+	assert.ok(findText(root, "2 个来源 · 208 条公开结果"));
+	assert.ok(findText(root, "本地 Agent 评测"));
+	assert.ok(findText(root, "完整轨迹：4"));
+	assert.ok(findText(root, "已写入质量证据：2"));
+	assert.ok(findText(root, "Coding · sonnet-4 → opus-4"));
+	assert.ok(findText(root, "本地质量证据"));
 	assert.ok(findText(root, "评测分组：2"));
 	assert.ok(findText(root, "fast ↔ strong"));
 	assert.ok(findText(root, "正确性"));
 	assert.ok(findText(root, "格式与工具安全"));
 	assert.ok(findText(root, "保守总质量 91.2%"));
 	assert.ok(findText(root, "第 1 / 2 页 · 共 2 个分组"));
+	assert.equal(
+		buttonByText(root, "上一页").className,
+		"button button-secondary button-compact",
+	);
+	assert.equal(
+		buttonByText(root, "下一页").className,
+		"button button-secondary button-compact",
+	);
 	assert.ok(findText(root, "30 天前的证据权重减半"));
+});
+
+test("Agent trajectory explains a failed reviewer protocol repair", async (t) => {
+	const root = installFakeDOM(t);
+	const failed = agentTrajectoryFixture();
+	failed.items[0] = {
+		...failed.items[0],
+		status: "failed",
+		evidence_recorded: false,
+		reason_code: "review_repair_invalid_json",
+	};
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadEvaluationCatalog: async () => evaluationCatalogFixture(),
+		loadAgentTrajectories: async () => failed,
+		loadAgentTrajectory: async () => agentTrajectoryDetailFixture(),
+		deleteAgentTrajectory: async () => ({}),
+		loadModelPerformance: async () => modelPerformanceFixture(),
+	});
+	assert.ok(findText(root, "评审模型返回了无效 JSON；系统已完成一次格式修复，仍未得到有效结论。"));
+});
+
+test("Agent trajectory explains reviewer output exhaustion", async (t) => {
+	const root = installFakeDOM(t);
+	const failed = agentTrajectoryFixture();
+	failed.items[0] = {
+		...failed.items[0],
+		status: "failed",
+		evidence_recorded: false,
+		reason_code: "review_repair_output_exhausted",
+	};
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadEvaluationCatalog: async () => evaluationCatalogFixture(),
+		loadAgentTrajectories: async () => failed,
+		loadAgentTrajectory: async () => agentTrajectoryDetailFixture(),
+		deleteAgentTrajectory: async () => ({}),
+		loadModelPerformance: async () => modelPerformanceFixture(),
+	});
+	assert.ok(findText(root, "评审模型在提交结论前耗尽输出额度；系统已提高额度并修复一次，仍未完成评审。"));
+});
+
+test("Agent trajectory detail is centered, readable, deletable, and cannot be reevaluated", async (t) => {
+	const root = installFakeDOM(t);
+	const deleted = [];
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadEvaluationCatalog: async () => evaluationCatalogFixture(),
+		loadAgentTrajectories: async () => agentTrajectoryFixture(),
+		loadAgentTrajectory: async () => agentTrajectoryDetailFixture(),
+		deleteAgentTrajectory: async (id) => deleted.push(id),
+		loadModelPerformance: async () => modelPerformanceFixture(),
+	});
+	await buttonByText(root, "查看轨迹").dispatch("click");
+	const detail = findAllTags(root, "DIALOG").find((item) => item.open);
+	assert.ok(detail);
+	assert.ok(findText(detail, "完整任务轨迹"));
+	assert.ok(findText(detail, "用户请求"));
+	assert.ok(findText(detail, "工具调用 · search_docs"));
+	assert.ok(findText(detail, "最终回答"));
+	assert.equal(findAllTags(detail, "BUTTON").some((item) => item.textContent.includes("重新评测")), false);
+	await buttonByText(detail, "删除记录").dispatch("click");
+	const confirmation = findAllTags(root, "DIALOG").find((item) => item.open && item !== detail);
+	assert.ok(confirmation);
+	assert.ok(findText(confirmation, "删除后无法恢复"));
+	await buttonByText(confirmation, "确认删除").dispatch("click");
+	assert.deepEqual(deleted, [31]);
+});
+
+test("Agent trajectory with unreadable encrypted detail can still be deleted", async (t) => {
+	const root = installFakeDOM(t);
+	const deleted = [];
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadEvaluationCatalog: async () => evaluationCatalogFixture(),
+		loadAgentTrajectories: async () => agentTrajectoryFixture(),
+		loadAgentTrajectory: async () => { throw new Error("本地密钥无法解密该记录"); },
+		deleteAgentTrajectory: async (id) => deleted.push(id),
+		loadModelPerformance: async () => modelPerformanceFixture(),
+	});
+
+	await buttonByText(root, "查看轨迹").dispatch("click");
+	const detail = findAllTags(root, "DIALOG").find((item) => item.open);
+	assert.ok(detail);
+	assert.ok(findText(detail, "本地密钥无法解密该记录"));
+	await buttonByText(detail, "删除记录").dispatch("click");
+	const confirmation = findAllTags(root, "DIALOG").find((item) => item.open && item !== detail);
+	assert.ok(confirmation);
+	await buttonByText(confirmation, "确认删除").dispatch("click");
+	assert.deepEqual(deleted, [31]);
+});
+
+test("evaluated Agent trajectory opens its single review result from the card", async (t) => {
+	const root = installFakeDOM(t);
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadEvaluationCatalog: async () => evaluationCatalogFixture(),
+		loadAgentTrajectories: async () => agentTrajectoryFixture(),
+		loadAgentTrajectory: async () => agentTrajectoryDetailFixture(),
+		deleteAgentTrajectory: async () => ({}),
+		loadModelPerformance: async () => modelPerformanceFixture(),
+	});
+	await buttonByText(root, "查看评测结果").dispatch("click");
+	const detail = findAllTags(root, "DIALOG").find((item) => item.open);
+	assert.ok(detail);
+	assert.ok(findText(detail, "本次评测结果"));
+	assert.ok(findText(detail, "候选模型胜出"));
+	assert.ok(findText(detail, "候选模型sonnet-4"));
+	assert.ok(findText(detail, "对照模型opus-4"));
+	assert.ok(findText(detail, "正确性"));
+	assert.ok(findText(detail, "完整性"));
+	assert.ok(findText(detail, "表现相当"));
+	assert.ok(findText(detail, "未发现候选回答严重错误"));
+	assert.ok(findText(detail, "候选成本$0.0012"));
+});
+
+test("Agent trajectory dialogs remove themselves when Escape is pressed", async (t) => {
+	const root = installFakeDOM(t);
+	await renderStatsPage(root, {
+		section: "models",
+		profiles: [{ id: 7, display_name: "Coding", slug: "coding" }],
+		loadEvaluationCatalog: async () => evaluationCatalogFixture(),
+		loadAgentTrajectories: async () => agentTrajectoryFixture(),
+		loadAgentTrajectory: async () => agentTrajectoryDetailFixture(),
+		deleteAgentTrajectory: async () => ({}),
+		loadModelPerformance: async () => modelPerformanceFixture(),
+	});
+
+	await buttonByText(root, "查看轨迹").dispatch("click");
+	let detail = findAllTags(root, "DIALOG").find((item) => item.open);
+	const detailCancel = await detail.dispatch("cancel");
+	assert.equal(detailCancel.defaultPrevented, true);
+	assert.equal(findAllTags(root, "DIALOG").length, 0);
+
+	await buttonByText(root, "查看轨迹").dispatch("click");
+	detail = findAllTags(root, "DIALOG").find((item) => item.open);
+	await buttonByText(detail, "删除记录").dispatch("click");
+	const confirmation = findAllTags(root, "DIALOG").find((item) => item.open && item !== detail);
+	const confirmationCancel = await confirmation.dispatch("cancel");
+	assert.equal(confirmationCancel.defaultPrevented, true);
+	assert.equal(findAllTags(root, "DIALOG").length, 1);
 });
 
 test("model performance filters and page survive reload and flag missing priors", async (t) => {
@@ -747,6 +987,14 @@ function routingTraceFixture() {
 		category_counts: { all: 6, normal: 3, high_risk: 1, changed: 2, failed: 1, cost_anomaly: 1 },
 		items: [{
     id: 1,
+		scope: "session",
+		session_ref: "4d4d4d4d4d4d",
+		request_count: 4,
+		fallback_requests: 1,
+		changed_requests: 1,
+		failed_requests: 0,
+		first_created_at: "2026-07-29T02:20:00Z",
+		total_known_actual_cost_micro_usd: 42000,
     created_at: "2026-07-29T02:30:00Z",
     profile_id: 7,
     profile_slug: "coding",
@@ -759,10 +1007,16 @@ function routingTraceFixture() {
     risk: "normal",
     classification_source: "rule",
 	classification_confidence_bps: 9100,
+	task_type_confidence_bps: 9300,
+	difficulty_confidence_bps: 9100,
+	risk_confidence_bps: 9700,
+	classification_underspecified: false,
+	complexity_signals: {
+		multiple_interacting_constraints: true,
+		cross_system_or_layer: true,
+	},
     initial_model: "fast",
     final_model: "strong",
-    initial_target: "primary",
-    final_target: "region_b",
     vision_mode: "native",
     status_code: 200,
     client_committed: true,
@@ -772,7 +1026,6 @@ function routingTraceFixture() {
     model_switches: 1,
 		self_escalations: 1,
 		self_escalation_reason: "insufficient_reasoning",
-    target_switches: 1,
     planned_worst_case_cost_micro_usd: 30126,
     consumed_estimated_cost_micro_usd: 15500,
     held_cost_micro_usd: 0,
@@ -796,14 +1049,29 @@ function routingTraceDetailFixture() {
 		},
 		candidates: [{
 			model: "fast", decision: "selected", reason_code: "lowest_expected_cost",
-			quality_score_bps: 9200, severe_error_rate_bps: 50,
+			quality_score_bps: 9200, stability_score_bps: 9300, severe_error_rate_bps: 50,
+			cost_efficiency_score_bps: 10000, performance_score_bps: 10000,
+			routing_score_bps: 9500, expected_latency_ms: 250,
 			expected_cost_micro_usd: 400,
 		}],
 		calls: [{
-			sequence: 1, kind: "answer", model: "fast", target: "primary",
+			sequence: 1, kind: "answer", model: "fast",
 			status_code: 200, outcome: "success", estimated_cost_micro_usd: 400,
 			actual_cost_known: true, actual_cost_micro_usd: 350,
 		}],
+	};
+}
+
+function routingSessionFlowFixture() {
+	const selected = routingTraceDetailFixture();
+	selected.trace.classification_source = "session";
+	selected.trace.classification_reason_codes = ["session_reuse"];
+	return {
+		scope: "session",
+		session_ref: "4d4d4d4d4d4d",
+		selected_trace_id: 1,
+		truncated: false,
+		requests: [selected],
 	};
 }
 
@@ -838,6 +1106,69 @@ function modelPerformanceFixture() {
 	};
 }
 
+function evaluationCatalogFixture() {
+	return {
+		revision: "abc123",
+		retrieved_at: "2026-08-07T08:00:00Z",
+		sources: [
+			{ id: "lmarena", name: "LMArena", version: "2026-08-07" },
+			{ id: "swebench", name: "SWE-bench", version: "2026-08-07" },
+		],
+		results: Array.from({ length: 208 }, (_, index) => ({
+			source_id: index % 2 === 0 ? "lmarena" : "swebench",
+			model_id: "anthropic/claude-sonnet-4",
+			domain: index % 2 === 0 ? "general" : "code",
+		})),
+	};
+}
+
+function agentTrajectoryFixture() {
+	return {
+		page: 1, page_size: 25, total: 1, total_pages: 1,
+		summary: {
+			total: 5, collecting: 1, completed: 4, evaluated: 3,
+			evidence_recorded: 2, timed_out: 0, interrupted: 0,
+			skipped: 1, failed: 0, evaluation_cost_micro_usd: 6200,
+		},
+		items: [{
+			id: 31, profile_id: 7, profile_slug: "Coding", protocol: "anthropic_messages",
+			source: "session", status: "evaluated", strategy: "20260807-001",
+			route: "balanced", task_type: "code", difficulty: "hard", risk: "normal",
+			vision_mode: "none", model_path: ["sonnet-4", "opus-4"], tool_calls: 1,
+			turns: 2, elapsed_ms: 1200, evidence_recorded: true,
+			candidate_cost_micro_usd: 1200, evaluation_cost_micro_usd: 6200,
+			evaluation_result: {
+				candidate_model: "sonnet-4", reference_model: "opus-4", reviewer_model: "judge",
+				outcome: "candidate_win", severe_error: false, deterministic_failure: false,
+				dimensions: {
+					correctness: "candidate_win", completeness: "tie",
+					instruction_following: "candidate_win", format_tool_safety: "tie",
+					task_completion: "candidate_win",
+				},
+				candidate_cost_micro_usd: 1200, reference_cost_micro_usd: 4800,
+				reviewer_cost_micro_usd: 200, candidate_latency_ms: 900, reference_latency_ms: 1400,
+			},
+			started_at: "2026-08-07T08:00:00Z", completed_at: "2026-08-07T08:00:01Z",
+			expires_at: "2026-08-14T08:00:00Z",
+		}],
+	};
+}
+
+function agentTrajectoryDetailFixture() {
+	return {
+		record: agentTrajectoryFixture().items[0],
+		trajectory: {
+			events: [
+				{ role: "user", kind: "user_message", text: "查找路由文档" },
+				{ role: "assistant", kind: "tool_call", call_id: "call-1", tool_name: "search_docs", arguments: { query: "router" } },
+				{ role: "tool", kind: "tool_result", call_id: "call-1", result: { matches: 2 } },
+				{ role: "assistant", kind: "assistant_text", text: "最终回答" },
+			],
+			final_text: "最终回答",
+		},
+	};
+}
+
 function systemFixture() {
   return {
     version: "v1.2.3",
@@ -867,6 +1198,7 @@ class FakeElement {
     this.required = false;
     this.disabled = false;
     this.hidden = false;
+	this.open = false;
   }
 
   set innerHTML(_) {
@@ -916,6 +1248,20 @@ class FakeElement {
     }
     return event;
   }
+
+	showModal() {
+		this.open = true;
+	}
+
+	close() {
+		this.open = false;
+	}
+
+	remove() {
+		if (!this.parentNode) return;
+		this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
+		this.parentNode = null;
+	}
 }
 
 function installFakeDOM(t) {

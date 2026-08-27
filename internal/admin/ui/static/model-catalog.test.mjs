@@ -108,13 +108,19 @@ test("built-in catalog is a broad immutable Models.dev snapshot", () => {
     }
   }
 
-  const compatibilityOwners = BUILT_IN_MODELS.filter((entry) =>
-    entry.compatibilityAliases.includes("claude-glm-5.2")
-  );
-  assert.deepEqual(
-    compatibilityOwners.map(({ canonicalId }) => canonicalId),
-    ["zhipuai/glm-5.2"],
-  );
+  for (const [alias, canonicalId] of [
+    ["claude-glm-5.2", "zhipuai/glm-5.2"],
+    ["azure-ds-v4-flash", "deepseek/deepseek-v4-flash"],
+    ["azure-ds-v4-pro", "deepseek/deepseek-v4-pro"],
+  ]) {
+    const compatibilityOwners = BUILT_IN_MODELS.filter((entry) =>
+      entry.compatibilityAliases.includes(alias)
+    );
+    assert.deepEqual(
+      compatibilityOwners.map(({ canonicalId: owner }) => owner),
+      [canonicalId],
+    );
+  }
 
   const audioOnly = BUILT_IN_MODELS.find(({ canonicalId }) =>
     canonicalId === "nvidia/nemotron-voicechat"
@@ -167,6 +173,18 @@ test("matcher follows exact, alias, compatibility, wrapper, and family prioritie
   assertMatch(
     "claude-glm-5.2",
     "zhipuai/glm-5.2",
+    "compatibility",
+    true,
+  );
+  assertMatch(
+    "azure-ds-v4-flash",
+    "deepseek/deepseek-v4-flash",
+    "compatibility",
+    true,
+  );
+  assertMatch(
+    "azure-ds-v4-pro",
+    "deepseek/deepseek-v4-pro",
     "compatibility",
     true,
   );

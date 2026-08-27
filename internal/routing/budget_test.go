@@ -14,7 +14,7 @@ import (
 func TestAttemptBudgetReservesCallsAtomically(t *testing.T) {
 	budget, ctx, cancel := NewAttemptBudget(context.Background(), profile.AttemptBudgetRuntime{
 		MaxAnswerAttempts: 2, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 3,
-		MaxRetriesPerTarget: 1, MaxModelSwitches: 1, MaxTargetSwitches: 1,
+		MaxRetriesPerTarget: 1, MaxModelSwitches: 1,
 		Deadline: time.Minute, MaxWorstCaseCostMicroUSD: 100,
 	})
 	defer cancel()
@@ -46,11 +46,11 @@ func TestAttemptBudgetReservesCallsAtomically(t *testing.T) {
 	}
 }
 
-func TestAttemptBudgetRejectsCostAndSwitchOverflowWithoutMutation(t *testing.T) {
+func TestAttemptBudgetRejectsCostAndModelSwitchOverflowWithoutMutation(t *testing.T) {
 	budget, ctx, cancel := NewAttemptBudget(context.Background(), profile.AttemptBudgetRuntime{
 		MaxAnswerAttempts: 1, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 2,
-		MaxModelSwitches: 1, MaxTargetSwitches: 1,
-		Deadline: time.Minute, MaxWorstCaseCostMicroUSD: 10,
+		MaxModelSwitches: 1,
+		Deadline:         time.Minute, MaxWorstCaseCostMicroUSD: 10,
 	})
 	defer cancel()
 
@@ -65,12 +65,6 @@ func TestAttemptBudgetRejectsCostAndSwitchOverflowWithoutMutation(t *testing.T) 
 	}
 	if err := budget.ReserveModelSwitch(); !errors.Is(err, ErrAttemptBudgetExceeded) {
 		t.Fatalf("model switch error=%v", err)
-	}
-	if err := budget.ReserveTargetSwitch(); err != nil {
-		t.Fatal(err)
-	}
-	if err := budget.ReserveTargetSwitch(); !errors.Is(err, ErrAttemptBudgetExceeded) {
-		t.Fatalf("target switch error=%v", err)
 	}
 }
 
@@ -162,53 +156,6 @@ func TestAttemptBudgetFailedModelSwitchDoesNotConsumeSwitchSlot(t *testing.T) {
 	}
 	if snapshot := budget.Snapshot(); snapshot.ModelSwitches != 0 {
 		t.Fatalf("failed switch consumed budget: %+v", snapshot)
-	}
-}
-
-func TestAttemptBudgetAtomicallyReservesTargetSwitchAndAnswer(t *testing.T) {
-	limits := profile.AttemptBudgetRuntime{
-		MaxAnswerAttempts: 2, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 3,
-		MaxTargetSwitches: 1, Deadline: time.Minute,
-		MaxWorstCaseCostMicroUSD: 100,
-	}
-	budget, ctx, cancel := NewAttemptBudget(context.Background(), limits)
-	defer cancel()
-
-	if err := budget.ReserveCall(ctx, CallAnswer, 10); err != nil {
-		t.Fatal(err)
-	}
-	if err := budget.CanReserveTargetSwitchCall(ctx, 20); err != nil {
-		t.Fatal(err)
-	}
-	if err := budget.ReserveTargetSwitchCall(ctx, 20); err != nil {
-		t.Fatal(err)
-	}
-	if err := budget.ReserveTargetSwitchCall(ctx, 30); !errors.Is(err, ErrAttemptBudgetExceeded) {
-		t.Fatalf("second switch error=%v", err)
-	}
-	snapshot := budget.Snapshot()
-	if snapshot.TargetSwitches != 1 || snapshot.AnswerAttempts != 2 ||
-		snapshot.TotalOutboundCalls != 2 || snapshot.WorstCaseCostMicroUSD != 30 {
-		t.Fatalf("snapshot=%+v", snapshot)
-	}
-}
-
-func TestAttemptBudgetFailedTargetSwitchDoesNotConsumeSwitchSlot(t *testing.T) {
-	limits := profile.AttemptBudgetRuntime{
-		MaxAnswerAttempts: 1, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 2,
-		MaxTargetSwitches: 1, Deadline: time.Minute,
-		MaxWorstCaseCostMicroUSD: 100,
-	}
-	budget, ctx, cancel := NewAttemptBudget(context.Background(), limits)
-	defer cancel()
-	if err := budget.ReserveCall(ctx, CallAnswer, 10); err != nil {
-		t.Fatal(err)
-	}
-	if err := budget.ReserveTargetSwitchCall(ctx, 20); !errors.Is(err, ErrAttemptBudgetExceeded) {
-		t.Fatalf("switch error=%v", err)
-	}
-	if snapshot := budget.Snapshot(); snapshot.TargetSwitches != 0 || snapshot.AnswerAttempts != 1 {
-		t.Fatalf("failed switch mutated budget: %+v", snapshot)
 	}
 }
 
@@ -430,33 +377,22 @@ func TestAttemptLeaseChecksDeadlineBeforeConsumingTicket(t *testing.T) {
 	lease.ReleaseUnused()
 }
 
-func TestAttemptBudgetAtomicallyAdmitsNodeSwitchWithCompositeCapacity(t *testing.T) {
+func TestAttemptBudgetAtomicallyAdmitsModelSwitchWithCompositeCapacity(t *testing.T) {
 	budget, ctx, cancel := NewAttemptBudget(context.Background(), profile.AttemptBudgetRuntime{
 		MaxAnswerAttempts: 1, MaxAuxiliaryCalls: 1, MaxTotalOutboundCalls: 2,
-		MaxModelSwitches: 0, MaxTargetSwitches: 1,
-		Deadline: time.Minute, MaxWorstCaseCostMicroUSD: 100,
+		MaxModelSwitches: 1,
+		Deadline:         time.Minute, MaxWorstCaseCostMicroUSD: 100,
 	})
 	defer cancel()
-	failed, err := budget.ReserveAttempt(ctx, AttemptReservation{
-		Model: "strong", Target: "primary", ModelSwitch: true,
-		VisionCalls: 1, VisionCallCostMicroUSD: 40, AnswerCallCostMicroUSD: 60,
-	})
-	if !errors.Is(err, ErrAttemptBudgetExceeded) || failed != nil {
-		t.Fatalf("model-switch admission lease=%v error=%v", failed, err)
-	}
-	if got := budget.Snapshot(); got.ModelSwitches != 0 || got.HeldOutboundCalls != 0 {
-		t.Fatalf("failed switch admission mutated budget: %+v", got)
-	}
-
 	lease, err := budget.ReserveAttempt(ctx, AttemptReservation{
-		Model: "fast", Target: "backup", TargetSwitch: true,
+		Model: "strong", Target: "primary", ModelSwitch: true,
 		VisionCalls: 1, VisionCallCostMicroUSD: 40, AnswerCallCostMicroUSD: 60,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	lease.ReleaseUnused()
-	if got := budget.Snapshot(); got.TargetSwitches != 1 || got.ModelSwitches != 0 ||
+	if got := budget.Snapshot(); got.ModelSwitches != 1 ||
 		got.HeldOutboundCalls != 0 || got.TotalOutboundCalls != 0 {
 		t.Fatalf("successful switch admission snapshot=%+v", got)
 	}

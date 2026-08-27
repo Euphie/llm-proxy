@@ -18,8 +18,6 @@ export function mergeProfileSection(profile, section, values) {
       "version",
       "protocol",
       "upstream",
-      "provider_id",
-      "credential_scope",
     ]) {
       if (Object.hasOwn(values, field)) {
         config[field] = values[field];
@@ -41,8 +39,5 @@ export function mergeProfileSection(profile, section, values) {
   config[field] = structuredClone(
     Object.hasOwn(values, field) ? values[field] : values,
   );
-  if (section === "reliability" && Object.hasOwn(values, "targets")) {
-    config.targets = structuredClone(values.targets);
-  }
   return merged;
 }

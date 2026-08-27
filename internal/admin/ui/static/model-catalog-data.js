@@ -1843,7 +1843,9 @@ export const BUILT_IN_MODELS = deepFreeze([
     "aliases": [
       "deepseek/deepseek-v4-flash"
     ],
-    "compatibilityAliases": [],
+    "compatibilityAliases": [
+      "azure-ds-v4-flash"
+    ],
     "provider": "DeepSeek",
     "name": "DeepSeek V4 Flash",
     "family": "deepseek-flash",
@@ -1893,7 +1895,9 @@ export const BUILT_IN_MODELS = deepFreeze([
     "aliases": [
       "deepseek/deepseek-v4-pro"
     ],
-    "compatibilityAliases": [],
+    "compatibilityAliases": [
+      "azure-ds-v4-pro"
+    ],
     "provider": "DeepSeek",
     "name": "DeepSeek V4 Pro",
     "family": "deepseek-thinking",

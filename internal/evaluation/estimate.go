@@ -6,12 +6,13 @@ import (
 	"time"
 )
 
-var ErrInsufficientEvidence = errors.New("insufficient routing quality evidence")
+var ErrInsufficientEvidence = errors.New("insufficient routing evaluation evidence")
 
 const (
-	evidenceHalfLifeDays   = 30.0
-	qualityPriorStrength   = 20.0
-	minimumReliableSamples = 20.0
+	MinimumReliableSampleCount int64 = 20
+	evidenceHalfLifeDays             = 30.0
+	qualityPriorStrength             = 20.0
+	minimumReliableSamples           = float64(MinimumReliableSampleCount)
 )
 
 type EstimateRequest struct {
@@ -63,6 +64,45 @@ type QualityEstimate struct {
 	SelfEscalationPrecisionBPS    int                             `json:"self_escalation_precision_bps"`
 	MissedSelfEscalationRateBPS   int                             `json:"missed_self_escalation_rate_bps"`
 	Dimensions                    map[Dimension]DimensionEstimate `json:"dimensions"`
+}
+
+type OnlineStabilityAggregate struct {
+	Samples                        int64
+	SuccessfulCompletions          int64
+	CleanCompletions               int64
+	TotalLatencyMS                 int64
+	EffectiveSamples               float64
+	EffectiveSuccessfulCompletions float64
+	EffectiveCleanCompletions      float64
+	EffectiveLatencyMS             float64
+}
+
+type StabilityEstimateRequest struct {
+	Now                      time.Time
+	Strategy                 string
+	Route                    string
+	CandidateModel           string
+	ReferenceModel           string
+	TaskType                 string
+	Difficulty               string
+	Risk                     string
+	VisionMode               string
+	ConfiguredStabilityBPS   int
+	ConfiguredSevereErrorBPS int
+}
+
+type StabilityEstimate struct {
+	Strategy               string  `json:"strategy"`
+	Route                  string  `json:"route"`
+	CandidateModel         string  `json:"candidate_model"`
+	ReferenceModel         string  `json:"reference_model"`
+	RawOnlineSamples       int64   `json:"raw_online_samples"`
+	EffectiveOnlineSamples float64 `json:"effective_online_samples"`
+	EffectiveReviewSamples float64 `json:"effective_review_samples"`
+	MeanBPS                int     `json:"mean_bps"`
+	LowerBPS               int     `json:"lower_bps"`
+	ExpectedLatencyMS      int64   `json:"expected_latency_ms"`
+	Reliable               bool    `json:"reliable"`
 }
 
 type PerformanceFilter struct {
@@ -159,10 +199,10 @@ func EstimateQuality(
 			if !ok {
 				continue
 			}
-			dimensionSuccess[dimension] += weight * (float64(max(aggregate.CandidateWins, int64(0))) +
-				0.5*float64(max(aggregate.Ties, int64(0))))
-			dimensionFailure[dimension] += weight * (float64(max(aggregate.ReferenceWins, int64(0))) +
-				0.5*float64(max(aggregate.Ties, int64(0))))
+			dimensionSuccess[dimension] += weight * float64(
+				max(aggregate.CandidateWins, int64(0))+max(aggregate.Ties, int64(0)),
+			)
+			dimensionFailure[dimension] += weight * float64(max(aggregate.ReferenceWins, int64(0)))
 			dimensionSamples[dimension] += aggregate.Samples
 		}
 		severeCount := float64(min(max(row.SevereErrors, int64(0)), row.Samples))
@@ -230,6 +270,102 @@ func EstimateQuality(
 	}
 	estimate.Reliable = reliable
 	return estimate, true
+}
+
+func EstimateStability(
+	rows []EvidenceAggregate,
+	online OnlineStabilityAggregate,
+	request StabilityEstimateRequest,
+) (StabilityEstimate, bool) {
+	if online.Samples <= 0 || online.SuccessfulCompletions < 0 ||
+		online.SuccessfulCompletions > online.Samples || online.CleanCompletions < 0 ||
+		online.CleanCompletions > online.Samples || online.TotalLatencyMS < 0 {
+		return StabilityEstimate{}, false
+	}
+	effectiveSamples := online.EffectiveSamples
+	effectiveSuccessful := online.EffectiveSuccessfulCompletions
+	effectiveClean := online.EffectiveCleanCompletions
+	effectiveLatency := online.EffectiveLatencyMS
+	if effectiveSamples == 0 {
+		effectiveSamples = float64(online.Samples)
+		effectiveSuccessful = float64(online.SuccessfulCompletions)
+		effectiveClean = float64(online.CleanCompletions)
+		effectiveLatency = float64(online.TotalLatencyMS)
+	}
+	if effectiveSamples <= 0 || effectiveSuccessful < 0 ||
+		effectiveSuccessful > effectiveSamples || effectiveClean < 0 ||
+		effectiveClean > effectiveSamples || effectiveLatency < 0 {
+		return StabilityEstimate{}, false
+	}
+	now := request.Now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	severe := 0.0
+	deterministicFailures := 0.0
+	reviewSamples := 0.0
+	for _, row := range rows {
+		if row.Strategy != request.Strategy || row.Route != request.Route ||
+			row.CandidateModel != request.CandidateModel ||
+			row.ReferenceModel != request.ReferenceModel ||
+			(request.TaskType != "" && row.TaskType != request.TaskType) ||
+			(request.Difficulty != "" && row.Difficulty != request.Difficulty) ||
+			(request.Risk != "" && row.Risk != request.Risk) ||
+			(request.VisionMode != "" && row.VisionMode != request.VisionMode) {
+			continue
+		}
+		day, err := time.Parse(dayFormat, row.Day)
+		if err != nil {
+			continue
+		}
+		ageDays := max(now.Sub(day).Hours()/24, 0)
+		weight := math.Exp2(-ageDays / evidenceHalfLifeDays)
+		samples := float64(max(row.Samples, int64(0)))
+		reviewSamples += weight * samples
+		severe += weight * float64(min(max(row.SevereErrors, int64(0)), row.Samples))
+		deterministicFailures += weight * float64(
+			min(max(row.DeterministicFailures, int64(0)), row.Samples),
+		)
+	}
+	if reviewSamples <= 0 {
+		return StabilityEstimate{}, false
+	}
+	stabilityPrior := clampRate(float64(request.ConfiguredStabilityBPS) / 10_000)
+	severePrior := clampRate(float64(request.ConfiguredSevereErrorBPS) / 10_000)
+	successMean, successLower := posteriorLower(
+		stabilityPrior,
+		effectiveSuccessful,
+		effectiveSamples-effectiveSuccessful,
+	)
+	nonSevereMean, nonSevereLower := posteriorLower(
+		1-severePrior, reviewSamples-severe, severe,
+	)
+	validMean, validLower := posteriorLower(
+		stabilityPrior, reviewSamples-deterministicFailures, deterministicFailures,
+	)
+	cleanMean, cleanLower := posteriorLower(
+		stabilityPrior,
+		effectiveClean,
+		effectiveSamples-effectiveClean,
+	)
+	mean := successMean*0.50 + nonSevereMean*0.25 + validMean*0.15 + cleanMean*0.10
+	lower := successLower*0.50 + nonSevereLower*0.25 + validLower*0.15 + cleanLower*0.10
+	return StabilityEstimate{
+		Strategy: request.Strategy, Route: request.Route,
+		CandidateModel: request.CandidateModel, ReferenceModel: request.ReferenceModel,
+		RawOnlineSamples: online.Samples, EffectiveOnlineSamples: effectiveSamples,
+		EffectiveReviewSamples: reviewSamples,
+		MeanBPS:                rateBPS(mean), LowerBPS: rateBPS(lower),
+		ExpectedLatencyMS: int64(math.Round(effectiveLatency / effectiveSamples)),
+		Reliable: effectiveSamples >= minimumReliableSamples &&
+			reviewSamples >= minimumReliableSamples,
+	}, true
+}
+
+func posteriorLower(priorMean, success, failure float64) (float64, float64) {
+	alpha := max(priorMean*qualityPriorStrength+max(success, 0), 0.000001)
+	beta := max((1-priorMean)*qualityPriorStrength+max(failure, 0), 0.000001)
+	return betaMean(alpha, beta), betaQuantile(0.05, alpha, beta)
 }
 
 func betaMean(alpha float64, beta float64) float64 {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,24 +20,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/agenttrajectory"
 	"github.com/Euphie/llm-proxy/internal/database"
+	"github.com/Euphie/llm-proxy/internal/evalcatalog"
 	"github.com/Euphie/llm-proxy/internal/evaluation"
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/modelcatalog"
+	"github.com/Euphie/llm-proxy/internal/modeldirectory"
 	"github.com/Euphie/llm-proxy/internal/profile"
+	"github.com/Euphie/llm-proxy/internal/runtimeconfig"
 	"github.com/Euphie/llm-proxy/internal/stats"
 	"github.com/Euphie/llm-proxy/internal/strategy"
+	"github.com/Euphie/llm-proxy/internal/strategycompiler"
 )
 
 const initialCredentialWarning = "High risk: the default admin/admin credentials are active. Change the password immediately."
 
 type apiTestFixture struct {
-	handler  http.Handler
-	db       *sql.DB
-	dataDir  string
-	logs     *bytes.Buffer
-	now      time.Time
-	evidence *evaluation.Store
+	handler          http.Handler
+	db               *sql.DB
+	dataDir          string
+	logs             *bytes.Buffer
+	now              time.Time
+	evidence         *evaluation.Store
+	trajectories     *agenttrajectory.Store
+	trajectoryCipher *agenttrajectory.Cipher
 }
 
 // Break caught: hiding the bootstrap credential risk or allowing Profile access before the mandatory password change.
@@ -597,7 +605,7 @@ func TestAPIProfileCRUDAndDomainErrors(t *testing.T) {
 	}
 }
 
-func TestAPIStrategyLifecyclePublishesAndRollsBackWithCAS(t *testing.T) {
+func obsoleteAPIStrategyLifecyclePublishesAndRollsBackWithCAS(t *testing.T) {
 	fixture := newTestAPI(t)
 	cookies, csrf := fixture.changePassword(t)
 	createBody, err := json.Marshal(saveProfileRequest{
@@ -657,8 +665,7 @@ func TestAPIStrategyLifecyclePublishesAndRollsBackWithCAS(t *testing.T) {
 		decodeTestJSON(t, response, &version)
 		return version
 	}
-	advance(strategy.StateDraft, strategy.StateEvaluating)
-	ready := advance(strategy.StateEvaluating, strategy.StateReady)
+	ready := advance(strategy.StateDraft, strategy.StateReady)
 	immutable := fixture.request(t, http.MethodPut, versionPath, string(draftJSON), cookies, csrf)
 	assertAPIError(t, immutable, http.StatusConflict, "strategy_immutable")
 
@@ -731,7 +738,7 @@ func TestAPIStrategyLifecyclePublishesAndRollsBackWithCAS(t *testing.T) {
 	}
 }
 
-func TestAPIGeneratesCandidateDraftOnlyFromReliableQualityEvidence(t *testing.T) {
+func obsoleteAPIGeneratesCandidateDraftOnlyFromReliableQualityEvidence(t *testing.T) {
 	fixture := newTestAPI(t)
 	cookies, csrf := fixture.changePassword(t)
 	createBody, err := json.Marshal(saveProfileRequest{
@@ -761,6 +768,18 @@ func TestAPIGeneratesCandidateDraftOnlyFromReliableQualityEvidence(t *testing.T)
 		}); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := fixture.db.Exec(`INSERT INTO routing_traces (
+			created_at, profile_id, profile_slug, protocol, path, strategy_name, route_id,
+			task_type, risk, classification_source, initial_model, final_model, vision_mode,
+			status_code, client_committed, answer_attempts, auxiliary_calls,
+			total_outbound_calls, model_switches, target_switches,
+			planned_worst_case_cost_micro_usd, consumed_estimated_cost_micro_usd, elapsed_ms
+		) VALUES (?, ?, 'auto', 'anthropic', '/v1/messages', '20260802-001', 'balanced',
+			'simple', 'normal', 'rule', 'fast', 'fast', 'none', 200, 1, 1, 0, 1, 0, 0, 10, 5, 250)`,
+			fixture.now.UTC().Format(time.RFC3339Nano), profileBody.ID,
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 	generated := fixture.request(t, http.MethodPost, path, `{}`, cookies, csrf)
 	if generated.Code != http.StatusCreated {
@@ -778,8 +797,372 @@ func TestAPIGeneratesCandidateDraftOnlyFromReliableQualityEvidence(t *testing.T)
 	)
 	var body StrategyOverview
 	decodeTestJSON(t, overview, &body)
-	if len(body.QualityEstimates) != 1 || !body.QualityEstimates[0].Reliable {
+	if len(body.QualityEstimates) != 1 || !body.QualityEstimates[0].Reliable ||
+		len(body.StabilityEstimates) != 1 || !body.StabilityEstimates[0].Reliable {
 		t.Fatalf("overview=%+v", body)
+	}
+}
+
+func TestAPIReadsTheImmediateActiveRoutingPolicy(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+	if _, err := fixture.db.Exec(`
+		INSERT INTO profiles (id, slug, display_name, enabled, config_json, created_at, updated_at)
+		VALUES (91, 'policy-v2', 'Policy V2', 1, '{"version":2}',
+		  '2026-08-13T00:00:00Z', '2026-08-13T00:00:00Z');
+		INSERT INTO routing_policy_versions (
+		  id, profile_id, policy_sequence, policy_json, source_version_id,
+		  change_kind, change_reason, created_by, created_at
+		) VALUES (92, 91, 1, '{"name":"20260813-001"}', NULL,
+		  'migration', 'legacy', 'system', '2026-08-13T00:00:00Z');
+		INSERT INTO profile_runtime_state (
+		  profile_id, revision, active_policy_version_id, model_catalog_revision, updated_at
+		) VALUES (91, 7, 92, 3, '2026-08-13T00:00:00Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	response := fixture.request(
+		t, http.MethodGet, "/_admin/api/profiles/91/routing-policy", "", cookies, "",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		RuntimeState struct {
+			Revision int64 `json:"revision"`
+		} `json:"runtime_state"`
+		Active struct {
+			ID int64 `json:"id"`
+		} `json:"active"`
+		History []struct {
+			ID int64 `json:"id"`
+		} `json:"history"`
+	}
+	decodeTestJSON(t, response, &body)
+	if body.RuntimeState.Revision != 7 || body.Active.ID != 92 ||
+		len(body.History) != 1 || body.History[0].ID != 92 {
+		t.Fatalf("body=%+v", body)
+	}
+}
+
+func TestAPICreatesProfileAsNormalizedRuntimeAggregate(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	config := profile.NewConfig(profile.ProtocolAnthropic, "https://created.example")
+	requestBody, err := json.Marshal(saveProfileRequest{
+		Slug: "created-v2", DisplayName: "Created V2", Enabled: true,
+		Config: config, MakeDefault: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.request(
+		t, http.MethodPost, "/_admin/api/profiles", string(requestBody), cookies, csrf,
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body profileResponse
+	decodeTestJSON(t, response, &body)
+	if body.Config.Version != 2 || len(body.Config.Models) != 0 || body.ID == 0 {
+		t.Fatalf("body=%+v", body)
+	}
+	var revision, modelRevision int64
+	if err := fixture.db.QueryRow(`
+		SELECT revision, model_catalog_revision FROM profile_runtime_state WHERE profile_id = ?
+	`, body.ID).Scan(&revision, &modelRevision); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 1 || modelRevision != 1 {
+		t.Fatalf("revision=%d model_revision=%d", revision, modelRevision)
+	}
+}
+
+func TestAPIUpdatesV2ProfileWithRuntimeRevisionCAS(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	insertAPIV2PolicyProfile(t, fixture.db, 92)
+	if _, err := fixture.db.Exec(`UPDATE app_settings SET default_profile_id = 92 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	config := apiAutoRoutingConfig()
+	config.Version = 2
+	config.Upstream = "https://changed.example"
+	payload, err := json.Marshal(saveProfileRequest{
+		Slug: "policy-v2-92", DisplayName: "Changed V2", Enabled: true,
+		Config: config, ExpectedRuntimeRevision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.request(
+		t, http.MethodPut, "/_admin/api/profiles/92", string(payload), cookies, csrf,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body profileResponse
+	decodeTestJSON(t, response, &body)
+	if body.DisplayName != "Changed V2" || body.Config.Upstream != "https://changed.example" ||
+		len(body.Config.Models) != 0 || len(body.Config.AutoRouting.Participants) != 0 ||
+		!body.Config.AutoRouting.Enabled {
+		t.Fatalf("body=%+v", body)
+	}
+	var revision int64
+	if err := fixture.db.QueryRow(
+		`SELECT revision FROM profile_runtime_state WHERE profile_id = 92`,
+	).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 2 {
+		t.Fatalf("revision=%d", revision)
+	}
+	conflict := fixture.request(
+		t, http.MethodPut, "/_admin/api/profiles/92", string(payload), cookies, csrf,
+	)
+	assertAPIError(t, conflict, http.StatusConflict, "runtime_revision_conflict")
+}
+
+func TestAPIImmediatelyAppliesPolicyWithRuntimeRevisionCAS(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	policy := insertAPIV2PolicyProfile(t, fixture.db, 93)
+	invalid := fixture.request(
+		t, http.MethodPut, "/_admin/api/profiles/93/routing-policy",
+		`{"expected_runtime_revision":1,"policy":{"name":"incomplete"}}`, cookies, csrf,
+	)
+	assertAPIError(t, invalid, http.StatusUnprocessableEntity, "policy_invalid")
+	var unchangedRevision int64
+	if err := fixture.db.QueryRow(
+		`SELECT revision FROM profile_runtime_state WHERE profile_id = 93`,
+	).Scan(&unchangedRevision); err != nil {
+		t.Fatal(err)
+	}
+	if unchangedRevision != 1 {
+		t.Fatalf("invalid Policy changed revision to %d", unchangedRevision)
+	}
+	policy.Name = "20260813-002"
+	requestBody, err := json.Marshal(struct {
+		ExpectedRuntimeRevision int64                       `json:"expected_runtime_revision"`
+		Policy                  profile.RoutingPolicyConfig `json:"policy"`
+		ChangeReason            string                      `json:"change_reason"`
+	}{ExpectedRuntimeRevision: 1, Policy: policy, ChangeReason: "replace live policy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := fixture.request(
+		t, http.MethodPut, "/_admin/api/profiles/93/routing-policy",
+		string(requestBody), cookies, csrf,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body RoutingPolicyOverview
+	decodeTestJSON(t, response, &body)
+	if body.RuntimeState.Revision != 2 || body.Active == nil ||
+		body.Active.Policy.Name != "20260813-002" || len(body.History) != 2 ||
+		body.History[1].Policy.Name != "20260813-001" {
+		t.Fatalf("body=%+v", body)
+	}
+
+	conflict := fixture.request(
+		t, http.MethodPut, "/_admin/api/profiles/93/routing-policy",
+		string(requestBody), cookies, csrf,
+	)
+	assertAPIError(t, conflict, http.StatusConflict, "runtime_revision_conflict")
+}
+
+func TestAPIRollbackRejectsPolicyIncompatibleWithCurrentModelDirectory(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	policy := insertAPIV2PolicyProfile(t, fixture.db, 95)
+	policy.Name = "20260813-002"
+	requestBody, err := json.Marshal(struct {
+		ExpectedRuntimeRevision int64                       `json:"expected_runtime_revision"`
+		Policy                  profile.RoutingPolicyConfig `json:"policy"`
+	}{ExpectedRuntimeRevision: 1, Policy: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := fixture.request(
+		t, http.MethodPut, "/_admin/api/profiles/95/routing-policy",
+		string(requestBody), cookies, csrf,
+	)
+	if applied.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", applied.Code, applied.Body.String())
+	}
+	if _, err := fixture.db.Exec(`
+		UPDATE profile_models SET status = 'offline', status_reason = 'operator test'
+		WHERE profile_id = 95 AND model_id = 'fast'
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	rollback := fixture.request(
+		t, http.MethodPost, "/_admin/api/profiles/95/routing-policy/rollback",
+		`{"expected_runtime_revision":2,"version_id":1095,"change_reason":"restore old"}`,
+		cookies, csrf,
+	)
+	assertAPIError(t, rollback, http.StatusConflict, "rollback_incompatible")
+	var revision, versions int64
+	if err := fixture.db.QueryRow(`
+		SELECT revision, (SELECT COUNT(*) FROM routing_policy_versions WHERE profile_id = 95)
+		FROM profile_runtime_state WHERE profile_id = 95
+	`).Scan(&revision, &versions); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 2 || versions != 2 {
+		t.Fatalf("revision=%d versions=%d", revision, versions)
+	}
+}
+
+func TestAPIModelDirectoryMutationsPublishImmediateRuntimeRevisions(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	insertAPIV2PolicyProfile(t, fixture.db, 97)
+	capability := apiAutoRoutingConfig().Models[0]
+	capability.ID = "extra"
+	capabilityPayload, err := json.Marshal(capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addPayload, err := json.Marshal(map[string]any{
+		"expected_runtime_revision": 1,
+		"model_id":                  "extra",
+		"capability":                json.RawMessage(capabilityPayload),
+		"reason":                    "add fallback",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := fixture.request(t, http.MethodPost, "/_admin/api/profiles/97/models",
+		string(addPayload), cookies, csrf)
+	if added.Code != http.StatusOK {
+		t.Fatalf("add status=%d body=%s", added.Code, added.Body.String())
+	}
+	var body ModelDirectoryOverview
+	decodeTestJSON(t, added, &body)
+	if body.RuntimeState.Revision != 2 || body.RuntimeState.ModelCatalogRevision != 2 ||
+		len(body.Models) != 3 {
+		t.Fatalf("added=%+v", body)
+	}
+
+	retired := fixture.request(t, http.MethodPost, "/_admin/api/profiles/97/models/retire",
+		`{"expected_runtime_revision":2,"model_id":"extra","reason":"remove fallback"}`,
+		cookies, csrf)
+	if retired.Code != http.StatusOK {
+		t.Fatalf("retire status=%d body=%s", retired.Code, retired.Body.String())
+	}
+	decodeTestJSON(t, retired, &body)
+	if body.RuntimeState.Revision != 3 || body.Models[0].ModelID != "extra" ||
+		body.Models[0].Status != modeldirectory.StatusRetired {
+		t.Fatalf("retired=%+v", body)
+	}
+
+	readd := fixture.request(t, http.MethodPost, "/_admin/api/profiles/97/models",
+		strings.Replace(string(addPayload), `"expected_runtime_revision":1`, `"expected_runtime_revision":3`, 1),
+		cookies, csrf)
+	assertAPIError(t, readd, http.StatusConflict, "profile_model_conflict")
+
+	inUse := fixture.request(t, http.MethodPost, "/_admin/api/profiles/97/models/retire",
+		`{"expected_runtime_revision":3,"model_id":"fast","reason":"remove active model"}`,
+		cookies, csrf)
+	assertAPIError(t, inUse, http.StatusConflict, "model_still_in_use")
+}
+
+func TestAPIOldStrategyLifecycleRoutesAreRemoved(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	insertAPIV2PolicyProfile(t, fixture.db, 98)
+	for _, request := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/_admin/api/profiles/98/strategies"},
+		{http.MethodPost, "/_admin/api/profiles/98/strategies/1/canary"},
+		{http.MethodPost, "/_admin/api/profiles/98/strategies/promote"},
+		{http.MethodPost, "/_admin/api/profiles/98/strategies/rollback"},
+	} {
+		response := fixture.request(t, request.method, request.path, `{}`, cookies, csrf)
+		assertAPIError(t, response, http.StatusNotFound, "not_found")
+	}
+}
+
+func TestAPIEmergencyOfflineDerivesAndPublishesSafePolicy(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	insertAPIV2PolicyProfile(t, fixture.db, 99)
+	capability := apiAutoRoutingConfig().Models[0]
+	capability.ID = "extra"
+	capabilityPayload, err := json.Marshal(capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addPayload, err := json.Marshal(map[string]any{
+		"expected_runtime_revision": 1,
+		"model_id":                  "extra",
+		"capability":                json.RawMessage(capabilityPayload),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := fixture.request(t, http.MethodPost, "/_admin/api/profiles/99/models",
+		string(addPayload), cookies, csrf)
+	if added.Code != http.StatusOK {
+		t.Fatalf("add status=%d body=%s", added.Code, added.Body.String())
+	}
+	offline := fixture.request(t, http.MethodPost, "/_admin/api/profiles/99/models/offline", `{
+		"expected_runtime_revision":2,
+		"model_id":"fast",
+		"replacements":{"participant":"extra","task_analyzer":"extra"},
+		"reason":"provider outage"
+	}`, cookies, csrf)
+	if offline.Code != http.StatusOK {
+		t.Fatalf("offline status=%d body=%s", offline.Code, offline.Body.String())
+	}
+	var body ModelDirectoryOverview
+	decodeTestJSON(t, offline, &body)
+	if body.RuntimeState.Revision != 3 || body.RuntimeState.ModelCatalogRevision != 3 ||
+		body.Active == nil || body.Active.Kind != runtimeconfig.ChangeEmergencyOffline ||
+		body.Active.Policy.Roles == nil || body.Active.Policy.Roles.TaskAnalyzerModel != "extra" {
+		t.Fatalf("offline=%+v", body)
+	}
+	for _, model := range body.Models {
+		if model.ModelID == "fast" && model.Status != modeldirectory.StatusOffline {
+			t.Fatalf("fast=%+v", model)
+		}
+	}
+}
+
+func TestAPIGeneratesPolicyPreviewWithoutPersistingOrPublishing(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+	insertAPIV2PolicyProfile(t, fixture.db, 101)
+	response := fixture.request(
+		t, http.MethodPost, "/_admin/api/profiles/101/routing-policy/generate",
+		`{"objective":"balanced","participants":["fast","strong"]}`,
+		cookies, csrf,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("generate status=%d body=%s", response.Code, response.Body.String())
+	}
+	var preview RoutingPolicyPreview
+	decodeTestJSON(t, response, &preview)
+	if preview.Policy.Roles == nil || len(preview.Policy.Roles.Participants) != 2 ||
+		len(preview.Explanations) == 0 {
+		t.Fatalf("preview=%+v", preview)
+	}
+	var revision, versions int64
+	if err := fixture.db.QueryRow(`
+		SELECT revision, (SELECT COUNT(*) FROM routing_policy_versions WHERE profile_id = 101)
+		FROM profile_runtime_state WHERE profile_id = 101
+	`).Scan(&revision, &versions); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 1 || versions != 1 {
+		t.Fatalf("revision=%d versions=%d", revision, versions)
 	}
 }
 
@@ -877,7 +1260,7 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"data_dir":             fixture.dataDir,
 		"database_file":        "llm-proxy.db",
 		"database_bytes":       float64(databaseInfo.Size()),
-		"schema_version":       float64(15),
+		"schema_version":       float64(27),
 		"default_profile_id":   float64(first.ID),
 		"password_must_change": false,
 	}
@@ -932,6 +1315,38 @@ func TestAPIRoutingTracesReturnsAPageAndValidatesFilters(t *testing.T) {
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("overflow page status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
+	invalid = fixture.request(t, http.MethodGet, "/_admin/api/routing-traces?group=request", "", cookies, "")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("group status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestAPIRoutingTracesCanReturnSessionGroupedView(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+	store := stats.New(fixture.db)
+	key := bytes.Repeat([]byte{0xca}, 32)
+	for index, correlation := range []string{"session-1", "session-2"} {
+		store.RecordRoutingTraceAsync(stats.RoutingTrace{
+			CreatedAt:     time.Date(2026, 8, 12, 3, 44, index, 0, time.UTC),
+			CorrelationID: correlation, SessionKey: key, Risk: "normal",
+			StatusCode: 200, ClientCommitted: true, InitialModel: "fast", FinalModel: "fast",
+		})
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.request(t, http.MethodGet,
+		"/_admin/api/routing-traces?group=session&page=1&page_size=25", "", cookies, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var page stats.RoutingTraceGroupPage
+	decodeTestJSON(t, response, &page)
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].Scope != "session" ||
+		page.Items[0].SessionRef != "cacacacacaca" || page.Items[0].RequestCount != 2 {
+		t.Fatalf("page=%+v", page)
+	}
 }
 
 func TestAPIRoutingTraceDetailReturnsCandidatesAndCalls(t *testing.T) {
@@ -941,7 +1356,7 @@ func TestAPIRoutingTraceDetailReturnsCandidatesAndCalls(t *testing.T) {
 	store.RecordRoutingTraceWithCallsAndCandidatesAsync(stats.RoutingTrace{
 		CorrelationID: "detail-1", Difficulty: "medium", ClassificationReasonCodes: []string{"task_analyzer"},
 	}, []stats.PhysicalCall{{
-		Sequence: 1, Kind: "answer", Model: "fast", Target: "primary", ImageIndex: -1,
+		Sequence: 1, Kind: "answer", Model: "fast", ImageIndex: -1,
 	}}, []stats.CandidateDecision{{
 		Model: "fast", Decision: "selected", ReasonCode: "lowest_expected_cost", VisionMode: "none",
 	}})
@@ -956,12 +1371,62 @@ func TestAPIRoutingTraceDetailReturnsCandidatesAndCalls(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+	for _, field := range []string{"initial_target", "final_target", "target_switches", "target_switch_index", "upstream_nodes"} {
+		if strings.Contains(response.Body.String(), `"`+field+`"`) {
+			t.Fatalf("removed field %q in response: %s", field, response.Body.String())
+		}
+	}
 	var detail stats.RoutingTraceDetail
 	decodeTestJSON(t, response, &detail)
 	if detail.Trace.Difficulty != "medium" || len(detail.Candidates) != 1 || len(detail.Calls) != 1 {
 		t.Fatalf("detail=%+v", detail)
 	}
 	missing := fixture.request(t, http.MethodGet, "/_admin/api/routing-traces/999999", "", cookies, "")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing status=%d body=%s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestAPIRoutingSessionFlowGroupsPrivateSessionWithoutExposingItsKey(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+	store := stats.New(fixture.db)
+	key := bytes.Repeat([]byte{0x4d}, 32)
+	for index, correlation := range []string{"session-1", "session-2"} {
+		store.RecordRoutingTraceWithCallsAsync(stats.RoutingTrace{
+			CreatedAt:     time.Date(2026, 8, 11, 8, index, 0, 0, time.UTC),
+			CorrelationID: correlation, SessionKey: key,
+		}, []stats.PhysicalCall{{
+			Sequence: 1, Kind: "answer", Model: "fast", ImageIndex: -1,
+		}})
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var traceID int64
+	if err := fixture.db.QueryRow(`
+		SELECT id FROM routing_traces WHERE correlation_id = 'session-2'
+	`).Scan(&traceID); err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.request(t, http.MethodGet,
+		fmt.Sprintf("/_admin/api/routing-traces/%d/session-flow", traceID), "", cookies, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "session_key") ||
+		strings.Contains(response.Body.String(), hex.EncodeToString(key)) {
+		t.Fatalf("private session key leaked: %s", response.Body.String())
+	}
+	var flow stats.RoutingSessionFlow
+	decodeTestJSON(t, response, &flow)
+	if flow.Scope != "session" || flow.SessionRef != "4d4d4d4d4d4d" ||
+		flow.SelectedTraceID != traceID || len(flow.Requests) != 2 {
+		t.Fatalf("flow=%+v", flow)
+	}
+
+	missing := fixture.request(t, http.MethodGet,
+		"/_admin/api/routing-traces/999999/session-flow", "", cookies, "")
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing status=%d body=%s", missing.Code, missing.Body.String())
 	}
@@ -1037,7 +1502,7 @@ func TestAPIRoutingCallsRequiresFilterAndReturnsBoundedStructuredRows(t *testing
 		CorrelationID: "admin-correlation", ProfileSlug: "test", Protocol: "anthropic",
 		Path: "/v1/messages", StatusCode: 200, AllActualCostsKnown: true,
 	}, []stats.PhysicalCall{{
-		Sequence: 1, Kind: "answer", Model: "fast", Target: "primary",
+		Sequence: 1, Kind: "answer", Model: "fast",
 		ImageIndex: -1, EstimatedMicroUSD: 7, ActualCostKnown: true,
 		ActualMicroUSD: 5, StatusCode: 200, Outcome: "success",
 	}})
@@ -1049,6 +1514,11 @@ func TestAPIRoutingCallsRequiresFilterAndReturnsBoundedStructuredRows(t *testing
 		"/_admin/api/routing-calls?correlation_id=admin-correlation&limit=10", "", cookies, "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, field := range []string{"target", "target_switch_index"} {
+		if strings.Contains(response.Body.String(), `"`+field+`"`) {
+			t.Fatalf("removed field %q in response: %s", field, response.Body.String())
+		}
 	}
 	var rows []stats.RoutingCallRow
 	decodeTestJSON(t, response, &rows)
@@ -1185,19 +1655,12 @@ func TestAPIKnownRoutesReturnAccurateAllowHeader(t *testing.T) {
 			},
 		},
 		{name: "profile copy", path: "/_admin/api/profiles/123/copy", allow: []string{http.MethodPost}},
-		{
-			name: "strategy collection", path: "/_admin/api/profiles/123/strategies",
-			allow: []string{http.MethodGet, http.MethodHead, http.MethodPost},
-		},
-		{name: "strategy candidate generation", path: "/_admin/api/profiles/123/strategies/generate-candidate", allow: []string{http.MethodPost}},
-		{name: "strategy item", path: "/_admin/api/profiles/123/strategies/456", allow: []string{http.MethodPut}},
-		{name: "strategy advance", path: "/_admin/api/profiles/123/strategies/456/advance", allow: []string{http.MethodPost}},
-		{name: "strategy canary", path: "/_admin/api/profiles/123/strategies/456/canary", allow: []string{http.MethodPost}},
-		{name: "strategy promote", path: "/_admin/api/profiles/123/strategies/promote", allow: []string{http.MethodPost}},
-		{name: "strategy rollback", path: "/_admin/api/profiles/123/strategies/rollback", allow: []string{http.MethodPost}},
 		{name: "default profile", path: "/_admin/api/default-profile", allow: []string{http.MethodPut}},
 		{name: "stats", path: "/_admin/api/stats", allow: []string{http.MethodGet, http.MethodHead}},
 		{name: "system", path: "/_admin/api/system", allow: []string{http.MethodGet, http.MethodHead}},
+		{name: "evaluation catalog", path: "/_admin/api/evaluation-catalog", allow: []string{http.MethodGet, http.MethodHead}},
+		{name: "evaluation catalog update", path: "/_admin/api/evaluation-catalog/update", allow: []string{http.MethodPost}},
+		{name: "evaluation catalog update status", path: "/_admin/api/evaluation-catalog/update-status", allow: []string{http.MethodGet, http.MethodHead}},
 	}
 
 	for _, tt := range tests {
@@ -1362,10 +1825,28 @@ func newTestAPIWithCatalog(
 	return newTestAPIWithDependencies(t, nil, catalog)
 }
 
+func newTestAPIWithEvaluationCatalogUpdater(
+	t *testing.T,
+	catalog EvaluationCatalogService,
+	updater EvaluationCatalogUpdater,
+) *apiTestFixture {
+	return newTestAPIWithCatalogs(t, nil, nil, catalog, updater)
+}
+
 func newTestAPIWithDependencies(
 	t *testing.T,
 	activateProfiles func(context.Context) error,
 	catalog ModelCatalogService,
+) *apiTestFixture {
+	return newTestAPIWithCatalogs(t, activateProfiles, catalog, nil, nil)
+}
+
+func newTestAPIWithCatalogs(
+	t *testing.T,
+	activateProfiles func(context.Context) error,
+	catalog ModelCatalogService,
+	evaluationCatalog EvaluationCatalogService,
+	evaluationCatalogUpdater EvaluationCatalogUpdater,
 ) *apiTestFixture {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -1387,6 +1868,11 @@ func newTestAPIWithDependencies(
 	store := profile.NewStore(db)
 	strategyStore := strategy.NewStore(db, func() time.Time { return now })
 	evidenceStore := evaluation.NewStore(db, func() time.Time { return now })
+	trajectoryCipher, err := agenttrajectory.OpenCipher(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trajectoryStore := agenttrajectory.NewStore(db, func() time.Time { return now })
 	registry := gateway.NewRegistry()
 	build := func(record profile.Record) (http.Handler, error) {
 		resolved, _, err := strategyStore.ResolveRecord(context.Background(), record)
@@ -1403,13 +1889,17 @@ func newTestAPIWithDependencies(
 		registry,
 		build,
 		func(record profile.Record, snapshot strategy.Snapshot) (http.Handler, error) {
-			record.Config.AutoRouting.Strategy = snapshot.Active.Config
-			if _, err := record.Resolve(); err != nil {
+			activeRecord := record
+			profile.ApplyRoutingStrategyRoles(&activeRecord.Config.AutoRouting, snapshot.Active.Config)
+			activeRecord.Config.AutoRouting.Strategy = snapshot.Active.Config
+			if _, err := activeRecord.Resolve(); err != nil {
 				return nil, err
 			}
 			if snapshot.Canary != nil {
-				record.Config.AutoRouting.Strategy = snapshot.Canary.Config
-				if _, err := record.Resolve(); err != nil {
+				canaryRecord := record
+				profile.ApplyRoutingStrategyRoles(&canaryRecord.Config.AutoRouting, snapshot.Canary.Config)
+				canaryRecord.Config.AutoRouting.Strategy = snapshot.Canary.Config
+				if _, err := canaryRecord.Resolve(); err != nil {
 					return nil, err
 				}
 			}
@@ -1423,25 +1913,67 @@ func newTestAPIWithDependencies(
 			t.Fatal(err)
 		}
 	}
+	if evaluationCatalog == nil {
+		evaluationCatalog, err = evalcatalog.NewService(dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	strategyService := NewStrategyService(
+		store, strategyStore, coordinator, func() time.Time { return now }, evidenceStore,
+	)
+	compiler := strategycompiler.New(
+		catalog,
+		evaluationCatalog,
+		strategycompiler.NewEvaluationEvidenceProvider(evidenceStore, func() time.Time { return now }),
+		func() time.Time { return now },
+	)
+	strategyService.EnableGeneration(
+		compiler,
+		strategy.NewGenerationStore(db, func() time.Time { return now }),
+	)
+	runtimeStore := runtimeconfig.NewStore(db, func() time.Time { return now })
+	strategyService.EnableRuntimePolicies(runtimeStore)
+	runtimeCoordinator := gateway.NewRuntimeCoordinator(registry, func(aggregate runtimeconfig.Aggregate) (http.Handler, error) {
+		var policy *profile.RoutingPolicyConfig
+		if aggregate.Active != nil {
+			policy = &aggregate.Active.Policy
+		}
+		if _, err := profile.ResolvePolicyRuntime(aggregate.Profile, aggregate.Models, policy); err != nil {
+			return nil, err
+		}
+		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
+	})
+	policyService := NewRoutingPolicyService(runtimeStore, runtimeCoordinator)
+	policyService.EnableGeneration(compiler)
+	profileService := NewProfileService(store, coordinator, strategyStore)
+	profileService.EnableRuntimeConfiguration(runtimeStore, runtimeCoordinator)
 	handler := NewAPI(Dependencies{
-		Auth:             auth,
-		Profiles:         NewProfileService(store, coordinator, strategyStore),
-		Strategies:       NewStrategyService(store, strategyStore, coordinator, func() time.Time { return now }, evidenceStore),
-		Stats:            stats.New(db),
-		DB:               db,
-		Version:          "test-version",
-		DataDir:          dataDir,
-		Logger:           slog.New(slog.NewTextHandler(logs, nil)),
-		ActivateProfiles: activateProfiles,
-		ModelCatalog:     catalog,
+		Auth:                     auth,
+		Profiles:                 profileService,
+		Strategies:               strategyService,
+		Policies:                 policyService,
+		Stats:                    stats.New(db),
+		DB:                       db,
+		Version:                  "test-version",
+		DataDir:                  dataDir,
+		Logger:                   slog.New(slog.NewTextHandler(logs, nil)),
+		ActivateProfiles:         activateProfiles,
+		ModelCatalog:             catalog,
+		EvaluationCatalog:        evaluationCatalog,
+		EvaluationCatalogUpdater: evaluationCatalogUpdater,
+		AgentTrajectories:        trajectoryStore,
+		AgentTrajectoryCipher:    trajectoryCipher,
 	})
 	return &apiTestFixture{
-		handler:  handler,
-		db:       db,
-		dataDir:  dataDir,
-		logs:     logs,
-		now:      now,
-		evidence: evidenceStore,
+		handler:          handler,
+		db:               db,
+		dataDir:          dataDir,
+		logs:             logs,
+		now:              now,
+		evidence:         evidenceStore,
+		trajectories:     trajectoryStore,
+		trajectoryCipher: trajectoryCipher,
 	}
 }
 
@@ -1564,10 +2096,14 @@ func apiAutoRoutingConfig() profile.Config {
 			Name: "20260802-001", Alias: "当前", DefaultRoute: "balanced",
 			TaskRoutes: []profile.TaskRouteConfig{{TaskType: "simple", Route: "balanced"}},
 			Routes: []profile.RouteConfig{{
-				ID: "balanced", MinQualityBPS: 9000, MaxSevereErrorRateBPS: 100,
+				ID: "balanced", MinQualityBPS: 9000, MinStabilityBPS: 8000,
+				MaxSevereErrorRateBPS: 100,
+				Weights: profile.RoutingWeightsConfig{
+					QualityBPS: 4000, StabilityBPS: 2500, CostBPS: 2500, PerformanceBPS: 1000,
+				},
 				Candidates: []profile.RouteCandidateConfig{
-					{Model: "fast", QualityScoreBPS: 9200, SevereErrorRateBPS: 50},
-					{Model: "strong", QualityScoreBPS: 9900, SevereErrorRateBPS: 10},
+					{Model: "fast", QualityScoreBPS: 9200, StabilityScoreBPS: 9300, SevereErrorRateBPS: 50, ExpectedLatencyMS: 300},
+					{Model: "strong", QualityScoreBPS: 9900, StabilityScoreBPS: 9900, SevereErrorRateBPS: 10, ExpectedLatencyMS: 800},
 				},
 			}},
 			Budget: profile.AttemptBudgetConfig{
@@ -1578,6 +2114,68 @@ func apiAutoRoutingConfig() profile.Config {
 		},
 	}
 	return config
+}
+
+func insertAPIV2PolicyProfile(
+	t *testing.T,
+	db *sql.DB,
+	profileID int64,
+) profile.RoutingPolicyConfig {
+	t.Helper()
+	legacy := apiAutoRoutingConfig()
+	policy := profile.PolicyFromLegacy(legacy.AutoRouting, legacy.AutoRouting.Strategy)
+	policy.Roles = profile.RoutingStrategyRoles(legacy.AutoRouting)
+	policy.Name = "20260813-001"
+	config := legacy
+	config.Version = 2
+	config.Models = nil
+	config.AutoRouting = profile.AutoRoutingConfig{Enabled: true}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyID := profileID + 1_000
+	if _, err := db.Exec(`
+		INSERT INTO profiles (id, slug, display_name, enabled, config_json, created_at, updated_at)
+		VALUES (?, ?, 'Policy V2', 1, ?, '2026-08-13T00:00:00Z', '2026-08-13T00:00:00Z')
+	`, profileID, fmt.Sprintf("policy-v2-%d", profileID), string(configJSON)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO routing_policy_versions (
+		  id, profile_id, policy_sequence, policy_json, source_version_id,
+		  change_kind, change_reason, created_by, created_at
+		) VALUES (?, ?, 1, ?, NULL, 'migration', '', 'system', '2026-08-13T00:00:00Z')
+	`, policyID, profileID, string(policyJSON)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO profile_runtime_state (
+		  profile_id, revision, active_policy_version_id, model_catalog_revision, updated_at
+		) VALUES (?, 1, ?, 1, '2026-08-13T00:00:00Z')
+	`, profileID, policyID); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range legacy.Models {
+		payload, err := json.Marshal(capability)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO profile_models (
+			  profile_id, model_id, capability_json, status, status_reason,
+			  created_at, updated_at, retired_at
+			) VALUES (?, ?, ?, 'available', '',
+			  '2026-08-13T00:00:00Z', '2026-08-13T00:00:00Z', NULL)
+		`, profileID, capability.ID, string(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return policy
 }
 
 func insertAPIUsage(
@@ -1599,6 +2197,14 @@ func insertAPIUsage(
 	); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func evaluationDimensionOutcomes(outcome evaluation.Outcome) map[evaluation.Dimension]evaluation.Outcome {
+	result := make(map[evaluation.Dimension]evaluation.Outcome, len(evaluation.ReviewDimensions))
+	for _, dimension := range evaluation.ReviewDimensions {
+		result[dimension] = outcome
+	}
+	return result
 }
 
 func decodeTestJSON(t *testing.T, response *httptest.ResponseRecorder, target any) {

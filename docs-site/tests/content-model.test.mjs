@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { expandEvidenceMarkers } from "../lib/content-contract.ts";
 import { getStatusCalloutMatch } from "../lib/markdown-directives.ts";
 import { getSiteOrigin } from "../lib/site-origin.ts";
 import {
@@ -90,55 +89,6 @@ test("streams only explicit documentation inputs into fail-closed verification c
   assert.doesNotMatch(docsTargets, /(?:^|\/)\._[^*]/m);
 });
 
-test("central evidence files use the pinned data envelopes", async () => {
-  const [baselines, competitors] = await Promise.all([
-    readJson("source-baselines.json"),
-    readJson("competitor-evidence.json"),
-  ]);
-
-  assert.equal(baselines.runtime_baseline.commit, "81a2fc457c69323fc3e5bd63f68da9191bc9b587");
-  assert.equal(baselines.runtime_baseline.verified_runtime_facts.length, 7);
-  assert.deepEqual(Object.keys(baselines), ["runtime_baseline"]);
-
-  assert.equal(competitors.length, 10);
-  assert.equal(competitors.filter(({ evidence_type }) => evidence_type === "source").length, 6);
-  assert.equal(
-    competitors.filter(({ evidence_type }) => evidence_type === "official_documentation").length,
-    3,
-  );
-  assert.equal(
-    competitors.filter(({ evidence_type }) => evidence_type === "closed_documentation").length,
-    1,
-  );
-  for (const entry of competitors) {
-    assert.equal(typeof entry.native_mechanism, "string");
-    assert.equal(typeof entry.mesotes_mapping, "string");
-    assert.ok(entry.adopt.length > 0);
-    assert.ok(entry.reject_or_defer.length > 0);
-    assert.ok(entry.permalinks.length > 0);
-  }
-});
-
-test("expands every evidence marker and rejects unknown contract markers", async () => {
-  const [sourceBaselines, competitorEvidence] = await Promise.all([
-    readJson("source-baselines.json"),
-    readJson("competitor-evidence.json"),
-  ]);
-  const expanded = expandEvidenceMarkers(
-    "{{SOURCE_BASELINE}}\n\n{{SOURCE_FACTS}}\n\n{{COMPETITOR_EVIDENCE}}",
-    { sourceBaselines, competitorEvidence },
-  );
-
-  assert.match(expanded, /81a2fc457c69323fc3e5bd63f68da9191bc9b587/);
-  assert.match(expanded, /Auto 配置按 Profile 编译并完整校验/);
-  assert.match(expanded, /LiteLLM/);
-  assert.doesNotMatch(expanded, /\{\{[A-Z][A-Z0-9_]*\}\}/);
-  assert.throws(
-    () => expandEvidenceMarkers("{{UNKNOWN_CONTRACT}}", { sourceBaselines, competitorEvidence }),
-    /Unknown content contract marker: UNKNOWN_CONTRACT/,
-  );
-});
-
 test("assigns stable unique IDs to duplicate, Chinese, and empty headings", () => {
   const headings = extractMarkdownHeadings(`
 ## 在线路由
@@ -188,7 +138,7 @@ test("recognizes directives only from the first paragraph's first raw text child
       type: "element",
       tagName: "p",
       children: [
-        { type: "text", value: "[!TARGET]\n保留 " },
+        { type: "text", value: "[!EVIDENCE]\n保留 " },
         inlineCode,
         { type: "text", value: " 与 " },
         link,
@@ -197,7 +147,7 @@ test("recognizes directives only from the first paragraph's first raw text child
   };
 
   assert.deepEqual(getStatusCalloutMatch(valid), {
-    kind: "TARGET",
+    kind: "EVIDENCE",
     strippedText: "\n保留 ",
   });
   assert.deepEqual(valid.children[0].children.slice(1), [inlineCode, { type: "text", value: " 与 " }, link]);
@@ -268,7 +218,7 @@ test("keeps opening callouts between H1 and H2 in the chapter root search entry"
       slug: "intro",
       title: "Intro",
       summary: "Summary.",
-      content: "# Intro\n\n[!TARGET]\nOpening callout sentinel.\n\n## First section\nSection body.",
+      content: "# Intro\n\n[!CURRENT]\nOpening callout sentinel.\n\n## First section\nSection body.",
     },
   ]);
 
@@ -318,31 +268,27 @@ test("converts Markdown to plain text and computes bounded reading time", () => 
   assert.equal(readingTimeMinutes("路".repeat(1041)), 3);
 });
 
-test("the trace is a bounded same-Profile design example without secret-bearing fields", async () => {
+test("the trace is a bounded current same-Profile example without secret-bearing fields", async () => {
   const trace = await readJson("route-trace-example.json");
-  assert.equal(trace.example_kind, "static_design");
+  assert.equal(trace.example_kind, "current_runtime_shape");
   assert.equal(trace.projection_kind, "sanitized_example");
-  assert.equal(trace.label, "静态设计示例");
-  assert.deepEqual(trace.scope, { profile_id: "profile_acme_primary" });
+  assert.equal(trace.label, "当前字段示例");
+  assert.deepEqual(trace.scope, { profile_id: "profile_demo" });
   assert.equal(trace.execution_plan.profile_id, trace.scope.profile_id);
-  assert.equal(trace.task_analysis.local_rule_result, "uncertain");
   assert.equal(trace.task_analysis.analyzer_called, true);
-  assert.equal(trace.task_analysis.result, "code_change");
-  assert.equal(trace.route.matched_by, "task_type");
+  assert.equal(trace.task_analysis.result, "code");
+  assert.equal(trace.route.matched_by, "task_type_and_difficulty");
   assert.equal(trace.route.task_type, trace.task_analysis.result);
   assert.ok(trace.hard_filter.excluded.length > 0);
   assert.match(trace.model_selection.selected_model_id, /^model_/);
   assert.deepEqual(Object.keys(trace.execution_plan.snapshot_refs).sort(), [
-    "catalog_version", "price_version", "strategy_id",
+    "model_catalog_revision", "routing_policy_version", "runtime_revision",
   ]);
   assert.deepEqual(trace.execution_plan.auxiliary_attempts, []);
   assert.equal(trace.execution_plan.attempts.length, 2);
   assert.ok(trace.execution_plan.attempts.every((attempt) => (
-    /^target_/.test(attempt.target_id) &&
-    /^model_/.test(attempt.model_id) &&
-    /^answer/.test(attempt.purpose)
+    /^model_/.test(attempt.model_id) && /^answer/.test(attempt.purpose)
   )));
-  assert.equal(new Set(trace.execution_plan.attempts.map(({ target_id }) => target_id)).size, 1);
   assert.equal(trace.attempts[0].outcome, "retryable_pre_commit_failure");
   assert.equal(trace.attempts[1].outcome, "ClientCommit");
   assert.deepEqual(Object.keys(trace.attempt_budget), [
@@ -350,7 +296,6 @@ test("the trace is a bounded same-Profile design example without secret-bearing 
     "max_auxiliary_calls",
     "max_total_outbound_calls",
     "max_retries_per_target",
-    "max_target_switches",
     "max_model_switches",
     "deadline",
     "max_worst_case_cost_micro_usd",
@@ -360,6 +305,6 @@ test("the trace is a bounded same-Profile design example without secret-bearing 
   assert.doesNotMatch(json, /endpoint|credential|authorization|header|payload|transport/i);
   const ids = [...json.matchAll(/"(?:[a-z_]+_id)":"([^"]+)"/g)].map((match) => match[1]);
   assert.ok(
-    ids.every((id) => id === "profile_acme_primary" || /^(?:model|target|route)_/.test(id) || /^\d{8}-\d{3}$/.test(id)),
+    ids.every((id) => id === "profile_demo" || /^(?:model|route)_/.test(id) || /^\d{8}-\d{3}$/.test(id)),
   );
 });

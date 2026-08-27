@@ -33,19 +33,21 @@ var (
 )
 
 type Version struct {
-	ID        int64                         `json:"id"`
-	ProfileID int64                         `json:"profile_id"`
-	State     State                         `json:"state"`
-	Config    profile.RoutingStrategyConfig `json:"config"`
-	Rating    Rating                        `json:"rating"`
-	CreatedAt time.Time                     `json:"created_at"`
-	UpdatedAt time.Time                     `json:"updated_at"`
+	ID         int64                         `json:"id"`
+	ProfileID  int64                         `json:"profile_id"`
+	State      State                         `json:"state"`
+	Config     profile.RoutingStrategyConfig `json:"config"`
+	Rating     Rating                        `json:"rating"`
+	CreatedAt  time.Time                     `json:"created_at"`
+	UpdatedAt  time.Time                     `json:"updated_at"`
+	ArchivedAt *time.Time                    `json:"archived_at,omitempty"`
 }
 
 type Rating struct {
 	DisplayScoreBPS       int    `json:"display_score_bps"`
 	Grade                 string `json:"grade"`
 	QualityFloorBPS       int    `json:"quality_floor_bps"`
+	StabilityFloorBPS     int    `json:"stability_floor_bps"`
 	SevereErrorCeilingBPS int    `json:"severe_error_ceiling_bps"`
 	PassingRoutes         int    `json:"passing_routes"`
 	TotalRoutes           int    `json:"total_routes"`
@@ -103,6 +105,11 @@ func cloneSnapshot(source Snapshot) Snapshot {
 
 func cloneVersion(source Version) Version {
 	cloned := source
+	if source.Config.Roles != nil {
+		roles := *source.Config.Roles
+		roles.Participants = append([]string(nil), source.Config.Roles.Participants...)
+		cloned.Config.Roles = &roles
+	}
 	cloned.Config.TaskRoutes = append([]profile.TaskRouteConfig(nil), source.Config.TaskRoutes...)
 	cloned.Config.Routes = make([]profile.RouteConfig, len(source.Config.Routes))
 	for index, route := range source.Config.Routes {
@@ -152,12 +159,13 @@ func (s *Store) Bootstrap(ctx context.Context, record profile.Record) (snapshot 
 	if !errors.Is(err, ErrNotFound) {
 		return Snapshot{}, err
 	}
-	if err := validateStrategy(record, record.Config.AutoRouting.Strategy); err != nil {
+	config := withRoleSnapshot(record, record.Config.AutoRouting.Strategy)
+	if err := validateStrategy(record, config); err != nil {
 		return Snapshot{}, err
 	}
 
 	now := strategyTime(s.now())
-	version, err := insertVersion(ctx, tx, record.ID, StateActive, record.Config.AutoRouting.Strategy, now)
+	version, err := insertVersion(ctx, tx, record.ID, StateActive, config, now)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -195,6 +203,7 @@ func (s *Store) ResolveRecord(
 	if err != nil {
 		return profile.Record{}, Snapshot{}, err
 	}
+	profile.ApplyRoutingStrategyRoles(&record.Config.AutoRouting, snapshot.Active.Config)
 	record.Config.AutoRouting.Strategy = snapshot.Active.Config
 	if _, err := record.Resolve(); err != nil {
 		return profile.Record{}, Snapshot{}, err
@@ -204,7 +213,7 @@ func (s *Store) ResolveRecord(
 
 func (s *Store) List(ctx context.Context, profileID int64) ([]Version, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, profile_id, state, config_json, created_at, updated_at
+		SELECT id, profile_id, state, config_json, created_at, updated_at, archived_at
 		FROM routing_strategies
 		WHERE profile_id = ?
 		ORDER BY id DESC
@@ -265,6 +274,7 @@ func (s *Store) CreateDraft(
 	record profile.Record,
 	config profile.RoutingStrategyConfig,
 ) (version Version, err error) {
+	config = withRoleSnapshot(record, config)
 	if err := validateStrategy(record, config); err != nil {
 		return Version{}, err
 	}
@@ -297,6 +307,7 @@ func (s *Store) UpdateDraft(
 	id int64,
 	config profile.RoutingStrategyConfig,
 ) (version Version, err error) {
+	config = withRoleSnapshot(record, config)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Version{}, fmt.Errorf("begin update strategy draft: %w", err)
@@ -306,7 +317,7 @@ func (s *Store) UpdateDraft(
 	if err != nil {
 		return Version{}, err
 	}
-	if current.State != StateDraft {
+	if current.State != StateDraft || current.ArchivedAt != nil {
 		return Version{}, ErrImmutable
 	}
 	if config.Name != current.Config.Name {
@@ -323,7 +334,7 @@ func (s *Store) UpdateDraft(
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE routing_strategies
 		SET name = ?, alias = ?, config_json = ?, updated_at = ?
-		WHERE id = ? AND profile_id = ? AND state = 'draft'
+		WHERE id = ? AND profile_id = ? AND state = 'draft' AND archived_at IS NULL
 	`, config.Name, config.Alias, string(encoded), now, id, record.ID); err != nil {
 		return Version{}, translateWriteError(err)
 	}
@@ -351,7 +362,7 @@ func (s *Store) Advance(
 	from State,
 	to State,
 ) (version Version, err error) {
-	if !((from == StateDraft && to == StateEvaluating) ||
+	if !((from == StateDraft && to == StateReady) ||
 		(from == StateEvaluating && to == StateReady)) {
 		return Version{}, ErrInvalidTransition
 	}
@@ -366,6 +377,9 @@ func (s *Store) Advance(
 	}
 	if current.State != from {
 		return Version{}, ErrConflict
+	}
+	if current.ArchivedAt != nil {
+		return Version{}, ErrImmutable
 	}
 	revision, err := pointerRevision(ctx, tx, profileID)
 	if err != nil {
@@ -387,6 +401,61 @@ func (s *Store) Advance(
 	}
 	if err = tx.Commit(); err != nil {
 		return Version{}, fmt.Errorf("commit strategy transition: %w", err)
+	}
+	return version, nil
+}
+
+func (s *Store) Archive(
+	ctx context.Context,
+	profileID int64,
+	id int64,
+) (version Version, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Version{}, fmt.Errorf("begin strategy archive: %w", err)
+	}
+	defer rollback(tx)
+	current, err := getVersion(ctx, tx, profileID, id)
+	if err != nil {
+		return Version{}, err
+	}
+	if current.ArchivedAt != nil {
+		return current, nil
+	}
+	if current.State != StateDraft && current.State != StateEvaluating && current.State != StateReady {
+		return Version{}, ErrImmutable
+	}
+	snapshot, err := readSnapshot(ctx, tx, profileID)
+	if err != nil {
+		return Version{}, err
+	}
+	if snapshot.Active.ID == id || snapshot.Canary != nil && snapshot.Canary.ID == id ||
+		snapshot.LastKnownGood != nil && snapshot.LastKnownGood.ID == id {
+		return Version{}, ErrImmutable
+	}
+	now := strategyTime(s.now())
+	result, err := tx.ExecContext(ctx, `
+		UPDATE routing_strategies
+		SET archived_at = ?, updated_at = ?
+		WHERE id = ? AND profile_id = ? AND archived_at IS NULL
+	`, now, now, id, profileID)
+	if err != nil {
+		return Version{}, fmt.Errorf("archive routing strategy: %w", err)
+	}
+	if err := requireOneCAS(result); err != nil {
+		return Version{}, err
+	}
+	if err := insertEvent(
+		ctx, tx, profileID, id, "archive", current.State, current.State, snapshot.Revision, now,
+	); err != nil {
+		return Version{}, err
+	}
+	version, err = getVersion(ctx, tx, profileID, id)
+	if err != nil {
+		return Version{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Version{}, fmt.Errorf("commit strategy archive: %w", err)
 	}
 	return version, nil
 }
@@ -424,7 +493,7 @@ func (s *Store) PrepareStartCanary(
 		if err != nil {
 			return Snapshot{}, err
 		}
-		if candidate.State != StateReady {
+		if candidate.State != StateReady || candidate.ArchivedAt != nil {
 			return Snapshot{}, ErrInvalidTransition
 		}
 		candidate.State = StateCanary
@@ -710,9 +779,17 @@ func validateStrategy(record profile.Record, config profile.RoutingStrategyConfi
 	if record.ID <= 0 || !record.Config.AutoRouting.Enabled {
 		return fmt.Errorf("%w: Auto routing must be enabled before managing strategies", profile.ErrInvalidConfig)
 	}
+	profile.ApplyRoutingStrategyRoles(&record.Config.AutoRouting, config)
 	record.Config.AutoRouting.Strategy = config
 	_, err := record.Resolve()
 	return err
+}
+
+func withRoleSnapshot(record profile.Record, config profile.RoutingStrategyConfig) profile.RoutingStrategyConfig {
+	if config.Roles == nil {
+		config.Roles = profile.RoutingStrategyRoles(record.Config.AutoRouting)
+	}
+	return config
 }
 
 func insertVersion(
@@ -784,7 +861,7 @@ func readSnapshot(ctx context.Context, queryer queryRower, profileID int64) (Sna
 
 func getVersion(ctx context.Context, queryer queryRower, profileID, id int64) (Version, error) {
 	version, err := scanVersion(queryer.QueryRowContext(ctx, `
-		SELECT id, profile_id, state, config_json, created_at, updated_at
+		SELECT id, profile_id, state, config_json, created_at, updated_at, archived_at
 		FROM routing_strategies WHERE profile_id = ? AND id = ?
 	`, profileID, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -805,6 +882,7 @@ func scanVersion(row rowScanner) (Version, error) {
 	var version Version
 	var state string
 	var configJSON, createdAt, updatedAt string
+	var archivedAt sql.NullString
 	if err := row.Scan(
 		&version.ID,
 		&version.ProfileID,
@@ -812,6 +890,7 @@ func scanVersion(row rowScanner) (Version, error) {
 		&configJSON,
 		&createdAt,
 		&updatedAt,
+		&archivedAt,
 	); err != nil {
 		return Version{}, err
 	}
@@ -829,28 +908,40 @@ func scanVersion(row rowScanner) (Version, error) {
 	if err != nil {
 		return Version{}, fmt.Errorf("parse strategy update time: %w", err)
 	}
+	if archivedAt.Valid {
+		parsed, parseErr := time.Parse(time.RFC3339Nano, archivedAt.String)
+		if parseErr != nil {
+			return Version{}, fmt.Errorf("parse strategy archive time: %w", parseErr)
+		}
+		version.ArchivedAt = &parsed
+	}
 	return version, nil
 }
 
 func rate(config profile.RoutingStrategyConfig) Rating {
 	rating := Rating{
 		Grade: "D", TotalRoutes: len(config.Routes), Source: "configured",
-		QualityFloorBPS: 10_000,
+		QualityFloorBPS: 10_000, StabilityFloorBPS: 10_000,
 	}
 	if len(config.Routes) == 0 {
 		rating.QualityFloorBPS = 0
+		rating.StabilityFloorBPS = 0
 		return rating
 	}
 	for _, route := range config.Routes {
 		routePassing := false
 		for _, candidate := range route.Candidates {
 			if candidate.QualityScoreBPS < route.MinQualityBPS ||
+				candidate.StabilityScoreBPS < route.MinStabilityBPS ||
 				candidate.SevereErrorRateBPS > route.MaxSevereErrorRateBPS {
 				continue
 			}
 			routePassing = true
 			if candidate.QualityScoreBPS < rating.QualityFloorBPS {
 				rating.QualityFloorBPS = candidate.QualityScoreBPS
+			}
+			if candidate.StabilityScoreBPS < rating.StabilityFloorBPS {
+				rating.StabilityFloorBPS = candidate.StabilityScoreBPS
 			}
 			if candidate.SevereErrorRateBPS > rating.SevereErrorCeilingBPS {
 				rating.SevereErrorCeilingBPS = candidate.SevereErrorRateBPS
@@ -862,9 +953,11 @@ func rate(config profile.RoutingStrategyConfig) Rating {
 	}
 	if rating.PassingRoutes != rating.TotalRoutes {
 		rating.QualityFloorBPS = 0
+		rating.StabilityFloorBPS = 0
 		return rating
 	}
-	rating.DisplayScoreBPS = (rating.QualityFloorBPS*85 +
+	rating.DisplayScoreBPS = (rating.QualityFloorBPS*70 +
+		rating.StabilityFloorBPS*15 +
 		(10_000-rating.SevereErrorCeilingBPS)*15) / 100
 	switch {
 	case rating.DisplayScoreBPS >= 9800 && rating.SevereErrorCeilingBPS <= 100:

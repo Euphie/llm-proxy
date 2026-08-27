@@ -763,6 +763,7 @@ html[data-docs-theme="dark"] {
 
 .docs-app[data-theme="dark"] .status-badge--implemented,
 html[data-docs-theme="dark"] .status-badge--implemented {
+  background: #18354f;
   color: #75b9ff;
 }
 
