@@ -35,6 +35,13 @@ const (
 	VisionTransportOpenAIChatCompletions VisionTransport = "openai_chat_completions"
 )
 
+type UpstreamType string
+
+const (
+	UpstreamTypeURL              UpstreamType = "url"
+	UpstreamTypeAggregateGateway UpstreamType = "aggregate_gateway"
+)
+
 type VisionConfig struct {
 	Enabled             bool                `json:"enabled"`
 	Transport           VisionTransport     `json:"transport,omitempty"`
@@ -57,12 +64,14 @@ type RetryRule struct {
 }
 
 type Config struct {
-	Version       int                     `json:"version"`
-	Protocol      Protocol                `json:"protocol"`
-	Upstream      string                  `json:"upstream"`
-	Models        []ModelCapabilityConfig `json:"models,omitempty"`
-	Vision        VisionConfig            `json:"vision"`
-	OverloadRules []RetryRule             `json:"overload_rules"`
+	Version           int                     `json:"version"`
+	Protocol          Protocol                `json:"protocol"`
+	UpstreamType      UpstreamType            `json:"upstream_type,omitempty"`
+	Upstream          string                  `json:"upstream"`
+	UpstreamGatewayID int64                   `json:"upstream_gateway_id,omitempty"`
+	Models            []ModelCapabilityConfig `json:"models,omitempty"`
+	Vision            VisionConfig            `json:"vision"`
+	OverloadRules     []RetryRule             `json:"overload_rules"`
 }
 
 type Record struct {
@@ -89,22 +98,25 @@ type VisionRuntime struct {
 }
 
 type Runtime struct {
-	ID            int64
-	Slug          string
-	DisplayName   string
-	Enabled       bool
-	Protocol      Protocol
-	Upstream      string
-	Models        ModelCatalog
-	Vision        VisionRuntime
-	OverloadRules []provider.Rule
+	ID                int64
+	Slug              string
+	DisplayName       string
+	Enabled           bool
+	Protocol          Protocol
+	UpstreamType      UpstreamType
+	Upstream          string
+	UpstreamGatewayID int64
+	Models            ModelCatalog
+	Vision            VisionRuntime
+	OverloadRules     []provider.Rule
 }
 
 func NewConfig(protocol Protocol, upstream string) Config {
 	return Config{
-		Version:  1,
-		Protocol: protocol,
-		Upstream: upstream,
+		Version:      1,
+		Protocol:     protocol,
+		UpstreamType: UpstreamTypeURL,
+		Upstream:     upstream,
 		Vision: VisionConfig{
 			Enabled:         false,
 			Transport:       DefaultVisionTransport(protocol),
@@ -126,7 +138,7 @@ func DefaultVisionTransport(protocol Protocol) VisionTransport {
 }
 
 func (r Record) Resolve() (Runtime, error) {
-	if !slugPattern.MatchString(r.Slug) || r.Slug == "v1" {
+	if !slugPattern.MatchString(r.Slug) || r.Slug == "v1" || r.Slug == "gateways" {
 		return Runtime{}, fmt.Errorf("%w: %q", ErrInvalidSlug, r.Slug)
 	}
 	if strings.TrimSpace(r.DisplayName) == "" {
@@ -136,7 +148,11 @@ func (r Record) Resolve() (Runtime, error) {
 		return Runtime{}, fmt.Errorf("%w: %q", ErrInvalidProtocol, r.Config.Protocol)
 	}
 
-	upstream, err := resolveUpstream(r.Config.Upstream)
+	upstreamType := r.Config.UpstreamType
+	if upstreamType == "" {
+		upstreamType = UpstreamTypeURL
+	}
+	upstream, err := resolveUpstreamTarget(upstreamType, r.Config.Upstream, r.Config.UpstreamGatewayID)
 	if err != nil {
 		return Runtime{}, err
 	}
@@ -154,16 +170,38 @@ func (r Record) Resolve() (Runtime, error) {
 	}
 
 	return Runtime{
-		ID:            r.ID,
-		Slug:          r.Slug,
-		DisplayName:   r.DisplayName,
-		Enabled:       r.Enabled,
-		Protocol:      r.Config.Protocol,
-		Upstream:      upstream,
-		Models:        models,
-		Vision:        vision,
-		OverloadRules: rules,
+		ID:                r.ID,
+		Slug:              r.Slug,
+		DisplayName:       r.DisplayName,
+		Enabled:           r.Enabled,
+		Protocol:          r.Config.Protocol,
+		UpstreamType:      upstreamType,
+		Upstream:          upstream,
+		UpstreamGatewayID: r.Config.UpstreamGatewayID,
+		Models:            models,
+		Vision:            vision,
+		OverloadRules:     rules,
 	}, nil
+}
+
+func resolveUpstreamTarget(kind UpstreamType, upstream string, gatewayID int64) (string, error) {
+	switch kind {
+	case UpstreamTypeURL:
+		if gatewayID != 0 {
+			return "", fmt.Errorf("%w: upstream gateway is only valid for aggregate gateway upstreams", ErrInvalidConfig)
+		}
+		return resolveUpstream(upstream)
+	case UpstreamTypeAggregateGateway:
+		if gatewayID <= 0 {
+			return "", fmt.Errorf("%w: upstream gateway is required", ErrInvalidConfig)
+		}
+		if strings.TrimSpace(upstream) != "" {
+			return "", fmt.Errorf("%w: upstream URL must be empty for aggregate gateway upstreams", ErrInvalidConfig)
+		}
+		return "", nil
+	default:
+		return "", fmt.Errorf("%w: unsupported upstream type %q", ErrInvalidConfig, kind)
+	}
 }
 
 func resolveUpstream(raw string) (string, error) {

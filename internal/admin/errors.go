@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 
+	"github.com/Euphie/llm-proxy/internal/aggregate"
 	"github.com/Euphie/llm-proxy/internal/profile"
 )
 
@@ -167,6 +168,20 @@ func (a *API) writeDomainError(w http.ResponseWriter, r *http.Request, err error
 		)
 	case errors.Is(err, profile.ErrDefaultRequired):
 		writeError(w, http.StatusConflict, "default_profile_required", "An enabled default Profile is required.", nil)
+	case errors.Is(err, aggregate.ErrNotFound):
+		writeError(w, http.StatusNotFound, "aggregate_not_found", "Aggregate gateway resource not found.", nil)
+	case errors.Is(err, aggregate.ErrProviderSlugConflict):
+		writeError(w, http.StatusConflict, "provider_slug_conflict", "Provider slug already exists for this protocol.", nil)
+	case errors.Is(err, aggregate.ErrGatewaySlugConflict):
+		writeError(w, http.StatusConflict, "aggregate_slug_conflict", "Aggregate gateway slug already exists.", nil)
+	case errors.Is(err, aggregate.ErrInvalidConfig):
+		writeError(
+			w,
+			http.StatusUnprocessableEntity,
+			"validation_error",
+			"Aggregate gateway validation failed.",
+			map[string]string{"aggregate": "Aggregate gateway configuration is invalid."},
+		)
 	default:
 		a.writeInternalError(w, r, fmt.Errorf("handle admin API request: %w", err))
 	}

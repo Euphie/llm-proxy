@@ -10,6 +10,8 @@ import (
 
 var statsScalarQueryParameters = []string{
 	"profile_id",
+	"gateway_id",
+	"issued_key_id",
 	"protocol",
 	"model",
 	"kind",
@@ -41,6 +43,22 @@ func (a *API) getStats(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.ProfileID = &id
 	}
+	if raw := parameters["gateway_id"]; raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			a.writeRequestError(w, r, invalidRequestField("gateway_id", "Must be a positive integer."))
+			return
+		}
+		filter.GatewayID = &id
+	}
+	if raw := parameters["issued_key_id"]; raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			a.writeRequestError(w, r, invalidRequestField("issued_key_id", "Must be a positive integer."))
+			return
+		}
+		filter.IssuedKeyID = &id
+	}
 	if raw := parameters["from"]; raw != "" {
 		filter.From, err = time.Parse(time.RFC3339, raw)
 		if err != nil {
@@ -70,6 +88,12 @@ func (a *API) getStats(w http.ResponseWriter, r *http.Request) {
 	}
 	if response.ByModel == nil {
 		response.ByModel = []stats.UsageRow{}
+	}
+	if response.ByGateway == nil {
+		response.ByGateway = []stats.UsageRow{}
+	}
+	if response.ByIssuedKey == nil {
+		response.ByIssuedKey = []stats.UsageRow{}
 	}
 	writeJSON(w, http.StatusOK, response)
 }

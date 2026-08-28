@@ -18,6 +18,8 @@ test("empty statistics filters are omitted", () => {
   assert.deepEqual(
     normalizeFilters({
       profile_id: "",
+      gateway_id: "",
+      issued_key_id: "",
       protocol: " ",
       model: "",
       kind: "",
@@ -77,6 +79,8 @@ test("statistics and System API methods omit blanks and encode exact queries", a
 
   await api.stats({
     profile_id: "7",
+    gateway_id: "4",
+    issued_key_id: "8",
     protocol: "anthropic",
     model: "",
     kind: "vision",
@@ -88,7 +92,7 @@ test("statistics and System API methods omit blanks and encode exact queries", a
 
   assert.deepEqual(calls, [
     [
-      "/_admin/api/stats?profile_id=7&protocol=anthropic&kind=vision&from=2026-07-29T02%3A30%3A00.000Z",
+      "/_admin/api/stats?profile_id=7&gateway_id=4&issued_key_id=8&protocol=anthropic&kind=vision&from=2026-07-29T02%3A30%3A00.000Z",
       "GET",
     ],
     ["/_admin/api/stats", "GET"],
@@ -127,7 +131,7 @@ test("statistics API trims real filters and omits whitespace-only filters", asyn
   ]);
 });
 
-test("statistics page exposes loading then exact summary and accessible tables", async (t) => {
+test("statistics page exposes loading summary charts and switchable grouped details", async (t) => {
   const root = installFakeDOM(t);
   let finish;
   const pending = new Promise((resolve) => {
@@ -138,6 +142,10 @@ test("statistics page exposes loading then exact summary and accessible tables",
     profiles: [
       { id: 1, display_name: "Coding", slug: "coding" },
     ],
+    gateways: [
+      { id: 4, display_name: "Team Gateway", slug: "team" },
+    ],
+    loadGatewayKeys: async () => ({ keys: [] }),
     loadStats: async () => pending,
     onUnauthorized: () => {},
   });
@@ -148,6 +156,8 @@ test("statistics page exposes loading then exact summary and accessible tables",
 
   assert.deepEqual(labelTexts(root), [
     "Profile",
+    "聚合网关",
+    "调用方秘钥",
     "协议",
     "模型",
     "请求类型",
@@ -156,6 +166,13 @@ test("statistics page exposes loading then exact summary and accessible tables",
   ]);
   assert.equal(controlByName(root, "from").type, "datetime-local");
   assert.equal(controlByName(root, "to").type, "datetime-local");
+  assert.ok(buttonByText(root, "查询"));
+  assert.equal(
+    findAllTags(root, "BUTTON").some(
+      (button) => button.textContent === "应用筛选",
+    ),
+    false,
+  );
   for (const value of [
     "请求数：2",
     "输入 Token：10",
@@ -168,10 +185,79 @@ test("statistics page exposes loading then exact summary and accessible tables",
   }
   assert.deepEqual(
     findAllTags(root, "CAPTION").map((caption) => caption.textContent),
-    ["按日期", "按模型"],
+    ["按日期"],
   );
   assert.ok(findText(root, "2026-07-29"));
+  assert.ok(findText(root, "分组明细"));
+  assert.equal(buttonByText(root, "按日期").getAttribute("aria-selected"), "true");
+  await buttonByText(root, "按模型").dispatch("click");
+  assert.deepEqual(
+    findAllTags(root, "CAPTION").map((caption) => caption.textContent),
+    ["按模型"],
+  );
   assert.ok(findText(root, "sonnet"));
+  assert.equal(buttonByText(root, "按模型").getAttribute("aria-selected"), "true");
+  await buttonByText(root, "按网关").dispatch("click");
+  assert.ok(findText(root, "team"));
+  await buttonByText(root, "按秘钥").dispatch("click");
+  assert.ok(findText(root, "local-dev (lgp_local...1234)"));
+  assert.equal(findClass(root, "stats-trend-chart").getAttribute("role"), "img");
+  assert.ok(findText(root, "每日 Token 趋势"));
+  assert.ok(findText(root, "网关 Token 构成"));
+  assert.ok(findText(root, "秘钥 Token 构成"));
+});
+
+test("statistics gateway selection loads and enables its issued keys", async (t) => {
+  const root = installFakeDOM(t);
+  const keyLoads = [];
+  const submitted = [];
+
+  await renderStatsPage(root, {
+    profiles: [],
+    gateways: [
+      { id: 4, display_name: "Team Gateway", slug: "team" },
+    ],
+    loadGatewayKeys: async (gatewayID) => {
+      keyLoads.push(gatewayID);
+      return {
+        keys: [
+          {
+            id: 8,
+            name: "local-dev",
+            prefix: "lgp_local",
+            last_four: "1234",
+          },
+        ],
+      };
+    },
+    loadStats: async (filters) => {
+      submitted.push(filters);
+      return statsFixture();
+    },
+  });
+
+  const gateway = controlByName(root, "gateway_id");
+  const issuedKey = controlByName(root, "issued_key_id");
+  assert.equal(issuedKey.disabled, true);
+
+  gateway.value = "4";
+  await gateway.dispatch("change");
+  assert.deepEqual(keyLoads, [4]);
+  assert.equal(issuedKey.disabled, false);
+  assert.deepEqual(
+    issuedKey.children.map((option) => [option.value, option.textContent]),
+    [
+      ["", "全部秘钥"],
+      ["8", "local-dev (lgp_local...1234)"],
+    ],
+  );
+
+  issuedKey.value = "8";
+  await findTag(root, "FORM").dispatch("submit");
+  assert.deepEqual(submitted.at(-1), {
+    gateway_id: "4",
+    issued_key_id: "8",
+  });
 });
 
 test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
@@ -182,6 +268,8 @@ test("statistics filters submit RFC3339 values and omit blanks", async (t) => {
     profiles: [
       { id: 7, display_name: "Coding", slug: "coding" },
     ],
+    gateways: [],
+    loadGatewayKeys: async () => ({ keys: [] }),
     loadStats: async (current) => {
       filters.push(current);
       return statsFixture();
@@ -211,16 +299,25 @@ test("statistics page announces empty and error states and delegates 401 recover
   let unauthorized = 0;
 
   await renderStatsPage(root, {
-    profiles: [],
+    profiles: null,
+    gateways: null,
+    loadGatewayKeys: async () => ({ keys: [] }),
     loadStats: async () => emptyStatsFixture(),
     onUnauthorized: () => {
       unauthorized += 1;
     },
   });
   assert.equal(findRole(root, "status").textContent, "暂无统计数据。");
+  assert.equal(findAllTags(root, "CAPTION").length, 0);
+  assert.equal(
+    descendants(root).some((element) => element.textContent.includes("分组明细")),
+    false,
+  );
 
   await renderStatsPage(root, {
     profiles: [],
+    gateways: [],
+    loadGatewayKeys: async () => ({ keys: [] }),
     loadStats: async () => {
       throw new Error("统计暂不可用");
     },
@@ -232,6 +329,8 @@ test("statistics page announces empty and error states and delegates 401 recover
 
   await renderStatsPage(root, {
     profiles: [],
+    gateways: [],
+    loadGatewayKeys: async () => ({ keys: [] }),
     loadStats: async () => {
       const error = new Error("expired");
       error.status = 401;
@@ -442,6 +541,7 @@ test("System page exposes loading and error states and delegates 401 recovery", 
 test("authenticated app routes the statistics path through the injected client", async (t) => {
   const root = installFakeDOM(t);
   const calls = [];
+  const keyLoads = [];
 
   await bootstrap({
     root,
@@ -457,6 +557,15 @@ test("authenticated app routes the statistics path through the injected client",
           { id: 1, display_name: "Coding", slug: "coding" },
         ],
       }),
+      listAggregateGateways: async () => ({
+        gateways: [
+          { id: 4, display_name: "Team Gateway", slug: "team" },
+        ],
+      }),
+      listAggregateGatewayKeys: async (gatewayID) => {
+        keyLoads.push(gatewayID);
+        return { keys: [] };
+      },
       stats: async (filters) => {
         calls.push(filters);
         return statsFixture();
@@ -464,10 +573,13 @@ test("authenticated app routes the statistics path through the injected client",
     },
   });
 
-  assert.equal(findAllTags(root, "H1")[0].textContent, "统计");
-  assert.equal(linkByText(root, "统计").getAttribute("aria-current"), "page");
+  assert.equal(findAllTags(root, "H1")[0].textContent, "用量统计");
+  assert.equal(linkByText(root, "用量统计").getAttribute("aria-current"), "page");
   assert.deepEqual(calls, [{}]);
   assert.ok(findText(root, "Token 总计：30"));
+  controlByName(root, "gateway_id").value = "4";
+  await controlByName(root, "gateway_id").dispatch("change");
+  assert.deepEqual(keyLoads, [4]);
 });
 
 test("authenticated app routes the System path and recovers page-level 401", async (t) => {
@@ -490,8 +602,8 @@ test("authenticated app routes the System path and recovers page-level 401", asy
     },
   });
 
-  assert.equal(findAllTags(root, "H1")[0].textContent, "系统");
-  assert.equal(linkByText(root, "系统").getAttribute("aria-current"), "page");
+  assert.equal(findAllTags(root, "H1")[0].textContent, "系统设置");
+  assert.equal(linkByText(root, "系统设置").getAttribute("aria-current"), "page");
   assert.ok(findText(root, "数据库大小：12345 B"));
 
   await bootstrap({
@@ -549,6 +661,28 @@ function statsFixture() {
         total_tokens: 30,
       },
     ],
+    by_gateway: [
+      {
+        key: "team",
+        requests: 2,
+        input_tokens: 10,
+        output_tokens: 20,
+        cache_read_tokens: 4,
+        cache_creation_tokens: 5,
+        total_tokens: 30,
+      },
+    ],
+    by_issued_key: [
+      {
+        key: "local-dev (lgp_local...1234)",
+        requests: 2,
+        input_tokens: 10,
+        output_tokens: 20,
+        cache_read_tokens: 4,
+        cache_creation_tokens: 5,
+        total_tokens: 30,
+      },
+    ],
   };
 }
 
@@ -565,6 +699,8 @@ function emptyStatsFixture() {
     },
     by_day: [],
     by_model: [],
+    by_gateway: [],
+    by_issued_key: [],
   };
 }
 
@@ -716,6 +852,14 @@ function findRole(root, role) {
     (element) => element.getAttribute("role") === role,
   );
   assert.ok(result, `role ${role} not found`);
+  return result;
+}
+
+function findClass(root, className) {
+  const result = descendants(root).find((element) =>
+    element.className.split(/\s+/).includes(className),
+  );
+  assert.ok(result, `class ${className} not found`);
   return result;
 }
 

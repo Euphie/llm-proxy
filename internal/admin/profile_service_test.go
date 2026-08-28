@@ -173,7 +173,7 @@ func TestProfileServiceResolvesRecordsBeforeEveryMutation(t *testing.T) {
 			coordinator := gateway.NewCoordinator(mutations, gateway.NewRegistry(), func(profile.Record) (http.Handler, error) {
 				return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
 			})
-			service := NewProfileService(store, coordinator)
+			service := NewProfileService(store, coordinator, nil)
 
 			err = tt.mutate(context.Background(), service, db, record.ID)
 			if !errors.Is(err, profile.ErrInvalidSlug) {
@@ -244,7 +244,7 @@ func newProfileServiceFixture(t *testing.T) (*ProfileService, *gateway.Registry)
 			_, _ = io.WriteString(w, runtime.Upstream)
 		}), nil
 	}
-	return NewProfileService(store, gateway.NewCoordinator(store, registry, builder)), registry
+	return NewProfileService(store, gateway.NewCoordinator(store, registry, builder), nil), registry
 }
 
 func saveServiceProfile(

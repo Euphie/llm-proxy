@@ -1,6 +1,6 @@
 # 模型能力与 Agent 上下文
 
-在 Profile 编辑页的“模型能力”中，保存模型 ID、上下文窗口、可选最大输出 Token 与
+在代理通道编辑页的“模型能力”中，保存模型 ID、上下文窗口、可选最大输出 Token 与
 “支持视觉”。这些值是视觉门控和配置生成器的唯一事实来源：ID 精确且区分大小写，
 `supports_vision: true` 表示主模型原生处理图片、跳过影子请求；`false` 表示可使用
 视觉增强。上下文或输出上限可留空。
@@ -31,7 +31,8 @@ compatibility alias，以及在 ID 前增加一层合法 wrapper 命名空间。
 family 以及 `preview`、`latest`、日期或已登记 snapshot 规则产生的候选只供手动选择；
 歧义或非法 ID 不自动应用。界面最多显示 5 个候选。模型 ID 的 `input` 事件只更新预览，
 粘贴完整 ID 时会立即应用唯一安全匹配；其他输入在 `change` 或 `blur` 时自动应用。
-手动候选需点击应用按钮。
+手动候选需点击应用按钮。编辑已有代理通道时，首次加载不会覆盖已保存值；如果精确匹配
+仍有可填充的空字段，界面也会显示“应用推荐值”按钮，避免出现有推荐结果却无法应用的状态。
 
 推荐只填写空字段，或替换仍由上一条推荐自动填写的值。用户手工编辑上下文窗口、最大
 输出 Token 或视觉支持后，该字段不再由推荐覆盖。推荐器从不替换模型 ID，保存时保留
@@ -63,7 +64,7 @@ make update-model-catalog
 ## 临时自动压缩
 
 Claude Code、OpenCode 和 Codex 面板都有“自动压缩触发比例”：默认 `85`，只接受
-`1..99` 的整数，仅存在于当前弹窗，关闭或刷新即恢复默认，不会保存到 Profile。对有
+`1..99` 的整数，仅存在于当前弹窗，关闭或刷新即恢复默认，不会保存到代理通道。对有
 上下文窗口的已保存模型，触发点为 `floor(context × percent / 100)`；如果已保存最大输出
 Token 要保留更多空间，则取更低的安全值 `context - max_output_tokens`。缺少上下文时，
 生成器显示警告并省略相应设置，绝不从内置建议猜测。
@@ -74,11 +75,13 @@ Token 要保留更多空间，则取更低的安全值 `context - max_output_tok
 
 | Agent | 使用的已保存模型事实 | 生成字段 |
 |---|---|---|
-| Claude Code | Sonnet/Haiku/Opus 映射中的全部模型 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 与 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`；多映射取保守安全值 |
-| Codex | 选中模型 | `model_context_window`、`model_auto_compact_token_limit`，并固定 `wire_api = "responses"` |
-| OpenCode | 选中模型 | context 与 output 都存在时，生成完整 `limit` 和顶层 `compaction: { "auto": true, "reserved": ... }` |
+| Claude Code | Anthropic 代理通道的 Sonnet/Haiku/Opus 映射 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 与 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`；多映射取保守安全值 |
+| Codex | OpenAI 代理通道的选中模型 | `model_context_window`、`model_auto_compact_token_limit`，并固定 `wire_api = "responses"` |
+| OpenCode | Anthropic 或 OpenAI 代理通道的选中模型 | context 与 output 都存在时，生成完整 `limit` 和顶层 `compaction: { "auto": true, "reserved": ... }` |
 
-Codex 可能将较大的窗口限制到自身目录上限；生成器只能提示，不能保证客户端最终采用的
+生成器按代理通道协议隐藏不兼容 Agent，不执行 Anthropic 与 OpenAI 协议转换。需要同时
+支持 Claude Code 和 Codex 时，应分别创建 Anthropic 与 OpenAI 代理通道。Codex 可能将
+较大的窗口限制到自身目录上限；生成器只能提示，不能保证客户端最终采用的
 数值。[OpenCode 当前 stable schema](https://opencode.ai/config.json) 和
 [V1 runtime schema](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/v1/config/provider.ts)
 都要求 `limit` 同时包含数字 `context` 与 `output`。因此 context-only 模型仍生成基础

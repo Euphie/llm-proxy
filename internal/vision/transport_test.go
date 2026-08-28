@@ -61,6 +61,54 @@ func TestShadowTarget(t *testing.T) {
 	}
 }
 
+func TestShadowRequestURI(t *testing.T) {
+	tests := []struct {
+		name      string
+		main      string
+		transport profile.VisionTransport
+		want      string
+		wantErr   bool
+	}{
+		{
+			name: "messages with query", main: "/v1/messages?beta=1",
+			transport: profile.VisionTransportAnthropicMessages,
+			want:      "/v1/messages?beta=1",
+		},
+		{
+			name: "responses", main: "/v1/responses",
+			transport: profile.VisionTransportOpenAIResponses,
+			want:      "/v1/responses",
+		},
+		{
+			name: "chat", main: "/v1/responses?trace=1",
+			transport: profile.VisionTransportOpenAIChatCompletions,
+			want:      "/v1/chat/completions?trace=1",
+		},
+		{
+			name: "absolute URL", main: "https://example.test/v1/messages",
+			transport: profile.VisionTransportAnthropicMessages,
+			wantErr:   true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := shadowRequestURI(test.main, test.transport)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("request URI=%q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIVisionClientUsesChatCompletionsTransport(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

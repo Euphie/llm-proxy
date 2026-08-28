@@ -251,7 +251,7 @@ test("bootstrap keeps must-change users on the narrow password screen", async (t
   assert.equal(descendants(root).some((element) => element.tagName === "NAV"), false);
 });
 
-test("authenticated bootstrap renders only the fixed navigation and Profiles placeholder", async (t) => {
+test("authenticated bootstrap renders only the fixed navigation and channel placeholder", async (t) => {
   const root = installFakeDOM(t);
   const bootstrap = await loadBootstrap();
 
@@ -265,16 +265,35 @@ test("authenticated bootstrap renders only the fixed navigation and Profiles pla
     },
   });
 
-  assert.deepEqual(navigationTexts(root), ["Profiles", "统计", "系统", "退出"]);
+  assert.deepEqual(navigationTexts(root), [
+    "代理通道",
+    "供应商管理",
+    "网关管理",
+    "秘钥管理",
+    "用量统计",
+    "系统设置",
+    "退出",
+  ]);
+  assert.ok(findText(root, "聚合网关"));
   assert.equal(elementsByClass(root, "desktop-stage").length, 1);
   assert.equal(elementsByClass(root, "app-window").length, 1);
   assert.equal(elementsByClass(root, "window-control").length, 3);
+  assert.equal(elementsByClass(root, "window-title")[0].textContent, "");
   assert.equal(
     elementsByClass(root, "window-controls")[0].getAttribute("aria-hidden"),
     "true",
   );
   assert.equal(elementsByClass(root, "app-sidebar").length, 1);
-  assert.equal(findHeading(root, "Profiles").tagName, "H1");
+  assert.equal(elementsByClass(root, "app-brand-mark")[0].textContent, "LP");
+  assert.equal(
+    elementsByClass(root, "app-brand-name")[0].textContent,
+    "LLM Proxy",
+  );
+  assert.equal(
+    elementsByClass(root, "app-brand-meta")[0].textContent,
+    "管理控制台",
+  );
+  assert.equal(findHeading(root, "代理通道").tagName, "H1");
 });
 
 test("successful login enters only the mandatory password-change screen", async (t) => {
@@ -306,7 +325,7 @@ test("successful login enters only the mandatory password-change screen", async 
   assert.equal(descendants(root).some((element) => element.tagName === "NAV"), false);
 });
 
-test("password success refreshes the rotated Session before entering Profiles", async (t) => {
+test("password success refreshes the rotated Session before entering channels", async (t) => {
   const root = installFakeDOM(t);
   const bootstrap = await loadBootstrap();
   const calls = [];
@@ -338,7 +357,15 @@ test("password success refreshes the rotated Session before entering Profiles", 
     ["change", "admin", "安全密码一二三四五六七八"],
     "session",
   ]);
-  assert.deepEqual(navigationTexts(root), ["Profiles", "统计", "系统", "退出"]);
+  assert.deepEqual(navigationTexts(root), [
+    "代理通道",
+    "供应商管理",
+    "网关管理",
+    "秘钥管理",
+    "用量统计",
+    "系统设置",
+    "退出",
+  ]);
 });
 
 test("a 401 during password change clears the form and returns to login", async (t) => {

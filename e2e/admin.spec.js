@@ -12,6 +12,18 @@ const upstream = http.createServer((request, response) => {
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     upstreamRequests.push({ path: request.url, body });
     response.setHeader("content-type", "application/json");
+    if (request.url === "/v1/chat/completions") {
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: { content: "fixture image description" },
+            },
+          ],
+        }),
+      );
+      return;
+    }
     if (body.stream === false) {
       response.end(
         JSON.stringify({
@@ -49,7 +61,7 @@ test.afterAll(async () => {
   });
 });
 
-test("persists model capabilities and applies them to Agent and vision workflows", async ({
+test("persists channel model capabilities and applies them to Agent and vision workflows", async ({
   page,
   request,
 }) => {
@@ -71,15 +83,17 @@ test("persists model capabilities and applies them to Agent and vision workflows
   await page.getByLabel("确认新密码").fill(password);
   await page.getByRole("button", { name: "保存新密码" }).click();
 
-  await page.getByRole("button", { name: "创建第一个 Profile" }).click();
+  await page.getByRole("button", { name: "创建第一个代理通道" }).click();
   await page.getByLabel("名称").fill("Coding");
   await page.getByLabel("Slug").fill("coding");
   await page.getByLabel("协议").selectOption("anthropic");
-  await page.getByLabel("Upstream").fill(`http://e2e:${upstreamPort}`);
-  const defaultProfile = page.getByLabel("设为默认 Profile");
+  await page
+    .getByLabel("Upstream", { exact: true })
+    .fill(`http://e2e:${upstreamPort}`);
+  const defaultProfile = page.getByLabel("设为默认代理通道");
   await expect(defaultProfile).toBeChecked();
   await expect(defaultProfile).toBeDisabled();
-  await page.getByRole("button", { name: "保存 Profile" }).click();
+  await page.getByRole("button", { name: "保存代理通道" }).click();
 
   await expect(page.getByRole("heading", { name: "Coding" })).toBeVisible();
   await expect(page.getByText("coding", { exact: true })).toBeVisible();
@@ -196,7 +210,7 @@ test("persists model capabilities and applies them to Agent and vision workflows
   await page.getByText("视觉参数", { exact: true }).click();
   await page.getByLabel("识图模型").fill("Kimi-K2.5");
   await page.getByLabel("未收录模型").selectOption("bypass");
-  await page.getByRole("button", { name: "保存 Profile" }).click();
+  await page.getByRole("button", { name: "保存代理通道" }).click();
 
   await page.reload();
   await page.getByRole("button", { name: "编辑" }).click();
@@ -245,10 +259,10 @@ test("persists model capabilities and applies them to Agent and vision workflows
   await expect(generator.getByLabel(/密钥|secret|key/i)).toHaveCount(0);
   await expect(generator).not.toContainText(password);
 
-  await generator.getByRole("button", { name: "返回 Profiles" }).click();
+  await generator.getByRole("button", { name: "返回代理通道" }).click();
   await page.getByRole("button", { name: "编辑" }).click();
   await page.getByLabel("协议").selectOption("openai");
-  await page.getByRole("button", { name: "保存 Profile" }).click();
+  await page.getByRole("button", { name: "保存代理通道" }).click();
   await page.getByRole("button", { name: "生成配置" }).click();
   const openAIGenerator = page.getByRole("dialog");
   await openAIGenerator.getByLabel("Agent").selectOption("opencode-responses");
@@ -300,7 +314,7 @@ test("persists model capabilities and applies them to Agent and vision workflows
     openAIGenerator.getByText('wire_api = "responses"', { exact: false }),
   ).toBeVisible();
   await expect(openAIGenerator).not.toContainText(password);
-  await openAIGenerator.getByRole("button", { name: "返回 Profiles" }).click();
+  await openAIGenerator.getByRole("button", { name: "返回代理通道" }).click();
 
   upstreamRequests.length = 0;
   const nativeVision = await request.post("/coding/v1/responses", {

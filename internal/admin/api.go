@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Euphie/llm-proxy/internal/aggregate"
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/stats"
 )
@@ -22,6 +23,7 @@ const (
 type Dependencies struct {
 	Auth             *AuthService
 	Profiles         *ProfileService
+	Aggregate        *AggregateService
 	Stats            *stats.DB
 	DB               *sql.DB
 	Version          string
@@ -29,11 +31,13 @@ type Dependencies struct {
 	Logger           *slog.Logger
 	ActivateProfiles func(context.Context) error
 	RuntimeReady     func() bool
+	Now              func() time.Time
 }
 
 type API struct {
 	auth             *AuthService
 	profiles         *ProfileService
+	aggregate        *AggregateService
 	stats            *stats.DB
 	db               *sql.DB
 	version          string
@@ -58,6 +62,12 @@ func NewAPI(deps Dependencies) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	aggregateService := deps.Aggregate
+	if aggregateService == nil && deps.DB != nil {
+		registry := aggregate.NewRegistry()
+		aggregateService = NewAggregateService(aggregate.NewStore(deps.DB), registry)
+		_ = aggregateService.Reload(context.Background())
+	}
 	activateProfiles := deps.ActivateProfiles
 	if activateProfiles == nil {
 		activateProfiles = func(context.Context) error { return nil }
@@ -66,9 +76,14 @@ func NewAPI(deps Dependencies) http.Handler {
 	if runtimeReady == nil {
 		runtimeReady = func() bool { return true }
 	}
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
 	api := &API{
 		auth:             deps.Auth,
 		profiles:         deps.Profiles,
+		aggregate:        aggregateService,
 		stats:            deps.Stats,
 		db:               deps.DB,
 		version:          version,
@@ -76,7 +91,7 @@ func NewAPI(deps Dependencies) http.Handler {
 		logger:           logger,
 		activateProfiles: activateProfiles,
 		runtimeReady:     runtimeReady,
-		now:              time.Now,
+		now:              now,
 	}
 
 	mux := http.NewServeMux()
@@ -115,6 +130,14 @@ func (a *API) routes() []apiRoute {
 		{method: http.MethodPost, pattern: "/_admin/api/profiles/{id}/copy", handler: a.copyProfile},
 		{method: http.MethodDelete, pattern: "/_admin/api/profiles/{id}", handler: a.deleteProfile},
 		{method: http.MethodPut, pattern: "/_admin/api/default-profile", handler: a.setDefaultProfile},
+		{method: http.MethodGet, pattern: "/_admin/api/provider-accounts", handler: a.listProviderAccounts},
+		{method: http.MethodPost, pattern: "/_admin/api/provider-accounts", handler: a.createProviderAccount},
+		{method: http.MethodPut, pattern: "/_admin/api/provider-accounts/{id}", handler: a.updateProviderAccount},
+		{method: http.MethodGet, pattern: "/_admin/api/aggregate-gateways", handler: a.listAggregateGateways},
+		{method: http.MethodPost, pattern: "/_admin/api/aggregate-gateways", handler: a.createAggregateGateway},
+		{method: http.MethodPut, pattern: "/_admin/api/aggregate-gateways/{id}", handler: a.updateAggregateGateway},
+		{method: http.MethodGet, pattern: "/_admin/api/aggregate-gateways/{id}/keys", handler: a.listAggregateGatewayKeys},
+		{method: http.MethodPost, pattern: "/_admin/api/aggregate-gateways/{id}/keys", handler: a.createAggregateGatewayKey},
 		{method: http.MethodGet, pattern: "/_admin/api/stats", handler: a.getStats},
 		{method: http.MethodGet, pattern: "/_admin/api/system", handler: a.getSystem},
 	}

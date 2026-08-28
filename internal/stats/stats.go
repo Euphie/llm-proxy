@@ -27,11 +27,17 @@ type DB struct {
 }
 
 type RequestMeta struct {
-	ProfileID   int64
-	ProfileSlug string
-	Protocol    string
-	Kind        string
-	Path        string
+	ProfileID         int64
+	ProfileSlug       string
+	GatewayID         int64
+	GatewaySlug       string
+	IssuedKeyID       int64
+	IssuedKeyName     string
+	IssuedKeyPrefix   string
+	IssuedKeyLastFour string
+	Protocol          string
+	Kind              string
+	Path              string
 }
 
 func New(db *sql.DB) *DB {
@@ -81,16 +87,28 @@ func (s *DB) RecordAsync(meta RequestMeta, data []byte, p Parser) {
 		}
 		_, err := s.db.Exec(
 			`INSERT INTO usage (
-				created_at, profile_id, profile_slug, protocol, request_kind,
+				created_at, profile_id, profile_slug, gateway_id, gateway_slug,
+				issued_key_id, issued_key_name, issued_key_prefix, issued_key_last_four,
+				protocol, request_kind,
 				model, path, input_tokens, output_tokens,
 				cache_read_tokens, cache_creation_tokens
 			) VALUES (
-				?, (SELECT id FROM profiles WHERE id = ?), ?, ?, ?,
+				?, (SELECT id FROM profiles WHERE id = ?), ?,
+				(SELECT id FROM aggregate_gateways WHERE id = ?),
+				COALESCE(NULLIF(?, ''), (SELECT slug FROM aggregate_gateways WHERE id = ?), ''),
+				(SELECT id FROM aggregate_issued_keys WHERE id = ?), ?, ?, ?, ?, ?,
 				?, ?, ?, ?, ?, ?
 			)`,
 			time.Now().UTC().Format(usageTimeFormat),
 			meta.ProfileID,
 			meta.ProfileSlug,
+			meta.GatewayID,
+			meta.GatewaySlug,
+			meta.GatewayID,
+			meta.IssuedKeyID,
+			meta.IssuedKeyName,
+			meta.IssuedKeyPrefix,
+			meta.IssuedKeyLastFour,
 			meta.Protocol,
 			meta.Kind,
 			strings.ToLower(u.Model),

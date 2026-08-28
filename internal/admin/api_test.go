@@ -630,6 +630,128 @@ func TestAPIProfileListIncludesThirtyDayUsageSummaries(t *testing.T) {
 	}
 }
 
+// Break caught: leaking upstream provider secrets through aggregate management APIs
+// or treating issued gateway keys as recoverable credentials after creation.
+func TestAPIAggregateGatewaySecretRedaction(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+
+	provider := fixture.request(t, http.MethodPost, "/_admin/api/provider-accounts",
+		`{
+			"slug":"openai-primary",
+			"display_name":"OpenAI Primary",
+			"enabled":true,
+				"protocol":"openai",
+				"upstream":"https://provider.example",
+				"auth_header":"Authorization",
+				"secret":"Bearer provider-secret",
+				"models":[{
+					"model_id":"provider-gpt-4o",
+					"display_name":"Provider GPT-4o",
+					"enabled":true
+				}]
+			}`, cookies, csrf)
+	if provider.Code != http.StatusCreated {
+		t.Fatalf("provider status=%d body=%s", provider.Code, provider.Body.String())
+	}
+	assertResponseDoesNotContain(t, provider.Body.String(), "provider-secret")
+	var providerBody struct {
+		ID        int64 `json:"id"`
+		HasSecret bool  `json:"has_secret"`
+	}
+	decodeTestJSON(t, provider, &providerBody)
+	if providerBody.ID == 0 || !providerBody.HasSecret {
+		t.Fatalf("provider=%+v", providerBody)
+	}
+
+	providers := fixture.request(t, http.MethodGet, "/_admin/api/provider-accounts", "", cookies, "")
+	if providers.Code != http.StatusOK {
+		t.Fatalf("providers status=%d body=%s", providers.Code, providers.Body.String())
+	}
+	assertResponseDoesNotContain(t, providers.Body.String(), "provider-secret")
+
+	gateway := fixture.request(t, http.MethodPost, "/_admin/api/aggregate-gateways",
+		fmt.Sprintf(`{
+			"slug":"team",
+			"display_name":"Team Gateway",
+			"enabled":true,
+			"protocol":"openai",
+			"routes":[{
+				"public_model":"gpt-4o",
+				"provider_account_id":%d,
+				"provider_model":"provider-gpt-4o",
+				"enabled":true
+			}]
+		}`, providerBody.ID), cookies, csrf)
+	if gateway.Code != http.StatusCreated {
+		t.Fatalf("gateway status=%d body=%s", gateway.Code, gateway.Body.String())
+	}
+	var gatewayBody struct {
+		ID int64 `json:"id"`
+	}
+	decodeTestJSON(t, gateway, &gatewayBody)
+
+	issued := fixture.request(t, http.MethodPost,
+		fmt.Sprintf("/_admin/api/aggregate-gateways/%d/keys", gatewayBody.ID),
+		`{"name":"local","enabled":true}`, cookies, csrf)
+	if issued.Code != http.StatusCreated {
+		t.Fatalf("issued status=%d body=%s", issued.Code, issued.Body.String())
+	}
+	var issuedBody struct {
+		Key      string `json:"key"`
+		Prefix   string `json:"prefix"`
+		LastFour string `json:"last_four"`
+	}
+	decodeTestJSON(t, issued, &issuedBody)
+	if !strings.HasPrefix(issuedBody.Key, "lgp_") ||
+		!strings.HasPrefix(issuedBody.Key, issuedBody.Prefix) ||
+		!strings.HasSuffix(issuedBody.Key, issuedBody.LastFour) {
+		t.Fatalf("issued=%+v", issuedBody)
+	}
+
+	keys := fixture.request(t, http.MethodGet,
+		fmt.Sprintf("/_admin/api/aggregate-gateways/%d/keys", gatewayBody.ID),
+		"", cookies, "")
+	if keys.Code != http.StatusOK {
+		t.Fatalf("keys status=%d body=%s", keys.Code, keys.Body.String())
+	}
+	assertResponseDoesNotContain(t, keys.Body.String(), issuedBody.Key, "provider-secret")
+	if !strings.Contains(keys.Body.String(), issuedBody.Prefix) ||
+		!strings.Contains(keys.Body.String(), issuedBody.LastFour) {
+		t.Fatalf("keys body=%s", keys.Body.String())
+	}
+}
+
+func TestAPIProviderSlugIsUniqueWithinProtocol(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, csrf := fixture.changePassword(t)
+
+	create := func(protocol, displayName, upstream string) *httptest.ResponseRecorder {
+		return fixture.request(t, http.MethodPost, "/_admin/api/provider-accounts",
+			fmt.Sprintf(`{
+				"slug":"primary",
+				"display_name":%q,
+				"enabled":true,
+				"protocol":%q,
+				"upstream":%q,
+				"auth_header":"Authorization",
+				"secret":"provider-secret",
+				"models":[]
+			}`, displayName, protocol, upstream), cookies, csrf)
+	}
+
+	openAI := create("openai", "OpenAI Primary", "https://openai.example")
+	if openAI.Code != http.StatusCreated {
+		t.Fatalf("openai status=%d body=%s", openAI.Code, openAI.Body.String())
+	}
+	anthropic := create("anthropic", "Anthropic Primary", "https://anthropic.example")
+	if anthropic.Code != http.StatusCreated {
+		t.Fatalf("anthropic status=%d body=%s", anthropic.Code, anthropic.Body.String())
+	}
+	duplicate := create("openai", "Duplicate OpenAI", "https://duplicate.example")
+	assertAPIError(t, duplicate, http.StatusConflict, "provider_slug_conflict")
+}
+
 // Break caught: ignoring any supported stats filter or returning unsafe System internals.
 func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 	fixture := newTestAPI(t)
@@ -687,7 +809,7 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"data_dir":             fixture.dataDir,
 		"database_file":        "llm-proxy.db",
 		"database_bytes":       float64(databaseInfo.Size()),
-		"schema_version":       float64(1),
+		"schema_version":       float64(5),
 		"default_profile_id":   float64(first.ID),
 		"password_must_change": false,
 	}
@@ -702,6 +824,56 @@ func TestAPIStatsFiltersAndSystemRedaction(t *testing.T) {
 		"username", "dsn", "environment")
 }
 
+func TestAPIStatsFiltersByGatewayAndIssuedKey(t *testing.T) {
+	fixture := newTestAPI(t)
+	cookies, _ := fixture.changePassword(t)
+	now := fixture.now.UTC().Format(time.RFC3339Nano)
+
+	if _, err := fixture.db.Exec(`
+		INSERT INTO aggregate_gateways (
+			id, slug, display_name, enabled, protocol, created_at, updated_at
+		) VALUES (4, 'team', 'Team Gateway', 1, 'openai', ?, ?)
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.Exec(`
+		INSERT INTO aggregate_issued_keys (
+			id, gateway_id, name, prefix, last_four, token_hash, enabled, created_at, updated_at
+		) VALUES (8, 4, 'local-dev', 'lgp_local', '1234', ?, 1, ?, ?)
+	`, bytes.Repeat([]byte{8}, 32), now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.Exec(`
+		INSERT INTO usage (
+			created_at, profile_id, profile_slug, gateway_id, gateway_slug,
+			issued_key_id, issued_key_name, issued_key_prefix, issued_key_last_four,
+			protocol, request_kind, model, path, input_tokens, output_tokens
+		) VALUES (?, NULL, '', 4, 'team', 8, 'local-dev', 'lgp_local', '1234',
+		          'openai', 'main', 'gpt-5', '/gateways/team/v1/responses', 12, 34)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	response := fixture.request(
+		t,
+		http.MethodGet,
+		"/_admin/api/stats?gateway_id=4&issued_key_id=8",
+		"",
+		cookies,
+		"",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("stats status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body stats.Response
+	decodeTestJSON(t, response, &body)
+	if body.Summary.Requests != 1 || body.Summary.TotalTokens != 46 ||
+		len(body.ByGateway) != 1 || body.ByGateway[0].Key != "team" ||
+		len(body.ByIssuedKey) != 1 || body.ByIssuedKey[0].Key != "local-dev (lgp_local...1234)" {
+		t.Fatalf("stats=%+v", body)
+	}
+}
+
 // Break caught: treating an empty or repeated stats scalar filter as if one valid value was supplied.
 func TestAPIStatsRejectsEmptyAndRepeatedScalarFilters(t *testing.T) {
 	fixture := newTestAPI(t)
@@ -711,6 +883,8 @@ func TestAPIStatsRejectsEmptyAndRepeatedScalarFilters(t *testing.T) {
 		value string
 	}{
 		{name: "profile_id", value: "1"},
+		{name: "gateway_id", value: "1"},
+		{name: "issued_key_id", value: "1"},
 		{name: "protocol", value: "anthropic"},
 		{name: "model", value: "sonnet"},
 		{name: "kind", value: "main"},
@@ -1003,13 +1177,14 @@ func newTestAPIWithActivation(
 	logs := &bytes.Buffer{}
 	handler := NewAPI(Dependencies{
 		Auth:             auth,
-		Profiles:         NewProfileService(store, coordinator),
+		Profiles:         NewProfileService(store, coordinator, nil),
 		Stats:            stats.New(db),
 		DB:               db,
 		Version:          "test-version",
 		DataDir:          dataDir,
 		Logger:           slog.New(slog.NewTextHandler(logs, nil)),
 		ActivateProfiles: activateProfiles,
+		Now:              func() time.Time { return now },
 	})
 	return &apiTestFixture{
 		handler: handler,

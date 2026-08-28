@@ -197,6 +197,23 @@ test("OpenAI draft preserves vision and defaults to Chat Completions", () => {
   assert.equal(payload.config.vision.transport, "openai_chat_completions");
 });
 
+test("payload encodes aggregate gateway upstream references", () => {
+  const draft = defaultProfileDraft("anthropic");
+  draft.slug = "coding";
+  draft.display_name = "Coding";
+  draft.config.protocol = "openai";
+  draft.config.upstream_type = "aggregate_gateway";
+  draft.config.upstream_gateway_id = "42";
+  draft.config.upstream = "https://stale.example";
+
+  const payload = profilePayload(draft);
+
+  assert.equal(payload.config.protocol, "openai");
+  assert.equal(payload.config.upstream_type, "aggregate_gateway");
+  assert.equal(payload.config.upstream_gateway_id, 42);
+  assert.equal(payload.config.upstream, "");
+});
+
 test("payload preserves every configured field with numeric JSON types and retry order", () => {
   const draft = defaultProfileDraft("anthropic");
   draft.slug = "coding";
@@ -240,7 +257,9 @@ test("payload preserves every configured field with numeric JSON types and retry
     config: {
       version: 1,
       protocol: "anthropic",
+      upstream_type: "url",
       upstream: "https://upstream.example",
+      upstream_gateway_id: 0,
       models: [],
       vision: {
         enabled: true,
@@ -400,8 +419,8 @@ test("empty Profile list exposes only the exact first-create action", async (t) 
   );
 
   assert.ok(findText(root, "代理请求仍不可用"));
-  assert.deepEqual(buttonTexts(root), ["创建第一个 Profile"]);
-  const create = buttonByText(root, "创建第一个 Profile");
+  assert.deepEqual(buttonTexts(root), ["创建第一个代理通道"]);
+  const create = buttonByText(root, "创建第一个代理通道");
   assert.ok(create.className.includes("button"));
   await create.dispatch("click");
   assert.equal(creates, 1);
@@ -486,7 +505,7 @@ test("Profile generator opens as a dialog and returns to the unchanged list", as
   const dialog = openDialog(root);
   assert.ok(findText(dialog, "全局 ~/.claude/settings.json"));
 
-  await buttonByText(dialog, "返回 Profiles").dispatch("click");
+  await buttonByText(dialog, "返回代理通道").dispatch("click");
   assert.equal(findAllTags(root, "DIALOG").length, 0);
   assert.ok(profileCard(root, "primary"));
 });
@@ -527,12 +546,13 @@ test("editor renders exact accessible labels and sections and submits every conf
     "名称",
     "Slug",
     "协议",
+    "Upstream 类型",
     "Upstream",
-    "设为默认 Profile",
+    "设为默认代理通道",
   ]) {
     assert.ok(labelTexts(root).includes(exactLabel), exactLabel);
   }
-  assert.equal(buttonByText(root, "保存 Profile").type, "submit");
+  assert.equal(buttonByText(root, "保存代理通道").type, "submit");
   assert.ok(findAllTags(root, "DETAILS").length > 0);
   assert.equal(controlByName(root, "vision_max_tokens").type, "number");
   assert.equal(controlByName(root, "vision_max_concurrency").type, "number");
@@ -549,7 +569,7 @@ test("editor renders exact accessible labels and sections and submits every conf
   assert.equal(controlByName(root, "vision_prompt").value, "Original prompt");
   assert.match(
     fieldDescription(root, controlByName(root, "slug")),
-    /Profile URL/,
+    /代理通道 URL/,
   );
   assert.match(
     fieldDescription(root, controlByName(root, "upstream")),
@@ -575,7 +595,7 @@ test("editor renders exact accessible labels and sections and submits every conf
   const slug = controlByName(root, "slug");
   slug.value = "primary-renamed";
   await slug.dispatch("input");
-  const warning = findText(root, "修改 slug 会改变 Agent 使用的 Profile URL。");
+  const warning = findText(root, "修改 slug 会改变 Agent 使用的代理通道 URL。");
   assert.equal(warning.hidden, false);
 
   controlByName(root, "vision_max_tokens").value = "8192";
@@ -584,6 +604,7 @@ test("editor renders exact accessible labels and sections and submits every conf
 
   assert.equal(saves.length, 1);
   assert.equal(saves[0].slug, "primary-renamed");
+  assert.equal(saves[0].config.upstream_type, "url");
   assert.equal(saves[0].config.vision.max_tokens, 8192);
   assert.equal(
     saves[0].config.vision.unlisted_model_policy,
@@ -595,6 +616,67 @@ test("editor renders exact accessible labels and sections and submits every conf
 
   await buttonByText(root, "生成配置").dispatch("click");
   assert.deepEqual(generated, ["primary-renamed"]);
+});
+
+test("editor selects an aggregate gateway and inherits protocol and model routes", async (t) => {
+  const root = installFakeDOM(t);
+  const saves = [];
+  const draft = defaultProfileDraft("anthropic");
+  draft.slug = "coding";
+  draft.display_name = "Coding";
+  draft.config.vision.enabled = true;
+  const gateways = [
+    {
+      id: 42,
+      display_name: "Team Gateway",
+      slug: "team",
+      enabled: true,
+      protocol: "openai",
+      routes: [
+        { public_model: "gpt-4o", enabled: true },
+        { public_model: "gpt-4o", enabled: true },
+        { public_model: "o4-mini", enabled: false },
+      ],
+    },
+  ];
+
+  renderProfileEditor(root, draft, {
+    aggregateGateways: gateways,
+    save: async (payload) => saves.push(payload),
+  });
+
+  assert.equal(controlByName(root, "upstream").parentNode.hidden, false);
+  assert.equal(controlByName(root, "upstream_gateway_id").parentNode.hidden, true);
+
+  const upstreamType = controlByName(root, "upstream_type");
+  upstreamType.value = "aggregate_gateway";
+  await upstreamType.dispatch("change");
+
+  assert.equal(controlByName(root, "upstream").disabled, true);
+  assert.equal(controlByName(root, "upstream").required, false);
+  assert.equal(controlByName(root, "upstream").parentNode.hidden, true);
+  assert.equal(controlByName(root, "upstream_gateway_id").parentNode.hidden, false);
+  assert.equal(controlByName(root, "upstream_gateway_id").value, "42");
+  assert.equal(controlByName(root, "protocol").value, "openai");
+  assert.equal(controlByName(root, "protocol").disabled, true);
+  assert.equal(controlByName(root, "vision_enabled").checked, true);
+  assert.equal(controlByName(root, "vision_enabled").disabled, false);
+  assert.deepEqual(
+    controls(root)
+      .filter((control) => control.name?.match(/^model-\d+-id$/))
+      .map((control) => control.value),
+    ["gpt-4o"],
+  );
+
+  await findTag(root, "FORM").dispatch("submit");
+
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].config.upstream_type, "aggregate_gateway");
+  assert.equal(saves[0].config.upstream_gateway_id, 42);
+  assert.equal(saves[0].config.upstream, "");
+  assert.equal(saves[0].config.protocol, "openai");
+  assert.equal(saves[0].config.vision.enabled, true);
+  assert.deepEqual(saves[0].config.models.map((model) => model.id), ["gpt-4o"]);
 });
 
 test("model editor rows add and remove in Profile order with explicit token and vision controls", async (t) => {
@@ -776,7 +858,7 @@ test("compatibility aliases retain the exact entered ID when change auto-applies
   assert.equal(controlByField(row, "supports_vision").value, "false");
 });
 
-test("initial render shows an exact recommendation without filling saved blank fields", (t) => {
+test("initial exact recommendation keeps saved blanks and exposes an apply action", async (t) => {
   const root = installFakeDOM(t);
   const draft = defaultProfileDraft();
   draft.config.models = [{
@@ -798,6 +880,12 @@ test("initial render shows an exact recommendation without filling saved blank f
   assert.equal(controlByField(row, "supports_vision").value, "");
   assert.ok(findText(row, "GLM-5.2"));
   assert.ok(findText(row, "精确匹配"));
+
+  await buttonByText(row, "应用 GLM-5.2 推荐值").dispatch("click");
+  assert.equal(controlByField(row, "context_window").value, "1000000");
+  assert.equal(controlByField(row, "max_output_tokens").value, "131072");
+  assert.equal(controlByField(row, "supports_vision").value, "false");
+  assert.equal(buttonsByText(row, "应用 GLM-5.2 推荐值").length, 0);
 });
 
 test("switching exact models preserves manually edited fields and replaces still-owned values", async (t) => {
@@ -1484,7 +1572,7 @@ test("delete dialog blocks the only Profile and requires an enabled replacement 
     replacement.children.map((option) => option.value),
     ["", "2"],
   );
-  const submit = buttonByText(dialog, "删除 Profile");
+  const submit = buttonByText(dialog, "删除代理通道");
   assert.equal(submit.disabled, true);
   replacement.value = "2";
   await replacement.dispatch("change");
@@ -1512,7 +1600,7 @@ test("authenticated app creates a Profile only through the injected API client",
   };
 
   await bootstrap({ root, client });
-  await buttonByText(root, "创建第一个 Profile").dispatch("click");
+  await buttonByText(root, "创建第一个代理通道").dispatch("click");
   assert.equal(controlByName(root, "enabled").checked, true);
   assert.equal(controlByName(root, "enabled").disabled, true);
   controlByName(root, "display_name").value = "New Profile";

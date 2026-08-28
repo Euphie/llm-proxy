@@ -1,5 +1,7 @@
 const filterNames = [
   "profile_id",
+  "gateway_id",
+  "issued_key_id",
   "protocol",
   "model",
   "kind",
@@ -38,8 +40,16 @@ export function kindLabel(kind) {
 
 export async function renderStatsPage(
   root,
-  { profiles = [], loadStats, onUnauthorized = () => {} },
+  {
+    profiles = [],
+    gateways = [],
+    loadGatewayKeys = async () => ({ keys: [] }),
+    loadStats,
+    onUnauthorized = () => {},
+  },
 ) {
+  profiles = Array.isArray(profiles) ? profiles : [];
+  gateways = Array.isArray(gateways) ? gateways : [];
   const page = element("div", "stack stats-page");
   const form = element("form", "card stats-filters");
   const fields = element("div", "form-grid");
@@ -50,6 +60,17 @@ export async function renderStatsPage(
       `${item.display_name} (${item.slug})`,
     ]),
   ]);
+  const gateway = fieldSelect(fields, "聚合网关", "gateway_id", [
+    ["", "全部网关"],
+    ...gateways.map((item) => [
+      String(item.id),
+      `${item.display_name} (${item.slug})`,
+    ]),
+  ]);
+  const issuedKey = fieldSelect(fields, "调用方秘钥", "issued_key_id", [
+    ["", "请先选择网关"],
+  ]);
+  issuedKey.disabled = true;
   const protocol = fieldSelect(fields, "协议", "protocol", [
     ["", "全部协议"],
     ["anthropic", "Anthropic"],
@@ -63,7 +84,7 @@ export async function renderStatsPage(
   ]);
   const from = fieldInput(fields, "开始时间", "from", "datetime-local");
   const to = fieldInput(fields, "结束时间", "to", "datetime-local");
-  const submit = textElement("button", "应用筛选");
+  const submit = textElement("button", "查询");
   submit.type = "submit";
   submit.className = "button";
   form.append(fields, submit);
@@ -71,6 +92,41 @@ export async function renderStatsPage(
   const output = element("div", "stack stats-output");
   page.append(form, output);
   root.replaceChildren(page);
+
+  let keyLoadGeneration = 0;
+  gateway.addEventListener("change", async () => {
+    const generation = ++keyLoadGeneration;
+    issuedKey.disabled = true;
+    if (gateway.value === "") {
+      setSelectChoices(issuedKey, [["", "请先选择网关"]]);
+      return;
+    }
+    setSelectChoices(issuedKey, [["", "正在加载秘钥…"]]);
+    try {
+      const response = await loadGatewayKeys(Number(gateway.value));
+      if (generation !== keyLoadGeneration) {
+        return;
+      }
+      setSelectChoices(issuedKey, [
+        ["", "全部秘钥"],
+        ...(response?.keys || []).map((item) => [
+          String(item.id),
+          issuedKeyLabel(item),
+        ]),
+      ]);
+      issuedKey.disabled = false;
+    } catch (error) {
+      if (generation !== keyLoadGeneration) {
+        return;
+      }
+      if (error?.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      setSelectChoices(issuedKey, [["", "秘钥加载失败"]]);
+      output.replaceChildren(alertMessage(error?.message || "秘钥加载失败，请重试。"));
+    }
+  });
 
   async function refresh(filters) {
     output.replaceChildren(statusMessage("正在加载统计数据…"));
@@ -95,6 +151,8 @@ export async function renderStatsPage(
       await refresh(
         normalizeFilters({
           profile_id: profile.value,
+          gateway_id: gateway.value,
+          issued_key_id: issuedKey.value,
           protocol: protocol.value,
           model: model.value,
           kind: kind.value,
@@ -129,12 +187,165 @@ function renderStatsResponse(root, response) {
   const children = [cards];
   if (Number(summary.requests ?? 0) === 0) {
     children.push(statusMessage("暂无统计数据。"));
+    root.replaceChildren(...children);
+    return;
   }
-  children.push(
-    usageTable("按日期", "日期", response?.by_day || []),
-    usageTable("按模型", "模型", response?.by_model || []),
-  );
+  const charts = element("div", "stats-chart-grid");
+  const chartSections = [
+    usageTrendChart(response?.by_day || []),
+    usageBreakdownChart("网关 Token 构成", response?.by_gateway || [], "网关"),
+    usageBreakdownChart("秘钥 Token 构成", response?.by_issued_key || [], "秘钥"),
+  ].filter(Boolean);
+  if (chartSections.length > 0) {
+    charts.append(...chartSections);
+    children.push(charts);
+  }
+  const details = usageDetails(response);
+  if (details) {
+    children.push(details);
+  }
   root.replaceChildren(...children);
+}
+
+function usageTrendChart(rows) {
+  if (rows.length === 0) {
+    return null;
+  }
+  const section = element("section", "card stats-chart-card");
+  section.append(textElement("h2", "每日 Token 趋势"));
+
+  const legend = element("div", "stats-chart-legend");
+  legend.append(
+    legendItem("stats-legend-input", "输入 Token"),
+    legendItem("stats-legend-output", "输出 Token"),
+  );
+
+  const plot = element("div", "stats-trend-chart");
+  plot.setAttribute("role", "img");
+  plot.setAttribute("aria-label", "按日期展示输入和输出 Token 的堆叠柱状图");
+  const ordered = [...rows].reverse();
+  const maximum = Math.max(...ordered.map(tokenTotal), 1);
+  for (const row of ordered) {
+    const input = Number(row.input_tokens ?? 0);
+    const output = Number(row.output_tokens ?? 0);
+    const column = element("div", "stats-trend-column");
+    column.setAttribute(
+      "aria-label",
+      `${row.key}，输入 ${input}，输出 ${output}，总计 ${tokenTotal(row)}`,
+    );
+    const value = textElement("span", tokenTotal(row));
+    value.className = "stats-trend-value";
+    const bar = element("div", "stats-trend-bar");
+    const outputSegment = element("span", "stats-trend-segment stats-trend-output");
+    outputSegment.setAttribute("style", `height: ${chartPercent(output, maximum)}%`);
+    const inputSegment = element("span", "stats-trend-segment stats-trend-input");
+    inputSegment.setAttribute("style", `height: ${chartPercent(input, maximum)}%`);
+    bar.append(outputSegment, inputSegment);
+    const label = textElement("span", String(row.key).slice(5));
+    label.className = "stats-trend-label";
+    column.append(value, bar, label);
+    plot.append(column);
+  }
+  section.append(legend, plot);
+  return section;
+}
+
+function usageBreakdownChart(title, rows, dimension) {
+  if (rows.length === 0) {
+    return null;
+  }
+  const section = element("section", "card stats-chart-card");
+  section.append(textElement("h2", title));
+  const list = element("div", "stats-breakdown-chart");
+  list.setAttribute("role", "list");
+  const maximum = Math.max(...rows.map(tokenTotal), 1);
+  for (const row of rows) {
+    const item = element("div", "stats-breakdown-item");
+    item.setAttribute("role", "listitem");
+    item.setAttribute(
+      "aria-label",
+      `${dimension} ${row.key}，Token 总计 ${tokenTotal(row)}`,
+    );
+    const heading = element("div", "stats-breakdown-heading");
+    heading.append(
+      textElement("span", row.key),
+      textElement("strong", tokenTotal(row)),
+    );
+    const track = element("div", "stats-breakdown-track");
+    const fill = element("span", "stats-breakdown-fill");
+    fill.setAttribute("style", `width: ${chartPercent(tokenTotal(row), maximum)}%`);
+    track.append(fill);
+    item.append(heading, track);
+    list.append(item);
+  }
+  section.append(list);
+  return section;
+}
+
+function chartPercent(value, maximum) {
+  const numeric = Number(value ?? 0);
+  if (numeric <= 0) {
+    return 0;
+  }
+  return Math.max(2, (numeric / maximum) * 100);
+}
+
+function legendItem(className, text) {
+  const item = element("span", "stats-chart-legend-item");
+  item.append(element("i", className), textElement("span", text));
+  return item;
+}
+
+function issuedKeyLabel(key) {
+  const name = String(key?.name || "未命名秘钥");
+  const prefix = String(key?.prefix || "");
+  const lastFour = String(key?.last_four || "");
+  return `${name} (${prefix}...${lastFour})`;
+}
+
+function usageDetails(response) {
+  const groups = [
+    { label: "按日期", heading: "日期", rows: response?.by_day || [] },
+    { label: "按模型", heading: "模型", rows: response?.by_model || [] },
+    { label: "按网关", heading: "网关", rows: response?.by_gateway || [] },
+    { label: "按秘钥", heading: "秘钥", rows: response?.by_issued_key || [] },
+  ].filter((group) => group.rows.length > 0);
+  if (groups.length === 0) {
+    return null;
+  }
+
+  const section = element("section", "stats-details");
+  section.append(textElement("h2", "分组明细"));
+  const tabs = element("div", "stats-detail-tabs");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "统计分组");
+  const panel = element("div", "stats-detail-panel");
+  panel.id = "stats-detail-panel";
+  panel.setAttribute("role", "tabpanel");
+  const buttons = groups.map((group) => {
+    const button = textElement("button", group.label);
+    button.type = "button";
+    button.className = "stats-detail-tab";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-controls", panel.id);
+    button.addEventListener("click", () => selectGroup(group));
+    tabs.append(button);
+    return button;
+  });
+
+  function selectGroup(group) {
+    for (let index = 0; index < groups.length; index += 1) {
+      buttons[index].setAttribute(
+        "aria-selected",
+        groups[index] === group ? "true" : "false",
+      );
+    }
+    panel.replaceChildren(usageTable(group.label, group.heading, group.rows));
+  }
+
+  section.append(tabs, panel);
+  selectGroup(groups[0]);
+  return section;
 }
 
 function usageTable(captionText, keyHeading, rows) {
@@ -188,13 +399,18 @@ function fieldInput(parent, labelText, name, type = "text") {
 function fieldSelect(parent, labelText, name, choices) {
   const select = element("select");
   select.name = name;
+  setSelectChoices(select, choices);
+  appendField(parent, labelText, select);
+  return select;
+}
+
+function setSelectChoices(select, choices) {
+  select.replaceChildren();
   for (const [value, label] of choices) {
     const option = textElement("option", label);
     option.value = value;
     select.append(option);
   }
-  appendField(parent, labelText, select);
-  return select;
 }
 
 function appendField(parent, labelText, control) {

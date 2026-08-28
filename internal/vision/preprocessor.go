@@ -95,6 +95,19 @@ type processLoader struct {
 
 func New(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *Preprocessor {
 	client := newVisionClient(cfg, httpClient, sdb)
+	return newPreprocessorWithClient(cfg, client)
+}
+
+func NewWithForwarder(
+	cfg profile.Runtime,
+	forwarder Forwarder,
+	sdb *stats.DB,
+) *Preprocessor {
+	client := newVisionClientWithForwarder(cfg, forwarder, sdb)
+	return newPreprocessorWithClient(cfg, client)
+}
+
+func newPreprocessorWithClient(cfg profile.Runtime, client *visionClient) *Preprocessor {
 	preprocessor := newPreprocessorForProtocol(
 		cfg.Protocol,
 		cfg.Slug,

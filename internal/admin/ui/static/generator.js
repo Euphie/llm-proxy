@@ -496,7 +496,7 @@ export function openConfigurationGenerator(
     `基于 ${String(profile?.display_name ?? slug)} (${slug}) 即时生成；临时输入不会保存。`,
   );
   description.className = "muted";
-  const close = generatorButton("返回 Profiles", "button-secondary");
+  const close = generatorButton("返回代理通道", "button-secondary");
   const header = generatorElement("div", "card-header");
   const titleGroup = generatorElement("div");
   titleGroup.append(heading, description);

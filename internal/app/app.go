@@ -15,6 +15,7 @@ import (
 
 	"github.com/Euphie/llm-proxy/internal/admin"
 	adminui "github.com/Euphie/llm-proxy/internal/admin/ui"
+	"github.com/Euphie/llm-proxy/internal/aggregate"
 	"github.com/Euphie/llm-proxy/internal/database"
 	"github.com/Euphie/llm-proxy/internal/gateway"
 	"github.com/Euphie/llm-proxy/internal/profile"
@@ -60,15 +61,30 @@ func New(options Options) (*App, error) {
 	sessions := admin.NewSessionStore(db, time.Now)
 	profiles := profile.NewStore(db)
 	registry := gateway.NewRegistry()
+	aggregates := aggregate.NewStore(db)
+	aggregateRegistry := aggregate.NewRegistry()
 	client := &http.Client{Timeout: 10 * time.Minute}
+	aggregateForwarder := aggregate.NewForwarder(aggregateRegistry, client, aggregates)
 	build := func(record profile.Record) (http.Handler, error) {
 		runtime, err := record.Resolve()
 		if err != nil {
 			return nil, fmt.Errorf("resolve Profile %q: %w", record.Slug, err)
 		}
+		if runtime.UpstreamType == profile.UpstreamTypeAggregateGateway {
+			return proxy.NewWithUpstream(
+				runtime,
+				client,
+				aggregateProfileUpstream{
+					gatewayID: runtime.UpstreamGatewayID,
+					forwarder: aggregateForwarder,
+				},
+				usage,
+			), nil
+		}
 		return proxy.New(runtime, client, usage), nil
 	}
 	coordinator := gateway.NewCoordinator(profiles, registry, build)
+	aggregateService := admin.NewAggregateService(aggregates, aggregateRegistry)
 
 	account, _, err := accounts.EnsureDefault(context.Background())
 	if err != nil {
@@ -89,6 +105,9 @@ func New(options Options) (*App, error) {
 		}
 	}
 	if !account.MustChangePassword {
+		if err := aggregateService.Reload(context.Background()); err != nil {
+			return fail(fmt.Errorf("publish aggregate gateway snapshot: %w", err))
+		}
 		if err := coordinator.Reload(context.Background()); err != nil {
 			return fail(fmt.Errorf("publish Profile snapshot: %w", err))
 		}
@@ -107,14 +126,21 @@ func New(options Options) (*App, error) {
 		if account.MustChangePassword {
 			return admin.ErrPasswordChangeRequired
 		}
+		if err := aggregateService.Reload(ctx); err != nil {
+			return err
+		}
 		if coordinator.Ready() {
 			return nil
 		}
-		return coordinator.Reload(ctx)
+		if err := coordinator.Reload(ctx); err != nil {
+			return err
+		}
+		return nil
 	}
 	adminAPI := admin.NewAPI(admin.Dependencies{
 		Auth:             auth,
-		Profiles:         admin.NewProfileService(profiles, coordinator),
+		Profiles:         admin.NewProfileService(profiles, coordinator, aggregateService),
+		Aggregate:        aggregateService,
 		Stats:            usage,
 		DB:               db,
 		Version:          options.Version,
@@ -125,6 +151,7 @@ func New(options Options) (*App, error) {
 	handler := routeApplication(
 		adminAPI,
 		adminui.NewHandler(),
+		aggregate.NewRouter(aggregateRegistry, client, aggregates, usage),
 		gateway.NewRouter(registry),
 	)
 
@@ -140,7 +167,22 @@ func New(options Options) (*App, error) {
 	return application, nil
 }
 
-func routeApplication(adminAPI, adminUI, dataPlane http.Handler) http.Handler {
+type aggregateProfileUpstream struct {
+	gatewayID int64
+	forwarder *aggregate.Forwarder
+}
+
+func (u aggregateProfileUpstream) Do(
+	ctx context.Context,
+	method string,
+	requestURI string,
+	headers http.Header,
+	body []byte,
+) (*http.Response, error) {
+	return u.forwarder.Forward(ctx, u.gatewayID, method, requestURI, headers, body)
+}
+
+func routeApplication(adminAPI, adminUI, aggregateDataPlane, profileDataPlane http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rawPath := originalRequestPath(r)
 		decodedPath, err := url.PathUnescape(rawPath)
@@ -159,8 +201,10 @@ func routeApplication(adminAPI, adminUI, dataPlane http.Handler) http.Handler {
 			adminUI.ServeHTTP(w, r)
 		case withinPath(decodedPath, "/_admin"):
 			adminUI.ServeHTTP(w, r)
+		case withinPath(decodedPath, "/gateways"):
+			aggregateDataPlane.ServeHTTP(w, r)
 		default:
-			dataPlane.ServeHTTP(w, r)
+			profileDataPlane.ServeHTTP(w, r)
 		}
 	})
 }

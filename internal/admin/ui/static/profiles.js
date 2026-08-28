@@ -59,7 +59,9 @@ export function defaultProfileDraft(protocol = "anthropic") {
     config: {
       version: 1,
       protocol,
+      upstream_type: "url",
       upstream: "",
+      upstream_gateway_id: 0,
       models: [],
       vision: {
         ...defaultVision,
@@ -73,6 +75,12 @@ export function defaultProfileDraft(protocol = "anthropic") {
 export function profilePayload(draft) {
   const config = draft.config || {};
   const protocol = String(draft.protocol ?? config.protocol ?? "anthropic");
+  const upstreamType = effectiveUpstreamType(
+    draft.upstream_type ?? config.upstream_type,
+  );
+  const upstreamGatewayID = Number(
+    draft.upstream_gateway_id ?? config.upstream_gateway_id ?? 0,
+  );
   const vision = draft.vision || config.vision || {};
   const models = draft.models || config.models || [];
   const rules = draft.overload_rules || config.overload_rules || [];
@@ -91,7 +99,13 @@ export function profilePayload(draft) {
     config: {
       version: Number(draft.version ?? config.version ?? 1),
       protocol,
-      upstream: String(draft.upstream ?? config.upstream ?? ""),
+      upstream_type: upstreamType,
+      upstream: upstreamType === "aggregate_gateway"
+        ? ""
+        : String(draft.upstream ?? config.upstream ?? ""),
+      upstream_gateway_id: upstreamType === "aggregate_gateway"
+        ? upstreamGatewayID
+        : 0,
       models: modelCapabilitiesPayload(models),
       vision: {
         enabled: Boolean(vision.enabled),
@@ -155,6 +169,42 @@ export function moveRetryRule(rules, index, offset) {
   return moved;
 }
 
+function effectiveUpstreamType(value) {
+  return value === "aggregate_gateway" ? "aggregate_gateway" : "url";
+}
+
+function profileUpstreamSummary(profile, aggregateGatewayNames) {
+  const config = profile?.config || {};
+  if (effectiveUpstreamType(config.upstream_type) !== "aggregate_gateway") {
+    return String(config.upstream ?? "");
+  }
+  const id = Number(config.upstream_gateway_id ?? 0);
+  const name = aggregateGatewayNames.get(id) || `#${id}`;
+  return `聚合网关：${name}`;
+}
+
+function aggregateGatewayModels(gateway) {
+  const seen = new Set();
+  const models = [];
+  for (const route of gateway?.routes || []) {
+    if (!route?.enabled) {
+      continue;
+    }
+    const id = String(route.public_model ?? "").trim();
+    if (id === "" || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    models.push({
+      id,
+      context_window: "",
+      max_output_tokens: "",
+      supports_vision: false,
+    });
+  }
+  return models;
+}
+
 export function profileDraft(profile, defaultProfileID = 0) {
   const protocol = String(profile?.config?.protocol ?? "anthropic");
   const draft = defaultProfileDraft(protocol);
@@ -172,7 +222,9 @@ export function profileDraft(profile, defaultProfileID = 0) {
       protocol: String(
         profile?.config?.protocol ?? draft.config.protocol,
       ),
+      upstream_type: effectiveUpstreamType(profile?.config?.upstream_type),
       upstream: String(profile?.config?.upstream ?? ""),
+      upstream_gateway_id: Number(profile?.config?.upstream_gateway_id ?? 0),
       models: (profile?.config?.models || []).map((model) => ({
         ...model,
         id: String(model?.id ?? ""),
@@ -205,16 +257,22 @@ export function profileDraft(profile, defaultProfileID = 0) {
 export function renderProfileList(root, data, actions = {}) {
   const profiles = data?.profiles || [];
   const defaultProfileID = Number(data?.default_profile_id ?? 0);
+  const aggregateGatewayNames = new Map(
+    (data?.aggregate_gateways || []).map((gateway) => [
+      Number(gateway.id),
+      String(gateway.display_name ?? gateway.slug ?? gateway.id),
+    ]),
+  );
 
   if (profiles.length === 0) {
     const empty = element("section", "card empty-state");
-    const heading = textElement("h2", "创建第一个 Profile");
+    const heading = textElement("h2", "创建第一个代理通道");
     const explanation = textElement(
       "p",
-      "创建并启用 Profile 前，代理请求仍不可用。",
+      "创建并启用代理通道前，代理请求仍不可用。",
     );
     explanation.className = "muted";
-    const create = actionButton("创建第一个 Profile", "button");
+    const create = actionButton("创建第一个代理通道", "button");
     create.addEventListener("click", () => actions.create?.());
     empty.append(heading, explanation, create);
     root.replaceChildren(empty);
@@ -228,7 +286,7 @@ export function renderProfileList(root, data, actions = {}) {
     "管理协议、上游地址、视觉增强和容错规则。",
   );
   description.className = "muted";
-  const create = actionButton("新建 Profile", "button");
+  const create = actionButton("新建代理通道", "button");
   create.addEventListener("click", () => actions.create?.());
   heading.append(description, create);
 
@@ -276,7 +334,7 @@ export function renderProfileList(root, data, actions = {}) {
     appendDefinition(
       summary,
       "Upstream",
-      String(profile.config?.upstream ?? ""),
+      profileUpstreamSummary(profile, aggregateGatewayNames),
     );
 
     const usage = profile.usage_30d || {};
@@ -355,6 +413,7 @@ export function renderProfileList(root, data, actions = {}) {
 }
 
 export function renderProfileEditor(root, source, actions = {}) {
+  const aggregateGateways = actions.aggregateGateways || source?.aggregate_gateways || [];
   const working = profileDraft(
     {
       ...source,
@@ -381,7 +440,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   );
   const slug = fieldInput(basicGrid, "Slug", "slug", working.slug, {
     required: true,
-    description: "用于 Profile URL，例如 coding 对应 /coding/v1/…。",
+    description: "用于代理通道 URL，例如 coding 对应 /coding/v1/…。",
   });
   const protocol = fieldSelect(
     basicGrid,
@@ -396,6 +455,19 @@ export function renderProfileEditor(root, source, actions = {}) {
       description: "必须与 Upstream 实际提供的 API 协议一致。",
     },
   );
+  const upstreamType = fieldSelect(
+    basicGrid,
+    "Upstream 类型",
+    "upstream_type",
+    effectiveUpstreamType(working.config.upstream_type),
+    [
+      ["url", "外部 URL"],
+      ["aggregate_gateway", "聚合网关"],
+    ],
+    {
+      description: "外部 URL 直连上游；聚合网关复用后台已配置的上游供应商和模型路由。",
+    },
+  );
   const upstream = fieldInput(
     basicGrid,
     "Upstream",
@@ -405,6 +477,16 @@ export function renderProfileEditor(root, source, actions = {}) {
       required: true,
       type: "url",
       description: "请求转发的基础地址；不要填写调用方密钥或具体接口路径。",
+    },
+  );
+  const upstreamGateway = fieldSelect(
+    basicGrid,
+    "聚合网关",
+    "upstream_gateway_id",
+    working.config.upstream_gateway_id || "",
+    aggregateGatewayChoices(aggregateGateways),
+    {
+      description: "选择后协议和模型 ID 会从该网关的启用路由带入。",
     },
   );
   const version = fieldInput(
@@ -421,20 +503,20 @@ export function renderProfileEditor(root, source, actions = {}) {
   );
   const enabled = checkboxField(
     basicGrid,
-    "启用 Profile",
+    "启用代理通道",
     "enabled",
     {
-      description: "关闭后，该 Profile 的代理地址将不可用。",
+      description: "关闭后，该代理通道的代理地址将不可用。",
     },
   );
   enabled.checked = working.enabled;
   const isCurrentDefault = working.make_default;
   const makeDefault = checkboxField(
     basicGrid,
-    "设为默认 Profile",
+    "设为默认代理通道",
     "make_default",
     {
-      description: "接收不带 slug 的 /v1/… 请求；默认 Profile 必须启用。",
+      description: "接收不带 slug 的 /v1/… 请求；默认代理通道必须启用。",
     },
   );
   makeDefault.checked = working.make_default;
@@ -454,7 +536,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   applyDefaultState();
   const slugWarning = textElement(
     "p",
-    "修改 slug 会改变 Agent 使用的 Profile URL。",
+    "修改 slug 会改变 Agent 使用的代理通道 URL。",
   );
   slugWarning.className = "warning-banner";
   slugWarning.hidden =
@@ -615,6 +697,12 @@ export function renderProfileEditor(root, source, actions = {}) {
         }
       }
 
+      function hasEmptyRecommendedValues(match) {
+        return Object.entries(capabilityControls).some(([field, control]) =>
+          control.value === "" && Object.hasOwn(match.entry, field)
+        );
+      }
+
       function renderRecommendation(match) {
         const card = element(
           "article",
@@ -661,12 +749,17 @@ export function renderProfileEditor(root, source, actions = {}) {
         capabilities.className = "model-recommendation-capabilities";
         card.append(header, provider, details, dates, capabilities);
 
-        if (!match.autoApply) {
+        if (!match.autoApply || hasEmptyRecommendedValues(match)) {
           const apply = actionButton(
             `应用 ${reliableValue(match.entry.name)} 推荐值`,
             "button-secondary",
           );
-          apply.addEventListener("click", () => applyRecommendation(match));
+          apply.addEventListener("click", () => {
+            applyRecommendation(match);
+            if (match.autoApply) {
+              apply.remove();
+            }
+          });
           card.append(apply);
         }
         return card;
@@ -1032,14 +1125,14 @@ export function renderProfileEditor(root, source, actions = {}) {
   const generator = editorSection("配置生成");
   const generatorHelp = textElement(
     "p",
-    "保存前可将当前 Profile 交给配置生成流程。",
+    "保存前可将当前代理通道交给配置生成流程。",
   );
   generatorHelp.className = "muted";
   const generate = actionButton("生成配置", "button-secondary");
   generator.append(generatorHelp, generate);
 
   const footer = element("div", "cluster editor-actions");
-  const save = actionButton("保存 Profile", "button");
+  const save = actionButton("保存代理通道", "button");
   save.type = "submit";
   const cancel = actionButton("返回列表", "button-secondary");
   footer.append(save, cancel);
@@ -1053,7 +1146,14 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.enabled = working.make_default || enabled.checked;
     working.config.version = version.value;
     working.config.protocol = protocol.value;
-    working.config.upstream = upstream.value;
+    working.config.upstream_type = effectiveUpstreamType(upstreamType.value);
+    working.config.upstream = working.config.upstream_type === "aggregate_gateway"
+      ? ""
+      : upstream.value;
+    working.config.upstream_gateway_id =
+      working.config.upstream_type === "aggregate_gateway"
+        ? upstreamGateway.value
+        : 0;
     working.config.vision = {
       enabled: visionEnabled.checked,
       transport: normalizedVisionTransport(
@@ -1073,6 +1173,7 @@ export function renderProfileEditor(root, source, actions = {}) {
 
   function applyProtocolState() {
     const isAnthropic = protocol.value === "anthropic";
+    const usesAggregateGateway = upstreamType.value === "aggregate_gateway";
     const choices = visionTransports[protocol.value] || [];
     const selected = normalizedVisionTransport(
       protocol.value,
@@ -1083,16 +1184,64 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.vision.transport = selected;
     visionControls.hidden = false;
     visionNote.hidden = false;
-    visionNote.textContent = isAnthropic
+    visionNote.textContent = usesAggregateGateway
+      ? "识图请求与主请求都通过所选聚合网关转发；识图模型请填写网关已配置的对外模型。"
+      : isAnthropic
       ? "Anthropic 协议处理 /v1/messages 中的图片内容块。"
       : "OpenAI 主请求处理 Responses input_image；识图接口可选 Responses 或 Chat Completions。";
     visionEnabled.disabled = false;
+  }
+
+  function selectedGateway() {
+    return aggregateGateways.find(
+      (gateway) => Number(gateway.id) === Number(upstreamGateway.value),
+    );
+  }
+
+  function inheritAggregateGateway(gateway) {
+    if (!gateway) {
+      return;
+    }
+    protocol.value = String(gateway.protocol ?? protocol.value);
+    working.config.protocol = protocol.value;
+    working.config.models = aggregateGatewayModels(gateway);
+    modelRecommendationStates = working.config.models.map(() => ({
+      autoValues: {},
+    }));
+    renderModelCapabilities();
+  }
+
+  function applyUpstreamState(inherit = false) {
+    const usesAggregateGateway = upstreamType.value === "aggregate_gateway";
+    upstream.parentNode.hidden = usesAggregateGateway;
+    upstreamGateway.parentNode.hidden = !usesAggregateGateway;
+    upstream.disabled = usesAggregateGateway;
+    upstream.required = !usesAggregateGateway;
+    upstreamGateway.disabled = !usesAggregateGateway || aggregateGateways.length === 0;
+    upstreamGateway.required = usesAggregateGateway;
+    if (usesAggregateGateway) {
+      upstream.value = "";
+      if (!upstreamGateway.value && aggregateGateways.length > 0) {
+        upstreamGateway.value = String(aggregateGateways[0].id);
+      }
+      const gateway = selectedGateway();
+      protocol.disabled = Boolean(gateway);
+      if (inherit) {
+        inheritAggregateGateway(gateway);
+      }
+    } else {
+      protocol.disabled = false;
+    }
+    applyProtocolState();
   }
 
   protocol.addEventListener("change", () => {
     working.config.protocol = protocol.value;
     applyProtocolState();
   });
+  upstreamType.addEventListener("change", () => applyUpstreamState(true));
+  upstreamGateway.addEventListener("change", () => applyUpstreamState(true));
+  applyUpstreamState(false);
   applyProtocolState();
 
   generate.addEventListener("click", async () => {
@@ -1253,7 +1402,7 @@ function recommendedVision(entry) {
 function openCopyDialog(root, profile, actions, pageAlert) {
   const dialog = element("dialog", "profile-dialog");
   const form = element("form", "stack");
-  const heading = textElement("h2", "复制 Profile");
+  const heading = textElement("h2", "复制代理通道");
   heading.id = `copy-profile-${profile.id}-title`;
   dialog.setAttribute("aria-labelledby", heading.id);
   const fields = element("div", "form-grid");
@@ -1271,14 +1420,14 @@ function openCopyDialog(root, profile, actions, pageAlert) {
     `${profile.slug}-copy`,
     {
       required: true,
-      description: "新副本的 Profile URL 标识，保存后不能与现有 Slug 重复。",
+      description: "新副本的代理通道 URL 标识，保存后不能与现有 Slug 重复。",
     },
   );
   const alert = element("div", "error-banner");
   alert.setAttribute("role", "alert");
   alert.hidden = true;
   const controls = element("div", "cluster");
-  const submit = actionButton("复制 Profile", "button");
+  const submit = actionButton("复制代理通道", "button");
   submit.type = "submit";
   const cancel = actionButton("取消", "button-secondary");
   controls.append(submit, cancel);
@@ -1324,12 +1473,12 @@ function openDeleteDialog(
   const isDefault = Number(profile.id) === defaultProfileID;
   const dialog = element("dialog", "profile-dialog");
   const form = element("form", "stack");
-  const heading = textElement("h2", "删除 Profile");
+  const heading = textElement("h2", "删除代理通道");
   heading.id = `delete-profile-${profile.id}-title`;
   dialog.setAttribute("aria-labelledby", heading.id);
   const warning = textElement(
     "p",
-    `确认删除名称为 ${profile.display_name}、slug 为 ${profile.slug} 的 Profile。`,
+    `确认删除名称为 ${profile.display_name}、slug 为 ${profile.slug} 的代理通道。`,
   );
   const alert = element("div", "error-banner");
   alert.setAttribute("role", "alert");
@@ -1349,7 +1498,7 @@ function openDeleteDialog(
       ]);
     replacement = fieldSelect(
       form,
-      "新的默认 Profile",
+      "新的默认代理通道",
       "replacement_default_id",
       "",
       [["", "请选择"], ...replacementOptions],
@@ -1357,7 +1506,7 @@ function openDeleteDialog(
   }
 
   const controls = element("div", "cluster");
-  const submit = actionButton("删除 Profile", "button-danger");
+  const submit = actionButton("删除代理通道", "button-danger");
   submit.type = "submit";
   submit.disabled = isDefault;
   const cancel = actionButton("取消", "button-secondary");
@@ -1486,6 +1635,16 @@ function fieldSelect(
   setSelectChoices(select, choices, value);
   appendField(parent, labelText, select, options.description);
   return select;
+}
+
+function aggregateGatewayChoices(gateways) {
+  if (gateways.length === 0) {
+    return [["", "请先创建聚合网关"]];
+  }
+  return gateways.map((gateway) => [
+    String(gateway.id),
+    `${gateway.display_name} (${gateway.protocol}${gateway.enabled ? "" : "，已停用"})`,
+  ]);
 }
 
 function setSelectChoices(select, choices, value) {

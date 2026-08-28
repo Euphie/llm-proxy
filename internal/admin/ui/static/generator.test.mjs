@@ -809,7 +809,7 @@ test("Anthropic generator exposes exact scopes and temporary placeholder inputs"
   assert.equal(buttonsByText(dialog, "复制").length, 1);
   assert.equal(buttonsByText(dialog, "下载").length, 1);
 
-  await buttonByText(dialog, "返回 Profiles").dispatch("click");
+  await buttonByText(dialog, "返回代理通道").dispatch("click");
   assert.equal(dialog.open, false);
   assert.deepEqual(root.children, [listMarker]);
 });
@@ -1158,7 +1158,7 @@ test("compaction percentage and model suggestions are dialog-local and reset on 
   ]);
   assert.ok(findText(dialog, "Profile-Model"));
 
-  await buttonByText(dialog, "返回 Profiles").dispatch("click");
+  await buttonByText(dialog, "返回代理通道").dispatch("click");
   dialog = openConfigurationGenerator(
     root,
     profile,

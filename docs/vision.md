@@ -1,7 +1,8 @@
 # 图片预处理
 
-当主模型不支持视觉输入时，llm-proxy 可以先调用同一 Profile Upstream 的视觉
-模型生成描述，再以描述替换图片并发送主请求。该流程支持：
+当主模型不支持视觉输入时，llm-proxy 可以先通过当前代理通道 Upstream 调用视觉模型
+生成描述，再以描述替换图片并发送主请求。Upstream 可以是外部 URL，也可以是内部
+聚合网关。该流程支持：
 
 - Anthropic `POST /v1/messages`；
 - OpenAI `POST /responses` 或 `POST /v1/responses`。
@@ -12,14 +13,14 @@
 
 影子请求必须依次通过以下五项：
 
-1. Profile 已启用视觉预处理；
-2. Profile 的识图模型非空；
+1. 代理通道已启用视觉预处理；
+2. 代理通道的识图模型非空；
 3. 请求是支持协议的 `POST` JSON 路由（Anthropic `/v1/messages` 或 OpenAI
    `/responses` 或 `/v1/responses`）；
 4. 主 `model` 的模型能力判定允许增强；
 5. 请求中至少有一个受支持的直接图片块。
 
-第 4 项只查询该 Profile 保存的精确、区分大小写模型 ID：`supports_vision: true`
+第 4 项只查询该代理通道保存的精确、区分大小写模型 ID：`supports_vision: true`
 绕过，`false` 增强；已收录模型始终按该字段判定。缺失 `models` 等于空目录，因此
 所有模型均未收录。缺失或空 `unlisted_model_policy` 只让未收录模型默认 bypass；
 显式设为 `enhance` 时，未收录模型进入增强。
@@ -36,9 +37,9 @@
    `input[]` 消息内容中的直接 `input_image`。
 3. 查询缓存，并并发处理未命中图片。
 4. 按 `vision.transport` 发送非流式影子请求；Responses 影子请求固定设置
-   `store: false`。
+   `store: false`。引用聚合网关时，影子请求按识图模型的对外模型名选择路由。
 5. 按原顺序将图片替换为带固定前缀的 `text` 或 `input_text`。
-6. 使用同一 Profile 的重试与流式代理发送主请求。
+6. 使用同一代理通道的重试与流式代理发送主请求。
 
 任一图片失败时不会发送主请求。无效图片结构返回 `400`；影子请求的网络错误、
 超时、非成功响应或空描述返回 `502`。客户端取消会结束相关工作。
@@ -56,9 +57,9 @@
 
 完整数据流见[架构图](assets/llm-proxy-architecture.svg)。
 
-## Profile 字段
+## 代理通道字段
 
-在 `/_admin/profiles` 编辑 Anthropic 或 OpenAI Profile，展开“视觉参数”：
+在 `/_admin/profiles` 编辑 Anthropic 或 OpenAI 代理通道，展开“视觉参数”：
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
@@ -67,16 +68,16 @@
 | 模型 | `sonnet` | 原样发送给 Upstream 的实际模型名 |
 | 最大 Token | `2048` | 单张图片描述的输出上限；按协议转换为对应请求字段 |
 | 超时 | `2m` | 包含并发排队、请求、重试和读取 |
-| 最大并发 | `4` | 该 Profile 所有请求共享的影子请求上限 |
+| 最大并发 | `4` | 该代理通道所有请求共享的影子请求上限 |
 | 缓存 TTL | `30m` | 成功描述的缓存时间 |
 | 缓存条目上限 | `512` | LRU 容量 |
 | 提示词 | 内置提示词 | 非空时作为基础识图提示词；同消息用户文本仍会用于提取相关视觉证据 |
 
 模型字段不会读取 Agent 配置中的模型映射；应填写 Upstream 实际接受的视觉模型名。
-影子请求复用当前 Profile 的有序重试规则。`store: false` 只约束 Responses 影子
+影子请求复用当前代理通道的有序重试规则。`store: false` 只约束 Responses 影子
 请求，不修改原始主请求的 `store` 选择。
 
-Profile 配置版本仍为 `1`。旧 Profile 缺少 `vision.transport` 时使用协议默认值，
+代理通道配置版本仍为 `1`。旧代理通道缺少 `vision.transport` 时使用协议默认值，
 在控制台编辑并保存一次即可显式写入。主请求协议不会随该选项改变：
 
 - `anthropic_messages`：识图请求使用实际 Messages 主请求目标；
@@ -85,6 +86,20 @@ Profile 配置版本仍为 `1`。旧 Profile 缺少 `vision.transport` 时使用
   `/chat/completions`。
 
 目标从最终主请求 URL 推导，不额外拼接 `/v1`。
+
+### 聚合网关 Upstream
+
+代理通道引用聚合网关时仍完整执行视觉预处理。主请求和视觉影子请求都通过该网关，
+但分别按自己的 `model` 选择供应商路由。因此：
+
+- `vision.model` 必须填写当前网关已启用的对外模型名；
+- 主模型和识图模型可以路由到不同供应商，但协议必须与网关一致；
+- 保存代理通道时会校验识图模型路由，缺失时直接返回明确的校验错误；
+- 网关会移除调用方认证，并为每条路由注入对应供应商 Secret。
+
+直接访问 `/gateways/{slug}/...` 不会经过代理通道，因此不会触发视觉预处理。需要在
+Codex 中使用视觉增强时，应创建 OpenAI 代理通道引用 OpenAI 网关，并确保网关同时开放
+主模型和识图模型；视觉调用接口根据上游能力选择 Chat Completions 或 Responses。
 
 ## 图片来源与请求头
 
@@ -102,11 +117,14 @@ Responses `input_image` 支持完整 URL、base64 data URL 或 `file_id`，并�
 `openai_responses` 支持上述全部来源；`openai_chat_completions` 支持 URL 和
 base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前返回 `400`。
 
-影子请求只按协议白名单透传请求头，不透传任意客户端请求头：
+影子请求只按协议白名单处理请求头，不透传任意客户端请求头：
 
 - 两种协议共同透传 `Authorization` 和 `X-Api-Key`；
 - Anthropic 另透传 `Anthropic-Version`；
 - OpenAI 另透传 `OpenAI-Organization` 和 `OpenAI-Project`。
+
+外部 URL 模式会把上述认证头发送给 Upstream；内部聚合网关模式会在网关层移除调用方
+认证，并替换为路由供应商配置的认证 Header 和 Secret。
 
 影子 HTTP 客户端不跟随重定向。Anthropic 不透传 `Anthropic-Beta`；其 `file_id`
 只适用于无需 Beta 头即可读取文件的兼容 Upstream。OpenAI Responses 影子请求固定
@@ -119,20 +137,21 @@ base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前�
 
 缓存键隔离以下内容：
 
-- Profile、视觉调用接口、视觉模型和实际生成的上下文提示词；
+- 代理通道、视觉调用接口、视觉模型和实际生成的上下文提示词；
 - 图片来源类型和内容；
 - 实际透传的协议相关鉴权/版本请求头。
 
 因此，同一图片搭配不同问题时可以产生不同缓存条目。
 
-`max_concurrency` 是单个 Profile 视觉预处理器的共享上限。`timeout` 从缓存加载
+`max_concurrency` 是单个代理通道视觉预处理器的共享上限。`timeout` 从缓存加载
 操作开始计算，包含等待并发槽、网络请求、重试延迟和响应读取。
 
 ## 统计、日志与安全
 
 每个收到 `2xx` 且带可解析 usage 的影子请求以 `vision` 类型按实际协议和路径单独
 记录 Token；即使响应没有可用描述并导致主请求失败，已产生的用量仍会记录。缓存命中
-不新增记录。关键结构化日志包括：
+不新增记录。该统计也适用于引用聚合网关的代理通道。直接网关请求不会触发视觉预处理，
+但其主请求若返回可解析 usage，仍会按网关和调用方密钥统计。关键结构化日志包括：
 
 - `vision.images.discovered`
 - `vision.image.cache`

@@ -21,30 +21,54 @@ import (
 // automatically retrying when the response matches an overload rule.
 // Pass a non-nil *stats.DB to enable async token usage recording.
 func New(cfg profile.Runtime, client *http.Client, sdb *stats.DB) http.Handler {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return NewWithUpstream(cfg, client, httpUpstream{
+		base:   cfg.Upstream,
+		client: client,
+	}, sdb)
+}
+
+type Upstream interface {
+	Do(ctx context.Context, method, requestURI string, headers http.Header, body []byte) (*http.Response, error)
+}
+
+func NewWithUpstream(
+	cfg profile.Runtime,
+	client *http.Client,
+	upstream Upstream,
+	sdb *stats.DB,
+) http.Handler {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if upstream == nil {
+		upstream = httpUpstream{base: cfg.Upstream, client: client}
+	}
 	var visionPreprocessor *vision.Preprocessor
 	if cfg.Vision.Enabled && strings.TrimSpace(cfg.Vision.Model) != "" {
-		visionPreprocessor = vision.New(cfg, client, sdb)
+		visionPreprocessor = vision.NewWithForwarder(cfg, upstream, sdb)
 	}
 	return &handler{
-		cfg:    cfg,
-		client: client,
-		stats:  sdb,
-		parser: stats.NewParser(string(cfg.Protocol)),
-		vision: visionPreprocessor,
+		cfg:      cfg,
+		upstream: upstream,
+		stats:    sdb,
+		parser:   stats.NewParser(string(cfg.Protocol)),
+		vision:   visionPreprocessor,
 	}
 }
 
 type handler struct {
-	cfg    profile.Runtime
-	client *http.Client
-	stats  *stats.DB
-	parser stats.Parser
-	vision *vision.Preprocessor
+	cfg      profile.Runtime
+	upstream Upstream
+	stats    *stats.DB
+	parser   stats.Parser
+	vision   *vision.Preprocessor
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	label := h.cfg.Slug
-	target := targetURL(h.cfg.Upstream, r.RequestURI)
 	start := time.Now()
 
 	slog.Info("->", "method", r.Method, "path", r.URL.Path)
@@ -57,7 +81,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body.Close()
 
 	if h.vision != nil && shouldPreprocessVision(h.cfg.Protocol, r) {
-		body, err = h.vision.ProcessTarget(r.Context(), r.Header, body, target)
+		body, err = h.vision.ProcessTarget(r.Context(), r.Header, body, r.RequestURI)
 		if err != nil {
 			if r.Context().Err() != nil {
 				return
@@ -93,7 +117,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		resp, err := h.do(r.Context(), r.Method, target, r.Header, body)
+		resp, err := h.do(r.Context(), r.Method, r.RequestURI, r.Header, body)
 		if err != nil {
 			if r.Context().Err() != nil {
 				return
@@ -126,6 +150,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				h.stats.RecordAsync(stats.RequestMeta{
 					ProfileID:   h.cfg.ID,
 					ProfileSlug: label,
+					GatewayID:   h.cfg.UpstreamGatewayID,
 					Protocol:    string(h.cfg.Protocol),
 					Kind:        "main",
 					Path:        r.URL.Path,
@@ -151,7 +176,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Still overloaded after max retries — re-issue one final request to forward the error.
-	resp, err := h.do(r.Context(), r.Method, target, r.Header, body)
+	resp, err := h.do(r.Context(), r.Method, r.RequestURI, r.Header, body)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -189,13 +214,32 @@ func shouldPreprocessVision(protocol profile.Protocol, r *http.Request) bool {
 	return err == nil && mediaType == "application/json"
 }
 
-func (h *handler) do(ctx context.Context, method, url string, headers http.Header, body []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+func (h *handler) do(ctx context.Context, method, requestURI string, headers http.Header, body []byte) (*http.Response, error) {
+	return h.upstream.Do(ctx, method, requestURI, headers, body)
+}
+
+type httpUpstream struct {
+	base   string
+	client *http.Client
+}
+
+func (u httpUpstream) Target(requestURI string) string {
+	return targetURL(u.base, requestURI)
+}
+
+func (u httpUpstream) Do(
+	ctx context.Context,
+	method string,
+	requestURI string,
+	headers http.Header,
+	body []byte,
+) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, u.Target(requestURI), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	copyHeaders(req.Header, headers)
-	return h.client.Do(req)
+	return u.client.Do(req)
 }
 
 // stream writes a successful response to w with SSE-friendly chunked flushing,

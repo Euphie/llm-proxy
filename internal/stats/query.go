@@ -9,12 +9,14 @@ import (
 )
 
 type Filter struct {
-	ProfileID *int64
-	Protocol  string
-	Model     string
-	Kind      string
-	From      time.Time
-	To        time.Time
+	ProfileID   *int64
+	GatewayID   *int64
+	IssuedKeyID *int64
+	Protocol    string
+	Model       string
+	Kind        string
+	From        time.Time
+	To          time.Time
 }
 
 type UsageRow struct {
@@ -28,9 +30,11 @@ type UsageRow struct {
 }
 
 type Response struct {
-	Summary UsageRow   `json:"summary"`
-	ByDay   []UsageRow `json:"by_day"`
-	ByModel []UsageRow `json:"by_model"`
+	Summary     UsageRow   `json:"summary"`
+	ByDay       []UsageRow `json:"by_day"`
+	ByModel     []UsageRow `json:"by_model"`
+	ByGateway   []UsageRow `json:"by_gateway"`
+	ByIssuedKey []UsageRow `json:"by_issued_key"`
 }
 
 type ProfileSummary struct {
@@ -162,6 +166,89 @@ func queryResponse(ctx context.Context, tx queryTx, filter Filter) (Response, er
 	if err := rows.Err(); err != nil {
 		return Response{}, fmt.Errorf("stats: read by-model rows: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return Response{}, fmt.Errorf("stats: close by-model rows: %w", err)
+	}
+
+	rows, err = tx.QueryContext(ctx, `
+		SELECT CASE
+		         WHEN gateway_id IS NULL THEN '非网关流量'
+		         ELSE COALESCE(NULLIF(gateway_slug, ''), '已删除网关')
+		       END AS gateway_label,
+		       COUNT(*) AS requests,
+		       COALESCE(SUM(input_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(cache_read_tokens), 0),
+		       COALESCE(SUM(cache_creation_tokens), 0)
+		FROM usage`+where+`
+		GROUP BY gateway_id, gateway_label
+		ORDER BY SUM(input_tokens + output_tokens) DESC`, args...)
+	if err != nil {
+		return Response{}, fmt.Errorf("stats: by-gateway query: %w", err)
+	}
+	for rows.Next() {
+		var row UsageRow
+		if err := rows.Scan(
+			&row.Key,
+			&row.Requests,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheReadTokens,
+			&row.CacheCreationTokens,
+		); err != nil {
+			rows.Close()
+			return Response{}, fmt.Errorf("stats: scan by-gateway row: %w", err)
+		}
+		row.TotalTokens = row.InputTokens + row.OutputTokens
+		resp.ByGateway = append(resp.ByGateway, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Response{}, fmt.Errorf("stats: read by-gateway rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return Response{}, fmt.Errorf("stats: close by-gateway rows: %w", err)
+	}
+
+	rows, err = tx.QueryContext(ctx, `
+		SELECT CASE
+		         WHEN issued_key_id IS NOT NULL THEN
+		           COALESCE(NULLIF(issued_key_name, ''), '未命名秘钥') ||
+		           ' (' || issued_key_prefix || '...' || issued_key_last_four || ')'
+		         WHEN gateway_id IS NOT NULL THEN
+		           '内部代理通道 (' || COALESCE(NULLIF(gateway_slug, ''), '已删除网关') || ')'
+		         ELSE '非网关流量'
+		       END AS key_label,
+		       COUNT(*) AS requests,
+		       COALESCE(SUM(input_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(cache_read_tokens), 0),
+		       COALESCE(SUM(cache_creation_tokens), 0)
+		FROM usage`+where+`
+		GROUP BY issued_key_id, gateway_id, key_label
+		ORDER BY SUM(input_tokens + output_tokens) DESC`, args...)
+	if err != nil {
+		return Response{}, fmt.Errorf("stats: by-issued-key query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row UsageRow
+		if err := rows.Scan(
+			&row.Key,
+			&row.Requests,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheReadTokens,
+			&row.CacheCreationTokens,
+		); err != nil {
+			return Response{}, fmt.Errorf("stats: scan by-issued-key row: %w", err)
+		}
+		row.TotalTokens = row.InputTokens + row.OutputTokens
+		resp.ByIssuedKey = append(resp.ByIssuedKey, row)
+	}
+	if err := rows.Err(); err != nil {
+		return Response{}, fmt.Errorf("stats: read by-issued-key rows: %w", err)
+	}
 
 	return resp, nil
 }
@@ -210,6 +297,14 @@ func filterPredicates(filter Filter) (string, []any) {
 	if filter.ProfileID != nil {
 		predicates = append(predicates, "profile_id = ?")
 		args = append(args, *filter.ProfileID)
+	}
+	if filter.GatewayID != nil {
+		predicates = append(predicates, "gateway_id = ?")
+		args = append(args, *filter.GatewayID)
+	}
+	if filter.IssuedKeyID != nil {
+		predicates = append(predicates, "issued_key_id = ?")
+		args = append(args, *filter.IssuedKeyID)
 	}
 	if filter.Protocol != "" {
 		predicates = append(predicates, "protocol = ?")

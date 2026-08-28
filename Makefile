@@ -32,6 +32,7 @@ test-ui:
 			internal/admin/ui/static/visual.test.mjs \
 			internal/admin/ui/static/model-catalog.test.mjs \
 			internal/admin/ui/static/auth.test.mjs \
+			internal/admin/ui/static/aggregate-gateways.test.mjs \
 			internal/admin/ui/static/profiles.test.mjs \
 			internal/admin/ui/static/generator.test.mjs \
 			internal/admin/ui/static/stats.test.mjs

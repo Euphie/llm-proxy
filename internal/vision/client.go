@@ -46,6 +46,10 @@ type describer interface {
 	DescribeTarget(context.Context, http.Header, string, imageRef) (string, error)
 }
 
+type Forwarder interface {
+	Do(context.Context, string, string, http.Header, []byte) (*http.Response, error)
+}
+
 type visionClient struct {
 	profileSlug string
 	protocol    profile.Protocol
@@ -57,6 +61,7 @@ type visionClient struct {
 	parse       func([]byte) (string, error)
 	headers     []string
 	recordUsage func(string, []byte)
+	forwarder   Forwarder
 }
 
 func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB) *visionClient {
@@ -68,11 +73,10 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 		cfg.Vision.Transport = profile.DefaultVisionTransport(cfg.Protocol)
 	}
 
-	path := "/v1/messages"
+	path := visionRequestPath(cfg.Protocol)
 	parser := stats.NewParser("anthropic")
 	parse := parseDescription
 	if cfg.Protocol == profile.ProtocolOpenAI {
-		path = "/v1/responses"
 		parser = stats.NewParser("openai")
 		parse = parseResponsesDescription
 	}
@@ -96,6 +100,7 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 			sdb.RecordAsync(stats.RequestMeta{
 				ProfileID:   cfg.ID,
 				ProfileSlug: cfg.Slug,
+				GatewayID:   cfg.UpstreamGatewayID,
 				Protocol:    string(cfg.Protocol),
 				Kind:        "vision",
 				Path:        path,
@@ -103,6 +108,24 @@ func newVisionClient(cfg profile.Runtime, httpClient *http.Client, sdb *stats.DB
 		}
 	}
 	return client
+}
+
+func newVisionClientWithForwarder(
+	cfg profile.Runtime,
+	forwarder Forwarder,
+	sdb *stats.DB,
+) *visionClient {
+	client := newVisionClient(cfg, nil, sdb)
+	client.upstream = visionRequestPath(cfg.Protocol)
+	client.forwarder = forwarder
+	return client
+}
+
+func visionRequestPath(protocol profile.Protocol) string {
+	if protocol == profile.ProtocolOpenAI {
+		return "/v1/responses"
+	}
+	return "/v1/messages"
 }
 
 func effectivePrompt(configured string) string {
@@ -125,7 +148,7 @@ func (c *visionClient) DescribeTarget(
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 
-	target, err := shadowTarget(mainTarget, c.cfg.Transport)
+	target, err := c.shadowTarget(mainTarget)
 	if err != nil {
 		return "", safeClientError{"derive vision target", err}
 	}
@@ -405,17 +428,29 @@ func (c *visionClient) do(
 	target string,
 	body []byte,
 ) (*http.Response, error) {
+	requestHeaders := make(http.Header)
+	for _, name := range c.headers {
+		for _, value := range headers.Values(name) {
+			requestHeaders.Add(name, value)
+		}
+	}
+	requestHeaders.Set("Content-Type", "application/json")
+	if c.forwarder != nil {
+		return c.forwarder.Do(ctx, http.MethodPost, target, requestHeaders, body)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range c.headers {
-		for _, value := range headers.Values(name) {
-			request.Header.Add(name, value)
-		}
-	}
-	request.Header.Set("Content-Type", "application/json")
+	request.Header = requestHeaders
 	return c.httpClient.Do(request)
+}
+
+func (c *visionClient) shadowTarget(mainTarget string) (string, error) {
+	if c.forwarder != nil {
+		return shadowRequestURI(mainTarget, c.cfg.Transport)
+	}
+	return shadowTarget(mainTarget, c.cfg.Transport)
 }
 
 func shadowTarget(mainTarget string, transport profile.VisionTransport) (string, error) {
@@ -426,18 +461,39 @@ func shadowTarget(mainTarget string, transport profile.VisionTransport) (string,
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("main target must be an absolute URL")
 	}
+	if err := applyShadowTransport(parsed, transport); err != nil {
+		return "", err
+	}
+	return parsed.String(), nil
+}
+
+func shadowRequestURI(mainRequestURI string, transport profile.VisionTransport) (string, error) {
+	parsed, err := url.ParseRequestURI(mainRequestURI)
+	if err != nil {
+		return "", fmt.Errorf("parse main request URI: %w", err)
+	}
+	if parsed.IsAbs() || parsed.Host != "" || !strings.HasPrefix(parsed.Path, "/") {
+		return "", fmt.Errorf("main request URI must be an absolute path")
+	}
+	if err := applyShadowTransport(parsed, transport); err != nil {
+		return "", err
+	}
+	return parsed.RequestURI(), nil
+}
+
+func applyShadowTransport(parsed *url.URL, transport profile.VisionTransport) error {
 	switch transport {
 	case profile.VisionTransportAnthropicMessages, profile.VisionTransportOpenAIResponses:
-		return parsed.String(), nil
+		return nil
 	case profile.VisionTransportOpenAIChatCompletions:
 		if !strings.HasSuffix(parsed.Path, "/responses") {
-			return "", fmt.Errorf("main target path must end with %q", "/responses")
+			return fmt.Errorf("main target path must end with %q", "/responses")
 		}
 		parsed.Path = strings.TrimSuffix(parsed.Path, "/responses") + "/chat/completions"
 		parsed.RawPath = ""
-		return parsed.String(), nil
+		return nil
 	default:
-		return "", fmt.Errorf("unsupported vision transport %q", transport)
+		return fmt.Errorf("unsupported vision transport %q", transport)
 	}
 }
 

@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"reflect"
@@ -64,6 +65,66 @@ func TestRecordAsyncStoresProfileMetadata(t *testing.T) {
 		t.Fatalf(
 			"row=%v %q %q %q %q %q %d %d",
 			profileID, slug, protocol, kind, path, model, input, output,
+		)
+	}
+}
+
+func TestRecordAsyncStoresAggregateGatewayAndIssuedKeyMetadata(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO aggregate_gateways (
+			id, slug, display_name, enabled, protocol, created_at, updated_at
+		) VALUES (4, 'team', 'Team', 1, 'openai', ?, ?)
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO aggregate_issued_keys (
+			id, gateway_id, name, prefix, last_four, token_hash, enabled, created_at, updated_at
+		) VALUES (8, 4, 'local-dev', 'lgp_example', '1234', ?, 1, ?, ?)
+	`, make([]byte, 32), now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	store := New(db)
+	done := make(chan struct{}, 1)
+	store.afterWrite = func() { done <- struct{}{} }
+	store.RecordAsync(RequestMeta{
+		GatewayID:         4,
+		GatewaySlug:       "team",
+		IssuedKeyID:       8,
+		IssuedKeyName:     "local-dev",
+		IssuedKeyPrefix:   "lgp_example",
+		IssuedKeyLastFour: "1234",
+		Protocol:          "openai",
+		Kind:              "main",
+		Path:              "/gateways/team/v1/responses",
+	}, []byte(`{"model":"gpt-5","usage":{"input_tokens":12,"output_tokens":34}}`), OpenAIParser{})
+	waitForUsageWrite(t, done)
+
+	var gatewayID, keyID sql.NullInt64
+	var gatewaySlug, keyName, keyPrefix, keyLastFour string
+	if err := db.QueryRow(`
+		SELECT gateway_id, gateway_slug, issued_key_id, issued_key_name,
+		       issued_key_prefix, issued_key_last_four
+		FROM usage
+	`).Scan(
+		&gatewayID, &gatewaySlug, &keyID, &keyName, &keyPrefix, &keyLastFour,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !gatewayID.Valid || gatewayID.Int64 != 4 || gatewaySlug != "team" ||
+		!keyID.Valid || keyID.Int64 != 8 || keyName != "local-dev" ||
+		keyPrefix != "lgp_example" || keyLastFour != "1234" {
+		t.Fatalf(
+			"gateway=%v/%q key=%v/%q/%q/%q",
+			gatewayID, gatewaySlug, keyID, keyName, keyPrefix, keyLastFour,
 		)
 	}
 }
@@ -329,6 +390,98 @@ func TestQueryFiltersUsageAndPreservesAggregates(t *testing.T) {
 	}
 }
 
+func TestQueryFiltersAndGroupsAggregateGatewayAndIssuedKeyUsage(t *testing.T) {
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	createdAt := now.Format(time.RFC3339Nano)
+	for _, gateway := range []struct {
+		id   int64
+		slug string
+	}{
+		{id: 4, slug: "team"},
+		{id: 5, slug: "batch"},
+	} {
+		if _, err := db.Exec(`
+			INSERT INTO aggregate_gateways (
+				id, slug, display_name, enabled, protocol, created_at, updated_at
+			) VALUES (?, ?, ?, 1, 'openai', ?, ?)
+		`, gateway.id, gateway.slug, gateway.slug, createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range []struct {
+		id        int64
+		gatewayID int64
+		name      string
+		prefix    string
+		lastFour  string
+		hashByte  byte
+	}{
+		{id: 8, gatewayID: 4, name: "local-dev", prefix: "lgp_local", lastFour: "1234", hashByte: 8},
+		{id: 9, gatewayID: 5, name: "ci", prefix: "lgp_ci", lastFour: "5678", hashByte: 9},
+	} {
+		if _, err := db.Exec(`
+			INSERT INTO aggregate_issued_keys (
+				id, gateway_id, name, prefix, last_four, token_hash, enabled, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+		`,
+			key.id,
+			key.gatewayID,
+			key.name,
+			key.prefix,
+			key.lastFour,
+			bytes.Repeat([]byte{key.hashByte}, 32),
+			createdAt,
+			createdAt,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertAttributedUsage(t, db, now, 4, "team", 8, "local-dev", "lgp_local", "1234", 10, 20)
+	insertAttributedUsage(t, db, now.Add(time.Second), 4, "team", nil, "", "", "", 5, 7)
+	insertAttributedUsage(t, db, now.Add(2*time.Second), 5, "batch", 9, "ci", "lgp_ci", "5678", 2, 3)
+
+	gatewayID := int64(4)
+	keyID := int64(8)
+	store := New(db)
+	byGateway, err := store.Query(context.Background(), Filter{GatewayID: &gatewayID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byGateway.Summary.Requests != 2 || byGateway.Summary.TotalTokens != 42 {
+		t.Fatalf("gateway summary=%+v", byGateway.Summary)
+	}
+
+	byKey, err := store.Query(context.Background(), Filter{IssuedKeyID: &keyID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byKey.Summary.Requests != 1 || byKey.Summary.TotalTokens != 30 {
+		t.Fatalf("key summary=%+v", byKey.Summary)
+	}
+
+	all, err := store.Query(context.Background(), Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.ByGateway) != 2 ||
+		all.ByGateway[0].Key != "team" || all.ByGateway[0].TotalTokens != 42 ||
+		all.ByGateway[1].Key != "batch" || all.ByGateway[1].TotalTokens != 5 {
+		t.Fatalf("by_gateway=%+v", all.ByGateway)
+	}
+	if len(all.ByIssuedKey) != 3 ||
+		all.ByIssuedKey[0].Key != "local-dev (lgp_local...1234)" || all.ByIssuedKey[0].TotalTokens != 30 ||
+		all.ByIssuedKey[1].Key != "内部代理通道 (team)" || all.ByIssuedKey[1].TotalTokens != 12 ||
+		all.ByIssuedKey[2].Key != "ci (lgp_ci...5678)" || all.ByIssuedKey[2].TotalTokens != 5 {
+		t.Fatalf("by_issued_key=%+v", all.ByIssuedKey)
+	}
+}
+
 func TestQueryBindsFilterValues(t *testing.T) {
 	db, err := database.Open(t.TempDir())
 	if err != nil {
@@ -582,6 +735,38 @@ func insertUsage(
 		output,
 		cacheRead,
 		cacheCreation,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertAttributedUsage(
+	t *testing.T,
+	db *sql.DB,
+	createdAt time.Time,
+	gatewayID any,
+	gatewaySlug string,
+	issuedKeyID any,
+	issuedKeyName, issuedKeyPrefix, issuedKeyLastFour string,
+	input, output int,
+) {
+	t.Helper()
+	if _, err := db.Exec(`
+		INSERT INTO usage (
+			created_at, profile_id, profile_slug, gateway_id, gateway_slug,
+			issued_key_id, issued_key_name, issued_key_prefix, issued_key_last_four,
+			protocol, request_kind, model, path, input_tokens, output_tokens
+		) VALUES (?, NULL, '', ?, ?, ?, ?, ?, ?, 'openai', 'main', 'gpt-5', '/test', ?, ?)
+	`,
+		createdAt.UTC().Format(usageTimeFormat),
+		gatewayID,
+		gatewaySlug,
+		issuedKeyID,
+		issuedKeyName,
+		issuedKeyPrefix,
+		issuedKeyLastFour,
+		input,
+		output,
 	); err != nil {
 		t.Fatal(err)
 	}

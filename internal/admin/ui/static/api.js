@@ -130,6 +130,35 @@ Object.assign(api, {
       method: "PUT",
       body: { profile_id: profileId },
     }),
+  listProviderAccounts: () => request("/_admin/api/provider-accounts"),
+  createProviderAccount: (body) =>
+    request("/_admin/api/provider-accounts", {
+      method: "POST",
+      body,
+    }),
+  updateProviderAccount: (id, body) =>
+    request(`/_admin/api/provider-accounts/${id}`, {
+      method: "PUT",
+      body,
+    }),
+  listAggregateGateways: () => request("/_admin/api/aggregate-gateways"),
+  createAggregateGateway: (body) =>
+    request("/_admin/api/aggregate-gateways", {
+      method: "POST",
+      body,
+    }),
+  updateAggregateGateway: (id, body) =>
+    request(`/_admin/api/aggregate-gateways/${id}`, {
+      method: "PUT",
+      body,
+    }),
+  listAggregateGatewayKeys: (gatewayId) =>
+    request(`/_admin/api/aggregate-gateways/${gatewayId}/keys`),
+  createAggregateGatewayKey: (gatewayId, body) =>
+    request(`/_admin/api/aggregate-gateways/${gatewayId}/keys`, {
+      method: "POST",
+      body,
+    }),
   stats: (params = {}) => {
     const query = new URLSearchParams(
       Object.entries(params)

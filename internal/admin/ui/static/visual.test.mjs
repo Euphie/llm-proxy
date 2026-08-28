@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   PROFILE_ICON_PALETTES,
   profileIconVisual,
   stablePaletteIndex,
 } from "./visual.js";
+
+const staticDir = dirname(fileURLToPath(import.meta.url));
 
 test("stablePaletteIndex normalizes a slug and stays inside the palette", () => {
   const index = stablePaletteIndex("coding");
@@ -36,4 +41,17 @@ test("profileIconVisual falls back safely for an empty Profile", () => {
     className: "profile-icon-blue",
   });
   assert.equal(stablePaletteIndex("", 0), 0);
+});
+
+test("hidden elements stay hidden when components define display styles", () => {
+  const css = readFileSync(join(staticDir, "styles.css"), "utf8");
+
+  assert.match(css, /\[hidden\]\s*{[^}]*display:\s*none\s*!important;/s);
+});
+
+test("two-column form fields stay top-aligned when help text heights differ", () => {
+  const css = readFileSync(join(staticDir, "styles.css"), "utf8");
+
+  assert.match(css, /\.form-grid\s*{[^}]*align-items:\s*start;/s);
+  assert.match(css, /\.form-field label,\s*legend\s*{[^}]*line-height:\s*1\.4;/s);
 });
