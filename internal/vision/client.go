@@ -386,6 +386,21 @@ func (c *visionClient) chatCompletionsRequestBody(image imageRef) ([]byte, error
 }
 
 func (c *visionClient) responsesRequestBody(image imageRef) ([]byte, error) {
+	imageBlock := struct {
+		Type     string `json:"type"`
+		ImageURL string `json:"image_url,omitempty"`
+		FileID   string `json:"file_id,omitempty"`
+		Detail   string `json:"detail,omitempty"`
+	}{
+		Type:     "input_image",
+		ImageURL: image.imageURL,
+		FileID:   image.fileID,
+		Detail:   image.detail,
+	}
+	encodedImage, err := json.Marshal(imageBlock)
+	if err != nil {
+		return nil, err
+	}
 	prompt, err := json.Marshal(struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -416,7 +431,7 @@ func (c *visionClient) responsesRequestBody(image imageRef) ([]byte, error) {
 			Content []json.RawMessage `json:"content"`
 		}{{
 			Role:    "user",
-			Content: []json.RawMessage{image.block, prompt},
+			Content: []json.RawMessage{encodedImage, prompt},
 		}},
 	}
 	return json.Marshal(request)
@@ -483,18 +498,35 @@ func shadowRequestURI(mainRequestURI string, transport profile.VisionTransport) 
 
 func applyShadowTransport(parsed *url.URL, transport profile.VisionTransport) error {
 	switch transport {
-	case profile.VisionTransportAnthropicMessages, profile.VisionTransportOpenAIResponses:
+	case profile.VisionTransportAnthropicMessages:
 		return nil
+	case profile.VisionTransportOpenAIResponses:
+		return replaceOpenAIEndpoint(parsed, "/responses")
 	case profile.VisionTransportOpenAIChatCompletions:
-		if !strings.HasSuffix(parsed.Path, "/responses") {
-			return fmt.Errorf("main target path must end with %q", "/responses")
-		}
-		parsed.Path = strings.TrimSuffix(parsed.Path, "/responses") + "/chat/completions"
-		parsed.RawPath = ""
-		return nil
+		return replaceOpenAIEndpoint(parsed, "/chat/completions")
 	default:
 		return fmt.Errorf("unsupported vision transport %q", transport)
 	}
+}
+
+func replaceOpenAIEndpoint(parsed *url.URL, endpoint string) error {
+	for _, current := range []string{"/chat/completions", "/responses"} {
+		if strings.HasSuffix(parsed.Path, current) {
+			parsed.Path = strings.TrimSuffix(parsed.Path, current) + endpoint
+			parsed.RawPath = ""
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"main target path must end with %q or %q",
+		"/chat/completions",
+		"/responses",
+	)
+}
+
+func isChatCompletionsTarget(target string) bool {
+	parsed, err := url.Parse(target)
+	return err == nil && strings.HasSuffix(parsed.Path, "/chat/completions")
 }
 
 func parseChatCompletionsDescription(body []byte) (string, error) {

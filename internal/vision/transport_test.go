@@ -32,7 +32,17 @@ func TestShadowTarget(t *testing.T) {
 			want:      "https://example.test/v1/responses",
 		},
 		{
-			name: "chat", main: "https://example.test/v1/responses",
+			name: "responses from chat", main: "https://example.test/v1/chat/completions",
+			transport: profile.VisionTransportOpenAIResponses,
+			want:      "https://example.test/v1/responses",
+		},
+		{
+			name: "chat from responses", main: "https://example.test/v1/responses",
+			transport: profile.VisionTransportOpenAIChatCompletions,
+			want:      "https://example.test/v1/chat/completions",
+		},
+		{
+			name: "chat from chat", main: "https://example.test/v1/chat/completions",
 			transport: profile.VisionTransportOpenAIChatCompletions,
 			want:      "https://example.test/v1/chat/completions",
 		},
@@ -80,7 +90,17 @@ func TestShadowRequestURI(t *testing.T) {
 			want:      "/v1/responses",
 		},
 		{
-			name: "chat", main: "/v1/responses?trace=1",
+			name: "responses from chat", main: "/v1/chat/completions?trace=1",
+			transport: profile.VisionTransportOpenAIResponses,
+			want:      "/v1/responses?trace=1",
+		},
+		{
+			name: "chat from responses", main: "/v1/responses?trace=1",
+			transport: profile.VisionTransportOpenAIChatCompletions,
+			want:      "/v1/chat/completions?trace=1",
+		},
+		{
+			name: "chat from chat", main: "/v1/chat/completions?trace=1",
 			transport: profile.VisionTransportOpenAIChatCompletions,
 			want:      "/v1/chat/completions?trace=1",
 		},
@@ -169,6 +189,70 @@ func TestOpenAIVisionClientUsesChatCompletionsTransport(t *testing.T) {
 	}
 }
 
+func TestOpenAIVisionClientUsesResponsesTransportFromChatCompletions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("path=%q", r.URL.Path)
+		}
+		var request struct {
+			Model string `json:"model"`
+			Input []struct {
+				Content []struct {
+					Type     string `json:"type"`
+					ImageURL string `json:"image_url"`
+					Detail   string `json:"detail"`
+				} `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if len(request.Input) != 1 || len(request.Input[0].Content) < 1 {
+			t.Errorf("request=%+v", request)
+			return
+		}
+		image := request.Input[0].Content[0]
+		if request.Model != "vision-model" ||
+			image.Type != "input_image" ||
+			image.ImageURL != "data:image/png;base64,aW1hZ2U=" ||
+			image.Detail != "high" {
+			t.Errorf("request=%+v", request)
+		}
+		_, _ = io.WriteString(w, `{
+			"output":[{"type":"message","content":[{"type":"output_text","text":"responses description"}]}]
+		}`)
+	}))
+	defer server.Close()
+
+	doc, err := parseChatCompletions([]byte(`{
+		"messages":[{"role":"user","content":[{
+			"type":"image_url",
+			"image_url":{"url":"data:image/png;base64,aW1hZ2U=","detail":"high"}
+		}]}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testVisionConfig(server.URL)
+	cfg.Protocol = profile.ProtocolOpenAI
+	cfg.Vision.Transport = profile.VisionTransportOpenAIResponses
+	cfg.Vision.Model = "vision-model"
+	client := newVisionClient(cfg, server.Client(), nil)
+
+	got, err := client.DescribeTarget(
+		context.Background(),
+		nil,
+		server.URL+"/v1/chat/completions",
+		doc.images()[0],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "responses description" {
+		t.Fatalf("description=%q", got)
+	}
+}
+
 func TestChatCompletionsTransportRejectsFileID(t *testing.T) {
 	cfg := testVisionConfig("https://example.test")
 	cfg.Protocol = profile.ProtocolOpenAI
@@ -190,5 +274,45 @@ func TestChatCompletionsTransportRejectsFileID(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "file_id") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestResponsesTransportConvertsChatCompletionsImage(t *testing.T) {
+	doc, err := parseChatCompletions([]byte(`{
+		"messages":[{"role":"user","content":[{
+			"type":"image_url",
+			"image_url":{"url":"data:image/png;base64,aW1hZ2U=","detail":"high"}
+		}]}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testVisionConfig("https://example.test")
+	cfg.Protocol = profile.ProtocolOpenAI
+	cfg.Vision.Transport = profile.VisionTransportOpenAIResponses
+	cfg.Vision.Model = "vision-model"
+	client := newVisionClient(cfg, nil, nil)
+
+	body, err := client.requestBody(doc.images()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Input []struct {
+			Content []struct {
+				Type     string `json:"type"`
+				ImageURL string `json:"image_url"`
+				Detail   string `json:"detail"`
+			} `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	image := request.Input[0].Content[0]
+	if image.Type != "input_image" ||
+		image.ImageURL != "data:image/png;base64,aW1hZ2U=" ||
+		image.Detail != "high" {
+		t.Fatalf("responses image=%+v, body=%s", image, body)
 	}
 }

@@ -25,6 +25,7 @@ const (
 	visionImageBody    = `{"model":"main-model","max_tokens":256,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}},{"type":"text","text":"What is shown?"}]}]}`
 	visionTextBody     = `{"model":"main-model","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}`
 	responsesImageBody = `{"model":"main-model","stream":true,"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="},{"type":"input_text","text":"What is shown?"}]}]}`
+	chatImageBody      = `{"model":"main-model","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"What is shown?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aW1hZ2U=","detail":"high"}}]}]}`
 )
 
 type visionUpstream struct {
@@ -706,6 +707,110 @@ func TestOpenAIVisionChatTransportKeepsResponsesMainRequest(t *testing.T) {
 	}
 }
 
+func TestOpenAIVisionRewritesChatCompletionsImageBeforeMainRequest(t *testing.T) {
+	var visionCalls atomic.Int32
+	var mainCalls atomic.Int32
+	mainBodies := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.Error(w, "wrong path", http.StatusNotFound)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read request", http.StatusInternalServerError)
+			return
+		}
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		switch request.Model {
+		case "vision-model":
+			visionCalls.Add(1)
+			_, _ = io.WriteString(w, `{
+			  "choices":[{"message":{"content":"chat image description"}}],
+			  "usage":{"prompt_tokens":10,"completion_tokens":20}
+			}`)
+		case "main-model":
+			mainCalls.Add(1)
+			mainBodies <- append([]byte(nil), body...)
+			_, _ = io.WriteString(w, `{
+			  "choices":[{"message":{"content":"done"}}],
+			  "usage":{"prompt_tokens":30,"completion_tokens":40}
+			}`)
+		default:
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+		}
+	}))
+	defer upstream.Close()
+
+	runtime := profile.Runtime{
+		Slug:     "test",
+		Protocol: profile.ProtocolOpenAI,
+		Upstream: upstream.URL,
+		Models: profile.ModelCatalog{
+			"main-model": {ID: "main-model", SupportsVision: false},
+		},
+		Vision: profile.VisionRuntime{
+			Enabled:             true,
+			Transport:           profile.VisionTransportOpenAIChatCompletions,
+			Model:               "vision-model",
+			UnlistedModelPolicy: profile.UnlistedModelBypass,
+			MaxTokens:           512,
+			Timeout:             2 * time.Second,
+			MaxConcurrency:      4,
+			CacheTTL:            30 * time.Minute,
+			CacheMaxEntries:     512,
+		},
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions?trace=1",
+		strings.NewReader(chatImageBody),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	New(runtime, upstream.Client(), nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d, body=%q", response.Code, response.Body.String())
+	}
+	if got := visionCalls.Load(); got != 1 {
+		t.Fatalf("vision calls=%d, want 1", got)
+	}
+	if got := mainCalls.Load(); got != 1 {
+		t.Fatalf("main calls=%d, want 1", got)
+	}
+	mainBody := <-mainBodies
+	var rewritten struct {
+		Stream   bool `json:"stream"`
+		Messages []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(mainBody, &rewritten); err != nil {
+		t.Fatal(err)
+	}
+	if !rewritten.Stream {
+		t.Fatal("stream setting was not preserved")
+	}
+	if rewritten.Messages[0].Content[1].Type != "text" ||
+		!strings.Contains(rewritten.Messages[0].Content[1].Text, "chat image description") {
+		t.Fatalf("rewritten content=%+v", rewritten.Messages[0].Content[1])
+	}
+	if bytes.Contains(mainBody, []byte(`"type":"image_url"`)) {
+		t.Fatalf("main body still contains image block: %s", mainBody)
+	}
+}
+
 func TestOpenAIVisionNativeAndUnlistedBypassReachMainUnchanged(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -803,7 +908,8 @@ func TestShouldPreprocessVisionMatchesProtocolEndpoint(t *testing.T) {
 		{name: "anthropic responses", protocol: profile.ProtocolAnthropic, path: "/v1/responses", want: false},
 		{name: "openai responses", protocol: profile.ProtocolOpenAI, path: "/v1/responses", want: true},
 		{name: "openai responses without v1", protocol: profile.ProtocolOpenAI, path: "/responses", want: true},
-		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: false},
+		{name: "openai chat completions", protocol: profile.ProtocolOpenAI, path: "/v1/chat/completions", want: true},
+		{name: "openai chat completions without v1", protocol: profile.ProtocolOpenAI, path: "/chat/completions", want: true},
 		{name: "openai messages", protocol: profile.ProtocolOpenAI, path: "/v1/messages", want: false},
 	}
 	for _, test := range tests {

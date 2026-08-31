@@ -344,6 +344,36 @@ test("persists channel model capabilities and applies them to Agent and vision w
     ),
   ).toHaveLength(1);
 
+  upstreamRequests.length = 0;
+  const chatTextOnly = await request.post("/coding/v1/chat/completions", {
+    headers: { "content-type": "application/json" },
+    data: chatImageRequest("GLM-5"),
+  });
+  expect(chatTextOnly.status()).toBe(200);
+  expect(upstreamRequests).toHaveLength(2);
+  const chatVisionRequest = upstreamRequests.find(
+    (entry) => entry.body.model === "Kimi-K2.5" && entry.body.stream === false,
+  );
+  expect(chatVisionRequest).toBeDefined();
+  expect(chatVisionRequest.body.messages[0].content[0].type).toBe("image_url");
+  const chatMainRequest = upstreamRequests.find(
+    (entry) => entry.body.model === "GLM-5" && entry.body.stream === true,
+  );
+  expect(chatMainRequest).toBeDefined();
+  expect(chatMainRequest.body.messages[0].content).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("fixture image description"),
+      }),
+    ]),
+  );
+  expect(
+    chatMainRequest.body.messages[0].content.some(
+      (block) => block.type === "image_url",
+    ),
+  ).toBe(false);
+
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileLayout = await page
     .locator(".app-window-body")
@@ -381,6 +411,28 @@ function responsesImageRequest(model) {
             type: "input_image",
             image_url: "data:image/png;base64,aGVsbG8=",
             detail: "low",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function chatImageRequest(model) {
+  return {
+    model,
+    stream: true,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is shown?" },
+          {
+            type: "image_url",
+            image_url: {
+              url: "data:image/png;base64,aGVsbG8=",
+              detail: "low",
+            },
           },
         ],
       },

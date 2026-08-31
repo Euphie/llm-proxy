@@ -204,7 +204,8 @@ func shouldPreprocessVision(protocol profile.Protocol, r *http.Request) bool {
 			return false
 		}
 	case profile.ProtocolOpenAI:
-		if path != "/responses" && path != "/v1/responses" {
+		if path != "/responses" && path != "/v1/responses" &&
+			path != "/chat/completions" && path != "/v1/chat/completions" {
 			return false
 		}
 	default:

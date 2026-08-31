@@ -873,11 +873,6 @@ export function renderProfileEditor(root, source, actions = {}) {
   models.append(modelHelp, modelList, modelListActions);
 
   const vision = editorSection("视觉增强");
-  const visionNote = textElement(
-    "p",
-    "",
-  );
-  visionNote.className = "warning-banner";
   const visionControls = element("div", "vision-controls stack");
   const visionEnabled = checkboxField(
     visionControls,
@@ -898,7 +893,7 @@ export function renderProfileEditor(root, source, actions = {}) {
     working.config.vision.transport,
     visionTransports[working.config.protocol] || [],
     {
-      description: "仅控制识图请求；主请求仍使用当前 Profile 协议。",
+      description: "只控制识图模型使用的接口，不改变当前代理通道的协议。",
     },
   );
   const visionModel = fieldInput(
@@ -987,7 +982,7 @@ export function renderProfileEditor(root, source, actions = {}) {
   );
   visionDetails.append(visionSummary, visionGrid);
   visionControls.append(visionDetails);
-  vision.append(visionNote, visionControls);
+  vision.append(visionControls);
 
   const retries = editorSection("容错规则");
   const retryHelp = textElement(
@@ -1173,7 +1168,6 @@ export function renderProfileEditor(root, source, actions = {}) {
 
   function applyProtocolState() {
     const isAnthropic = protocol.value === "anthropic";
-    const usesAggregateGateway = upstreamType.value === "aggregate_gateway";
     const choices = visionTransports[protocol.value] || [];
     const selected = normalizedVisionTransport(
       protocol.value,
@@ -1183,12 +1177,6 @@ export function renderProfileEditor(root, source, actions = {}) {
     visionTransport.disabled = isAnthropic;
     working.config.vision.transport = selected;
     visionControls.hidden = false;
-    visionNote.hidden = false;
-    visionNote.textContent = usesAggregateGateway
-      ? "识图请求与主请求都通过所选聚合网关转发；识图模型请填写网关已配置的对外模型。"
-      : isAnthropic
-      ? "Anthropic 协议处理 /v1/messages 中的图片内容块。"
-      : "OpenAI 主请求处理 Responses input_image；识图接口可选 Responses 或 Chat Completions。";
     visionEnabled.disabled = false;
   }
 

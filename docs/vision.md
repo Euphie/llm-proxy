@@ -5,9 +5,10 @@
 聚合网关。该流程支持：
 
 - Anthropic `POST /v1/messages`；
-- OpenAI `POST /responses` 或 `POST /v1/responses`。
+- OpenAI `POST /responses`、`POST /v1/responses`、`POST /chat/completions` 或
+  `POST /v1/chat/completions`。
 
-其他路径（包括 OpenAI Chat Completions）不会进入图片预处理。
+其他路径不会进入图片预处理。
 
 ## 影子请求门控
 
@@ -15,8 +16,8 @@
 
 1. 代理通道已启用视觉预处理；
 2. 代理通道的识图模型非空；
-3. 请求是支持协议的 `POST` JSON 路由（Anthropic `/v1/messages` 或 OpenAI
-   `/responses` 或 `/v1/responses`）；
+3. 请求是支持协议的 `POST` JSON 路由（Anthropic `/v1/messages`；OpenAI
+   `/responses`、`/v1/responses`、`/chat/completions` 或 `/v1/chat/completions`）；
 4. 主 `model` 的模型能力判定允许增强；
 5. 请求中至少有一个受支持的直接图片块。
 
@@ -33,8 +34,9 @@
 ## 工作流程与失败
 
 1. 接收受支持路径的 JSON 请求。
-2. 收集 Anthropic `messages[].content[]` 中的直接 `image`，或 Responses
-   `input[]` 消息内容中的直接 `input_image`。
+2. 收集 Anthropic `messages[].content[]` 中的直接 `image`、Responses `input[]`
+   消息内容中的直接 `input_image`，或 Chat Completions `messages[].content[]`
+   中的直接 `image_url`。
 3. 查询缓存，并并发处理未命中图片。
 4. 按 `vision.transport` 发送非流式影子请求；Responses 影子请求固定设置
    `store: false`。引用聚合网关时，影子请求按识图模型的对外模型名选择路由。
@@ -46,10 +48,11 @@
 
 ## 问题感知视觉证据
 
-代理只收集与图片处于同一条 `user` 消息的直接文本块：Anthropic `text` 和 Responses
-`input_text`。非字符串、非直接和仅含空白的块会忽略；每块去除首尾空白后按顺序用换行
-拼接，最多保留 4096 个 Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编码
-嵌入影子提示词。其他消息中的文本和工具输出不会作为问题上下文发送给视觉 Upstream。
+代理只收集与图片处于同一条 `user` 消息的直接文本块：Anthropic 和 Chat Completions
+使用 `text`，Responses 使用 `input_text`。非字符串、非直接和仅含空白的块会忽略；每块
+去除首尾空白后按顺序用换行拼接，最多保留 4096 个 Unicode 字符（超出时截断并在上限
+内追加标记），再经 JSON 编码嵌入影子提示词。其他消息中的文本和工具输出不会作为问题
+上下文发送给视觉 Upstream。
 
 该上下文用于让识图模型提取当前问题相关的可见证据，而非代替主模型回答；没有有效上下文
 时仍使用通用图片描述。自定义 `prompt` 是基础识图提示词，不能关闭这些上下文指令。上下文
@@ -81,11 +84,12 @@
 在控制台编辑并保存一次即可显式写入。主请求协议不会随该选项改变：
 
 - `anthropic_messages`：识图请求使用实际 Messages 主请求目标；
-- `openai_responses`：识图请求使用实际 Responses 主请求目标；
-- `openai_chat_completions`：把实际主请求目标末尾的 `/responses` 替换为
-  `/chat/completions`。
+- `openai_responses`：识图请求使用主请求所在 Upstream 的 `/responses` 端点；
+- `openai_chat_completions`：识图请求使用主请求所在 Upstream 的
+  `/chat/completions` 端点。
 
-目标从最终主请求 URL 推导，不额外拼接 `/v1`。
+OpenAI 主请求可以是 Responses 或 Chat Completions，识图接口与主请求格式不必相同；
+代理会在两个端点间转换图片请求体。目标从最终主请求 URL 推导，不额外拼接 `/v1`。
 
 ### 聚合网关 Upstream
 
@@ -113,6 +117,9 @@ Responses `input_image` 支持完整 URL、base64 data URL 或 `file_id`，并�
 `auto`、`low`、`high`、`original` detail 的缓存隔离。只处理直接消息内容中的
 图片，不递归处理 Anthropic `tool_result.content` 或 Responses 工具输出中的嵌套
 内容。
+
+Chat Completions 支持标准 `image_url` 对象中的完整 URL 或 base64 data URL，保留
+`auto`、`low`、`high`、`original` detail 的缓存隔离；不支持 `file_id`。
 
 `openai_responses` 支持上述全部来源；`openai_chat_completions` 支持 URL 和
 base64 data URL，但 `file_id` 没有等价格式，会在调用 Upstream 前返回 `400`。

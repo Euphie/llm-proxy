@@ -14,7 +14,7 @@
 - `v1` 和 `gateways` 是保留路径，不能作为 slug。
 - 名称不能为空；slug 在数据库中唯一。
 - `anthropic` 支持 Anthropic Messages、图片增强和 Anthropic 用量解析。
-- `openai` 支持 OpenAI Chat Completions 与 Responses；图片增强只处理 Responses。
+- `openai` 支持 OpenAI Chat Completions 与 Responses，两种主请求都可使用图片增强。
 
 ## 路由与 Upstream
 
@@ -64,9 +64,11 @@ fragment。末尾斜杠会被规范化，代理通道路由后的请求 URI 追�
 
 ## 视觉设置
 
-视觉增强适用于 Anthropic `POST /v1/messages` 和 OpenAI
-`POST /responses` / `POST /v1/responses`。Chat Completions 可作为 OpenAI
-识图接口，但 Chat Completions 主请求仍保持原样转发。字段和默认值如下：
+视觉增强适用于 Anthropic `POST /v1/messages`，以及 OpenAI
+`POST /responses` / `POST /v1/responses` / `POST /chat/completions` /
+`POST /v1/chat/completions`。OpenAI 主请求格式与识图调用接口独立选择：Responses
+主请求可以调用 Chat Completions 识图，Chat Completions 主请求也可以调用 Responses
+识图。字段和默认值如下：
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
@@ -83,7 +85,8 @@ fragment。末尾斜杠会被规范化，代理通道路由后的请求 URI 追�
 
 配置版本保持 `1`；旧代理通道缺少 `transport` 时按协议补默认值，编辑保存一次即可
 写入。OpenAI Responses 影子请求固定使用 `store: false`。
-代理只收集同一条 `user` 消息的直接 Anthropic `text` 或 Responses `input_text` 块；
+代理只收集同一条 `user` 消息的直接 Anthropic / Chat Completions `text` 或 Responses
+`input_text` 块；
 非字符串、非直接和空白块会忽略。各块经 trim 后按顺序用换行拼接，最多保留 4096 个
 Unicode 字符（超出时截断并在上限内追加标记），再经 JSON 编码嵌入影子提示词。其他消息
 中的文本和工具输出不会作为问题上下文发送。该上下文使视觉 Upstream 返回与当前问题相关

@@ -71,20 +71,21 @@ type requestDocument interface {
 }
 
 type Preprocessor struct {
-	profile             string
-	transport           profile.VisionTransport
-	model               string
-	models              profile.ModelCatalog
-	unlistedModelPolicy profile.UnlistedModelPolicy
-	prompt              string
-	defaultTarget       string
-	parse               func(map[string]json.RawMessage) (requestDocument, error)
-	headers             []string
-	describer           describer
-	cache               *resultCache
-	slots               chan struct{}
-	timeout             time.Duration
-	cacheKey            []byte
+	profile              string
+	transport            profile.VisionTransport
+	model                string
+	models               profile.ModelCatalog
+	unlistedModelPolicy  profile.UnlistedModelPolicy
+	prompt               string
+	defaultTarget        string
+	parse                func(map[string]json.RawMessage) (requestDocument, error)
+	parseChatCompletions func(map[string]json.RawMessage) (requestDocument, error)
+	headers              []string
+	describer            describer
+	cache                *resultCache
+	slots                chan struct{}
+	timeout              time.Duration
+	cacheKey             []byte
 }
 
 type processLoader struct {
@@ -155,7 +156,7 @@ func newPreprocessorForProtocol(
 			return parseResponsesRoot(root)
 		}
 	}
-	return &Preprocessor{
+	preprocessor := &Preprocessor{
 		profile:             profileSlug,
 		transport:           cfg.Transport,
 		model:               cfg.Model,
@@ -171,6 +172,12 @@ func newPreprocessorForProtocol(
 		timeout:             cfg.Timeout,
 		cacheKey:            newCacheKey(),
 	}
+	if protocol == profile.ProtocolOpenAI {
+		preprocessor.parseChatCompletions = func(root map[string]json.RawMessage) (requestDocument, error) {
+			return parseChatCompletionsRoot(root)
+		}
+	}
+	return preprocessor
 }
 
 func newCacheKey() []byte {
@@ -212,7 +219,7 @@ func (p *Preprocessor) ProcessTarget(
 		slog.Debug("vision.skipped", "profile", p.profile, "model", model, "reason", reason)
 		return body, nil
 	}
-	doc, err := p.parse(root)
+	doc, err := p.parseDocument(root, mainTarget)
 	if err != nil {
 		return nil, &processError{
 			status: http.StatusBadRequest,
@@ -360,7 +367,7 @@ func (p *Preprocessor) ProcessTarget(
 			err:    fmt.Errorf("rewrite request: %w", err),
 		}
 	}
-	unhandledImageCount, err := p.countImages(rewritten)
+	unhandledImageCount, err := p.countImages(rewritten, mainTarget)
 	if err != nil {
 		return nil, &processError{
 			status: http.StatusBadGateway,
@@ -389,16 +396,26 @@ func (p *Preprocessor) ProcessTarget(
 	return rewritten, nil
 }
 
-func (p *Preprocessor) countImages(body []byte) (int, error) {
+func (p *Preprocessor) countImages(body []byte, mainTarget string) (int, error) {
 	root, err := parseRequestRoot(body)
 	if err != nil {
 		return 0, err
 	}
-	doc, err := p.parse(root)
+	doc, err := p.parseDocument(root, mainTarget)
 	if err != nil {
 		return 0, err
 	}
 	return len(doc.images()), nil
+}
+
+func (p *Preprocessor) parseDocument(
+	root map[string]json.RawMessage,
+	mainTarget string,
+) (requestDocument, error) {
+	if p.parseChatCompletions != nil && isChatCompletionsTarget(mainTarget) {
+		return p.parseChatCompletions(root)
+	}
+	return p.parse(root)
 }
 
 func (p *Preprocessor) shouldEnhance(model string) (bool, string) {
