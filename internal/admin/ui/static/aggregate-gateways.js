@@ -67,8 +67,10 @@ export function renderAggregateGatewaysPage(
   description.className = "muted";
   heading.append(description);
 
-  const alert = element("div", "error-banner");
-  alert.setAttribute("role", "alert");
+  const alert = element("div", "error-banner error-dialog");
+  alert.setAttribute("role", "alertdialog");
+  alert.setAttribute("aria-modal", "true");
+  alert.setAttribute("aria-label", "操作失败");
   alert.hidden = true;
 
   const activeSection = {
@@ -85,9 +87,6 @@ export function renderAggregateGatewaysPage(
   }[view];
 
   page.append(heading, alert, activeSection());
-  if (options.notice) {
-    page.append(successToast(options.notice));
-  }
   root.replaceChildren(page);
 }
 
@@ -230,11 +229,9 @@ function providerSection(providers, actions, pageAlert) {
   const submit = actionButton("保存供应商", "button");
   submit.type = "submit";
   const cancel = actionButton("取消", "button-secondary");
-  const message = element("div", "success-banner");
-  message.hidden = true;
   const buttons = element("div", "cluster");
   buttons.append(submit, cancel);
-  form.append(fields, modelEditor, message, buttons);
+  form.append(fields, modelEditor, buttons);
   form.hidden = true;
   const resetForm = () => {
     providerID = 0;
@@ -251,12 +248,10 @@ function providerSection(providers, actions, pageAlert) {
   };
   const showForm = () => {
     pageAlert.hidden = true;
-    message.hidden = true;
     form.hidden = false;
   };
   const hideForm = () => {
     resetForm();
-    message.hidden = true;
     form.hidden = true;
   };
   if (providers.length === 0) {
@@ -294,7 +289,7 @@ function providerSection(providers, actions, pageAlert) {
     }
     submit.disabled = true;
     try {
-      await runAction(pageAlert, message, "供应商已保存。", () =>
+      await runAction(pageAlert, () =>
         actions.saveProvider?.(providerAccountPayload({
           slug: slug.value,
           display_name: displayName.value,
@@ -455,11 +450,9 @@ function gatewaySection(providers, gateways, actions, pageAlert, requestedGatewa
   const submit = actionButton("保存网关", "button");
   submit.type = "submit";
   submit.disabled = providerModelsForProtocol().length === 0;
-  const message = element("div", "success-banner");
-  message.hidden = true;
   const buttons = element("div", "cluster");
   buttons.append(submit);
-  form.append(fields, routeEditor, message, buttons);
+  form.append(fields, routeEditor, buttons);
   const resetForm = () => {
     gatewayID = 0;
     slug.value = "";
@@ -514,7 +507,7 @@ function gatewaySection(providers, gateways, actions, pageAlert, requestedGatewa
     }
     submit.disabled = true;
     try {
-      await runAction(pageAlert, message, "网关已保存。", () =>
+      await runAction(pageAlert, () =>
         actions.saveGateway?.(aggregateGatewayPayload({
           slug: slug.value,
           display_name: displayName.value,
@@ -564,12 +557,10 @@ function keySection(gateways, keys, actions, pageAlert) {
   const submit = actionButton("创建调用方 Key", "button");
   submit.type = "submit";
   submit.disabled = gateways.length === 0;
-  const message = element("div", "success-banner");
-  message.hidden = true;
   const cancel = actionButton("取消", "button-secondary");
   const buttons = element("div", "cluster");
   buttons.append(submit, cancel);
-  form.append(fields, message, buttons);
+  form.append(fields, buttons);
   form.hidden = true;
 
   const renderSelectedKeys = () => {
@@ -609,7 +600,6 @@ function keySection(gateways, keys, actions, pageAlert) {
     name.value = "";
     expiresAt.value = "";
     enabled.checked = true;
-    message.hidden = true;
   };
   createKey.addEventListener("click", () => {
     pageAlert.hidden = true;
@@ -629,7 +619,6 @@ function keySection(gateways, keys, actions, pageAlert) {
     submit.disabled = true;
     try {
       pageAlert.hidden = true;
-      message.hidden = true;
       const issued = await actions.createKey?.(Number(gatewayID.value), {
         name: name.value.trim(),
         enabled: enabled.checked,
@@ -782,15 +771,10 @@ function gatewayChoices(gateways) {
   return gateways.map((gateway) => [String(gateway.id), gateway.display_name]);
 }
 
-function runAction(pageAlert, message, success, action) {
+function runAction(pageAlert, action) {
   pageAlert.hidden = true;
-  message.hidden = true;
   return Promise.resolve()
     .then(action)
-    .then(() => {
-      message.textContent = success;
-      message.hidden = false;
-    })
     .catch((error) => {
       showError(pageAlert, error);
       throw error;
@@ -798,25 +782,18 @@ function runAction(pageAlert, message, success, action) {
 }
 
 function showError(alert, error) {
-  alert.textContent = error?.message || "请求失败，请重试。";
-  alert.hidden = false;
-}
-
-function successToast(message) {
-  const toast = element("div", "success-toast");
-  toast.setAttribute("role", "status");
-  toast.setAttribute("aria-live", "polite");
-  toast.textContent = message;
+  const message = textElement("span", error?.message || "请求失败，请重试。");
   const close = textElement("button", "×");
   close.type = "button";
-  close.className = "success-toast-close";
-  close.setAttribute("aria-label", "关闭提示");
-  close.setAttribute("title", "关闭提示");
+  close.className = "error-dialog-close";
+  close.setAttribute("aria-label", "关闭错误提示");
+  close.setAttribute("title", "关闭错误提示");
   close.addEventListener("click", () => {
-    toast.hidden = true;
+    alert.hidden = true;
   });
-  toast.append(close);
-  return toast;
+  alert.replaceChildren(message, close);
+  alert.hidden = false;
+  close.focus?.();
 }
 
 function localDateTimeToRFC3339(value) {

@@ -201,7 +201,14 @@ test("statistics page exposes loading summary charts and switchable grouped deta
   assert.ok(findText(root, "team"));
   await buttonByText(root, "按秘钥").dispatch("click");
   assert.ok(findText(root, "local-dev (lgp_local...1234)"));
-  assert.equal(findClass(root, "stats-trend-chart").getAttribute("role"), "img");
+  const trendChart = findClass(root, "stats-trend-chart");
+  assert.equal(trendChart.getAttribute("role"), "img");
+  assert.equal(
+    descendants(trendChart).some((element) => element.getAttribute("style") !== null),
+    false,
+  );
+  assert.equal(findAllTags(trendChart, "SVG").length, 1);
+  assert.equal(findAllTags(root, "PROGRESS").length, 2);
   assert.ok(findText(root, "每日 Token 趋势"));
   assert.ok(findText(root, "网关 Token 构成"));
   assert.ok(findText(root, "秘钥 Token 构成"));
@@ -791,6 +798,7 @@ function installFakeDOM(t) {
   const originalSessionStorage = globalThis.sessionStorage;
   globalThis.document = {
     createElement: (name) => new FakeElement(name),
+    createElementNS: (_namespace, name) => new FakeElement(name),
   };
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,

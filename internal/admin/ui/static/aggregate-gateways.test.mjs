@@ -233,6 +233,14 @@ test("Aggregate Gateway provider view explains invalid slugs before saving", asy
     root,
     "Slug 只能使用小写字母、数字和连字符（-），长度为 1-63 位。",
   ));
+  const dialog = descendants(root).find((element) =>
+    element.className === "error-banner error-dialog"
+  );
+  assert.ok(dialog, "error dialog not found");
+  assert.equal(dialog.getAttribute("role"), "alertdialog");
+  assert.equal(dialog.getAttribute("aria-modal"), "true");
+  await buttonByText(root, "×").dispatch("click");
+  assert.equal(dialog.hidden, true);
 });
 
 test("Aggregate Gateway gateway view manages gateway routing only", async (t) => {
@@ -487,7 +495,7 @@ test("authenticated app opens a selected gateway edit form without exposing its 
   assert.ok(findText(root, "更新网关"));
 });
 
-test("authenticated app keeps a gateway update notice after reloading the form", async (t) => {
+test("authenticated app returns to the gateway list without a success notice", async (t) => {
   const root = installFakeDOM(t);
   const updates = [];
   const client = {
@@ -505,12 +513,11 @@ test("authenticated app keeps a gateway update notice after reloading the form",
   await formByData(root, "gateway").dispatch("submit");
 
   assert.equal(updates.length, 1);
-  const notice = findText(root, "网关更新成功。");
-  assert.equal(notice.className, "success-toast");
-  assert.equal(notice.getAttribute("role"), "status");
-  assert.ok(findText(root, "更新网关"));
-  await buttonByText(root, "×").dispatch("click");
-  assert.equal(notice.hidden, true);
+  assert.ok(findText(root, "全部网关"));
+  assert.equal(hasText(root, "更新网关"), false);
+  assert.equal(hasText(root, "网关更新成功。"), false);
+  assert.equal(window.location.pathname, "/_admin/aggregate-gateways");
+  assert.equal(linkByText(root, "网关管理").getAttribute("aria-current"), "page");
 });
 
 function aggregateFixture() {
@@ -678,11 +685,19 @@ function installFakeDOM(t) {
   const root = new FakeElement("main");
   const originalDocument = globalThis.document;
   const originalWindow = globalThis.window;
+  const location = { pathname: "/_admin/profiles", search: "" };
   globalThis.document = {
     createElement: (name) => new FakeElement(name),
   };
   globalThis.window = {
-    location: { pathname: "/_admin/profiles" },
+    location,
+    history: {
+      replaceState: (_state, _title, path) => {
+        const target = new URL(path, "http://localhost");
+        location.pathname = target.pathname;
+        location.search = target.search;
+      },
+    },
   };
   t.after(() => {
     globalThis.document = originalDocument;

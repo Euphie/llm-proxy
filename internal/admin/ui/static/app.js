@@ -262,7 +262,7 @@ async function renderAuthenticated(root, client, generateProfile, path) {
     }
   }
 
-  async function showAggregateGateways(activePageName, notice = "") {
+  async function showAggregateGateways(activePageName) {
     alert.hidden = true;
     alert.textContent = "";
     try {
@@ -282,27 +282,26 @@ async function renderAuthenticated(root, client, generateProfile, path) {
         keys: keyLists.flatMap((list) => list?.keys || []),
       }, {
         saveProvider: async (payload, providerID = 0) => {
-          const updating = providerID > 0;
           if (providerID > 0) {
             await client.updateProviderAccount(providerID, payload);
           } else {
             await client.createProviderAccount(payload);
           }
-          await showAggregateGateways(
-            activePageName,
-            updating ? "供应商更新成功。" : "供应商创建成功。",
-          );
+          await showAggregateGateways(activePageName);
         },
         saveGateway: async (payload, gatewayID = 0) => {
-          const updating = gatewayID > 0;
           if (gatewayID > 0) {
             await client.updateAggregateGateway(gatewayID, payload);
           } else {
             await client.createAggregateGateway(payload);
           }
-          await showAggregateGateways(
-            activePageName,
-            updating ? "网关更新成功。" : "网关创建成功。",
+          const listPath = "/_admin/aggregate-gateways";
+          replaceCurrentPath(listPath);
+          await renderAuthenticated(
+            root,
+            client,
+            generateProfile,
+            listPath,
           );
         },
         createKey: (gatewayID, payload) =>
@@ -310,7 +309,6 @@ async function renderAuthenticated(root, client, generateProfile, path) {
       }, {
         view: aggregateViewForPage(activePageName),
         gatewayID: gatewayIDForPath(path),
-        notice,
       });
     } catch (error) {
       if (isUnauthorized(error)) {
@@ -407,6 +405,12 @@ function currentPath() {
     return "/_admin/profiles";
   }
   return `${window.location.pathname}${window.location.search || ""}`;
+}
+
+function replaceCurrentPath(path) {
+  if (typeof window !== "undefined" && typeof window.history?.replaceState === "function") {
+    window.history.replaceState(null, "", path);
+  }
 }
 
 function navigationSections() {

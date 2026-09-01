@@ -460,8 +460,7 @@ h3 {
 }
 
 .warning-banner,
-.error-banner,
-.success-banner {
+.error-banner {
   padding: 0.82rem 0.95rem;
   border-radius: 0.7rem;
   line-height: 1.45;
@@ -479,32 +478,28 @@ h3 {
   color: var(--danger);
 }
 
-.success-banner {
-  border: 1px solid rgb(48 209 88 / 24%);
-  background: var(--success-surface);
-  color: var(--success);
-}
-
-.success-toast {
+.error-dialog {
   position: fixed;
-  z-index: 20;
-  top: clamp(1rem, 6vh, 4rem);
-  right: clamp(1rem, 3vw, 2rem);
+  z-index: 30;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  width: min(22rem, calc(100vw - 2rem));
+  width: min(28rem, calc(100vw - 2rem));
   gap: 1rem;
-  padding: 0.75rem 0.8rem 0.75rem 0.95rem;
-  border: 1px solid rgb(48 209 88 / 34%);
-  border-radius: 0.5rem;
-  background: rgb(240 252 245 / 96%);
-  box-shadow: 0 0.65rem 1.8rem rgb(20 70 44 / 18%);
-  color: var(--success);
+  padding: 1rem 1rem 1rem 1.1rem;
+  border: 1px solid rgb(255 69 58 / 36%);
+  border-radius: 0.65rem;
+  background: rgb(255 247 247 / 98%);
+  box-shadow:
+    0 0 0 100vmax rgb(20 30 40 / 22%),
+    0 1.2rem 3rem rgb(72 24 24 / 24%);
   font-weight: 650;
 }
 
-.success-toast-close {
+.error-dialog-close {
   flex: 0 0 auto;
   width: 1.75rem;
   height: 1.75rem;
@@ -518,8 +513,8 @@ h3 {
   line-height: 1;
 }
 
-.success-toast-close:hover {
-  background: rgb(48 209 88 / 12%);
+.error-dialog-close:hover {
+  background: rgb(255 69 58 / 12%);
 }
 
 .form-grid {
@@ -1328,11 +1323,13 @@ dialog::backdrop {
 .stats-legend-input,
 .stats-trend-input {
   background: #0077cc;
+  fill: #0077cc;
 }
 
 .stats-legend-output,
 .stats-trend-output {
   background: #f28b25;
+  fill: #f28b25;
 }
 
 .stats-trend-chart {
@@ -1376,9 +1373,7 @@ dialog::backdrop {
 }
 
 .stats-trend-segment {
-  display: block;
-  width: 100%;
-  min-height: 0;
+  stroke: none;
 }
 
 .stats-breakdown-chart {
@@ -1407,18 +1402,30 @@ dialog::backdrop {
   white-space: nowrap;
 }
 
-.stats-breakdown-track {
+.stats-breakdown-progress {
+  display: block;
+  width: 100%;
   height: 0.55rem;
+  appearance: none;
   overflow: hidden;
+  border: 0;
   border-radius: 0.28rem;
   background: rgb(60 74 90 / 9%);
 }
 
-.stats-breakdown-fill {
-  display: block;
-  height: 100%;
+.stats-breakdown-progress::-webkit-progress-bar {
+  background: rgb(60 74 90 / 9%);
   border-radius: inherit;
+}
+
+.stats-breakdown-progress::-webkit-progress-value {
   background: #168f63;
+  border-radius: inherit;
+}
+
+.stats-breakdown-progress::-moz-progress-bar {
+  background: #168f63;
+  border-radius: inherit;
 }
 
 .stats-details {

@@ -235,12 +235,27 @@ function usageTrendChart(rows) {
     );
     const value = textElement("span", tokenTotal(row));
     value.className = "stats-trend-value";
-    const bar = element("div", "stats-trend-bar");
-    const outputSegment = element("span", "stats-trend-segment stats-trend-output");
-    outputSegment.setAttribute("style", `height: ${chartPercent(output, maximum)}%`);
-    const inputSegment = element("span", "stats-trend-segment stats-trend-input");
-    inputSegment.setAttribute("style", `height: ${chartPercent(input, maximum)}%`);
-    bar.append(outputSegment, inputSegment);
+    const total = input + output;
+    const totalPercent = chartPercent(total, maximum);
+    const inputPercent = total > 0 ? totalPercent * (input / total) : 0;
+    const outputPercent = total > 0 ? totalPercent * (output / total) : 0;
+    const inputY = 100 - inputPercent;
+    const outputY = inputY - outputPercent;
+    const bar = svgElement("svg", "stats-trend-bar");
+    bar.setAttribute("viewBox", "0 0 100 100");
+    bar.setAttribute("preserveAspectRatio", "none");
+    bar.setAttribute("aria-hidden", "true");
+    const inputSegment = svgElement("rect", "stats-trend-segment stats-trend-input");
+    inputSegment.setAttribute("x", "0");
+    inputSegment.setAttribute("y", String(inputY));
+    inputSegment.setAttribute("width", "100");
+    inputSegment.setAttribute("height", String(inputPercent));
+    const outputSegment = svgElement("rect", "stats-trend-segment stats-trend-output");
+    outputSegment.setAttribute("x", "0");
+    outputSegment.setAttribute("y", String(outputY));
+    outputSegment.setAttribute("width", "100");
+    outputSegment.setAttribute("height", String(outputPercent));
+    bar.append(inputSegment, outputSegment);
     const label = textElement("span", String(row.key).slice(5));
     label.className = "stats-trend-label";
     column.append(value, bar, label);
@@ -271,11 +286,11 @@ function usageBreakdownChart(title, rows, dimension) {
       textElement("span", row.key),
       textElement("strong", tokenTotal(row)),
     );
-    const track = element("div", "stats-breakdown-track");
-    const fill = element("span", "stats-breakdown-fill");
-    fill.setAttribute("style", `width: ${chartPercent(tokenTotal(row), maximum)}%`);
-    track.append(fill);
-    item.append(heading, track);
+    const progress = element("progress", "stats-breakdown-progress");
+    progress.max = maximum;
+    progress.value = tokenTotal(row);
+    progress.setAttribute("aria-label", `${dimension} ${row.key} Token 占比`);
+    item.append(heading, progress);
     list.append(item);
   }
   section.append(list);
@@ -439,6 +454,14 @@ function alertMessage(text) {
 function element(tagName, className = "") {
   const result = document.createElement(tagName);
   result.className = className;
+  return result;
+}
+
+function svgElement(tagName, className = "") {
+  const result = document.createElementNS("http://www.w3.org/2000/svg", tagName);
+  if (className !== "") {
+    result.setAttribute("class", className);
+  }
   return result;
 }
 

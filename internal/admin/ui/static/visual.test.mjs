@@ -55,3 +55,11 @@ test("two-column form fields stay top-aligned when help text heights differ", ()
   assert.match(css, /\.form-grid\s*{[^}]*align-items:\s*start;/s);
   assert.match(css, /\.form-field label,\s*legend\s*{[^}]*line-height:\s*1\.4;/s);
 });
+
+test("aggregate errors open in the center of the viewport", () => {
+  const css = readFileSync(join(staticDir, "styles.css"), "utf8");
+
+  assert.match(css, /\.error-dialog\s*{[^}]*top:\s*50%;/s);
+  assert.match(css, /\.error-dialog\s*{[^}]*left:\s*50%;/s);
+  assert.match(css, /\.error-dialog\s*{[^}]*transform:\s*translate\(-50%,\s*-50%\);/s);
+});
